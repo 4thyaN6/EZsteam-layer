@@ -114,6 +114,23 @@ jobs:
       # Android Studio와 같은 Gradle: wrapper 사용
       - uses: gradle/actions/setup-gradle@v4
 
+      # Fixed debug signing key from the repository secret DEBUG_KEYSTORE_B64 (the developer's
+      # Android Studio debug.keystore, base64). Without it each CI run makes a new random key and
+      # the next APK cannot be installed over the previous one. Skipped when the secret is unset.
+      # 저장소 비밀값 DEBUG_KEYSTORE_B64(개발자 Android Studio debug.keystore의 base64)로 고정 디버그 서명.
+      # 없으면 CI가 매번 새 키를 만들어 다음 APK를 덮어 설치할 수 없음. 비밀값이 없으면 건너뜀
+      - name: debug keystore
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$DEBUG_KEYSTORE_B64" ]; then
+            mkdir -p ~/.android
+            printf '%s' "$DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+            echo "fixed debug keystore restored"
+          else
+            echo "DEBUG_KEYSTORE_B64 not set: Gradle creates a new debug key"
+          fi
+
       # The app reads the rootfs from this repository's latest Release
       # 앱은 이 저장소의 최신 Release에서 rootfs를 받음
       - name: assembleDebug
