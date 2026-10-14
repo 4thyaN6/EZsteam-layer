@@ -1,0 +1,130 @@
+# Builds PRoot with the NDK, the rootfs on a native arm64 runner, then the APK (PRoot inside, rootfs NOT inside).
+# Tagged builds (v*) publish the APK and the rootfs files to GitHub Release; the app downloads
+# the rootfs from there only when the user presses the install button (same as EZlator imagefs).
+# NDK로 PRoot를, arm64 실행기에서 rootfs를 만들고 APK를 빌드함(PRoot는 APK 안, rootfs는 APK 밖).
+# 태그(v*) 빌드는 APK와 rootfs 파일을 GitHub Release에 올림. 앱은 사용자가 설치 버튼을
+# 누를 때만 거기서 rootfs를 받음(EZlator imagefs와 같은 방식)
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+# Needed to create a Release with the default token
+# 기본 토큰으로 Release를 만들려면 필요함
+permissions:
+  contents: write
+
+jobs:
+  proot:
+    # NDK is preinstalled on GitHub's Ubuntu runner (ANDROID_NDK_LATEST_HOME)
+    # GitHub Ubuntu 실행기에는 NDK가 설치되어 있음(ANDROID_NDK_LATEST_HOME)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # libproot.so + libproot-loader.so + proot-source.txt (pinned termux/proot commit)
+      # PRoot 본체, 로더, 소스 기록(termux/proot 고정 커밋)
+      - name: proot
+        run: sh tools/build-proot-android.sh out/jni
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proot
+          path: |
+            out/jni/
+            runtime/src/main/assets/proot-source.txt
+          retention-days: 14
+
+  rootfs:
+    # Native arm64: no emulation for gcc, tests or docker
+    # arm64 기본 실행기: gcc·시험·docker 모두 에뮬레이션 없음
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      # The preload library is no longer used at run time (PRoot does the path work);
+      # it is still built and self-tested on aarch64 so the code stays usable for later work
+      # preload 라이브러리는 실행에 더 이상 쓰지 않음(경로 처리는 PRoot가 함).
+      # 나중 작업에 쓸 수 있게 aarch64에서 빌드·자체 시험만 유지함
+      - name: libezglibc
+        run: |
+          make -C native/ezglibc
+          make -C native/ezglibc test
+          objdump -T native/ezglibc/libezglibc.so | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1
+
+      # rootfs.tar.xz + .sha256 + rootfs.version + rootfs.packages.txt
+      # rootfs 압축 파일, 체크섬, 버전, 패키지 목록 생성
+      - name: rootfs
+        run: sh tools/build-rootfs.sh out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rootfs
+          path: out/
+          retention-days: 7
+
+  apk:
+    needs: [proot, rootfs]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # PRoot into the runtime module's jniLibs (packaged into the APK)
+      # PRoot를 런타임 모듈 jniLibs에 넣음(APK에 들어감)
+      - uses: actions/download-artifact@v4
+        with:
+          name: proot
+          path: proot-artifact
+      - name: place proot
+        run: |
+          mkdir -p runtime/src/main/jniLibs/arm64-v8a runtime/src/main/assets
+          cp proot-artifact/out/jni/*.so runtime/src/main/jniLibs/arm64-v8a/
+          cp proot-artifact/runtime/src/main/assets/proot-source.txt runtime/src/main/assets/
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Same Gradle as Android Studio: the wrapper (gradle/wrapper/gradle-wrapper.properties)
+      # Android Studio와 같은 Gradle: wrapper 사용
+      - uses: gradle/actions/setup-gradle@v4
+
+      # The app reads the rootfs from this repository's latest Release
+      # 앱은 이 저장소의 최신 Release에서 rootfs를 받음
+      - name: assembleDebug
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --no-daemon \
+            "-Pezsteam.rootfsBaseUrl=https://github.com/${{ github.repository }}/releases/latest/download/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 14
+
+      # Release files: rootfs from the first job (kept outside the APK)
+      # Release용 파일: 첫 작업이 만든 rootfs(APK 밖에 둠)
+      - name: rootfs files
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/download-artifact@v4
+        with:
+          name: rootfs
+          path: out
+
+      # Tagged builds go to GitHub Releases (not marked prerelease, so releases/latest finds them)
+      # 태그 빌드는 GitHub Releases에 올림(사전 출시로 두지 않아야 releases/latest가 찾음)
+      - name: release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            app/build/outputs/apk/debug/*.apk
+            out/rootfs.tar.xz
+            out/rootfs.tar.xz.sha256
+            out/rootfs.version
+            out/rootfs.packages.txt

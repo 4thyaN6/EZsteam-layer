@@ -1,0 +1,19 @@
+# Files that run inside the Linux rootfs or on Linux CI must keep LF line endings,
+# even when the repository is checked out on Windows (core.autocrlf=true).
+# rootfs 안이나 리눅스 CI에서 실행되는 파일은 Windows에서 받아도 LF를 유지해야 함
+*.sh            text eol=lf
+*.c             text eol=lf
+*.h             text eol=lf
+Makefile        text eol=lf
+*.vdf           text eol=lf
+rootfs-overlay/opt/ezsteam/compat/ezproton/ezproton text eol=lf
+*.yml           text eol=lf
+gradlew         text eol=lf
+
+# Windows script keeps CRLF / Windows 스크립트는 CRLF 유지
+*.bat           text eol=crlf
+*.ps1           text eol=crlf
+
+# Binary / 바이너리
+*.jar           binary
+*.tar           binary

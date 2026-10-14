@@ -1,0 +1,88 @@
+// Test host app. targetSdk 28 keeps exec() of files in app storage allowed
+// (the host decides targetSdk; the runtime module needs a host with 28).
+// 시험용 호스트 앱. targetSdk 28이어야 앱 저장소 파일 exec()가 허용됨
+// (targetSdk는 호스트가 정함. 런타임 모듈은 28인 호스트가 필요함)
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'app.ezsteam'
+    // AGP 8.13 supports up to API 36 / AGP 8.13 지원 최대 API 36
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'app.ezsteam'
+        minSdk 26
+        //noinspection ExpiredTargetSdkVersion
+        targetSdk 28
+        versionCode 1
+        versionName '0.1.0'
+
+        // Base URL of the GitHub Release that holds rootfs.tar.xz (set in gradle.properties)
+        // rootfs.tar.xz가 있는 GitHub Release 주소(gradle.properties에서 설정)
+        buildConfigField 'String', 'ROOTFS_BASE_URL',
+                "\"${project.findProperty('ezsteam.rootfsBaseUrl') ?: ''}\""
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    // Extract jniLibs to nativeLibraryDir so libproot.so / libproot-loader.so can be exec'd
+    // jniLibs를 nativeLibraryDir로 풀어야 libproot.so·libproot-loader.so를 실행할 수 있음
+    packaging {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // targetSdk 28 is reported as an error by lint on release builds
+    // 릴리스 빌드에서 lint가 targetSdk 28을 오류로 보고하므로 중단하지 않게 함
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+    // The Steam runtime is a separate module; the host app only calls its API
+    // Steam 런타임은 별도 모듈이며 호스트 앱은 그 API만 부름
+    implementation project(':runtime')
+}
+
+// Without a bundled rootfs and without a release URL the app cannot install anything: warn
+// APK 안 rootfs도 Release 주소도 없으면 설치할 수 없으므로 경고함
+tasks.register('checkRootfsSource') {
+    def hasAsset = file('src/main/assets/rootfs.tar.xz').exists() || file('src/main/assets/rootfs.tar').exists()
+    def url = project.findProperty('ezsteam.rootfsBaseUrl') ?: ''
+    doLast {
+        if (!hasAsset && url.isEmpty()) {
+            logger.warn('[ezsteam] rootfs 원본 없음: gradle.properties에 ezsteam.rootfsBaseUrl을 넣거나 assets에 rootfs.tar.xz를 넣으십시오')
+        }
+    }
+}
+tasks.named('preBuild') { dependsOn 'checkRootfsSource' }
+
+// PRoot comes from tools/build-proot-android.sh (CI artifact "proot"); without it nothing can run
+// PRoot는 tools/build-proot-android.sh 결과(CI 아티팩트 "proot")임. 없으면 아무것도 실행할 수 없음
+tasks.register('checkProot') {
+    def so = rootProject.file('runtime/src/main/jniLibs/arm64-v8a/libproot.so')
+    doLast {
+        if (!so.exists()) {
+            logger.warn('[ezsteam] libproot.so 없음: CI 아티팩트 proot를 runtime/src/main/jniLibs/arm64-v8a/에 넣거나 tools/build-proot-android.sh를 실행하십시오')
+        }
+    }
+}
+tasks.named('preBuild') { dependsOn 'checkProot' }

@@ -1,0 +1,13 @@
+"compatibilitytools"
+{
+  "compat_tools"
+  {
+    "ezproton"
+    {
+      "install_path" "."
+      "display_name" "EZ Proton (Valve ARM64, direct)"
+      "from_oslist"  "windows"
+      "to_oslist"    "linux"
+    }
+  }
+}

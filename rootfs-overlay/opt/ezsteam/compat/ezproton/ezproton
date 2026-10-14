@@ -1,0 +1,45 @@
+#!/bin/sh
+# EZ Proton: hands Steam's compat call straight to Valve's own ARM64 Proton (downloaded by Steam).
+# EZ Proton: Steam의 호환 도구 호출을 Steam이 받은 Valve ARM64 Proton에 그대로 넘김
+#
+# Steam runs:  <this dir>/ezproton <verb> <game command...>
+# Steam 호출 형태:  <이 폴더>/ezproton <동작> <게임 명령...>
+#
+# Proton location, first match wins / Proton 위치, 앞에서부터 찾음:
+#   1. EZ_PROTON_DIR environment variable / 환경변수
+#   2. "proton-dir" file next to this script (one line) / 이 스크립트 옆 "proton-dir" 파일(한 줄)
+#   3. <Steam>/steamapps/common/*/ whose toolmanifest.vdf requires appid 4185400 (Valve ARM64 build)
+#      toolmanifest.vdf가 4185400을 요구하는 폴더(Valve ARM64 빌드)
+set -u
+
+SELF_DIR=$(cd "$(dirname "$0")" && pwd)
+STEAM_DIR=${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}
+PROTON_DIR=${EZ_PROTON_DIR:-}
+
+# Pinned path written by the launcher or the user
+# 실행기나 사용자가 고정해 둔 경로
+if [ -z "$PROTON_DIR" ] && [ -f "$SELF_DIR/proton-dir" ]; then
+    PROTON_DIR=$(head -n 1 "$SELF_DIR/proton-dir")
+fi
+
+# Search the main library; glob order is alphabetical, so the last match wins
+# (e.g. "Proton - Experimental" < "Proton 11.0 (Beta)")
+# 기본 라이브러리에서 찾음. glob은 알파벳순이라 마지막으로 맞은 것이 선택됨
+if [ -z "$PROTON_DIR" ]; then
+    for m in "$STEAM_DIR"/steamapps/common/*/toolmanifest.vdf; do
+        [ -f "$m" ] || continue
+        if grep -q '4185400' "$m" 2>/dev/null && [ -f "$(dirname "$m")/proton" ]; then
+            PROTON_DIR=$(dirname "$m")
+        fi
+    done
+fi
+
+if [ -z "$PROTON_DIR" ] || [ ! -f "$PROTON_DIR/proton" ]; then
+    echo "ezproton: Valve ARM64 Proton not found (install Proton from the Steam library tools)" >&2
+    exit 1
+fi
+
+# Valve's script is "#!/usr/bin/env python3"; under PRoot it resolves to the rootfs python3
+# Valve 스크립트는 "#!/usr/bin/env python3"이며 PRoot 안에서는 rootfs의 python3로 실행됨
+echo "ezproton: $PROTON_DIR $*" >&2
+exec "$PROTON_DIR/proton" "$@"

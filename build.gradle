@@ -1,0 +1,8 @@
+// Root build file: Android Gradle Plugin version.
+// 8.13 = last 8.x line; Android Studio Otter 3 Feature Drop supports AGP 4.2 ~ 9.0.
+// 최상위 빌드 파일: Android Gradle Plugin 버전.
+// 8.13 = 마지막 8.x 계열. Android Studio Otter 3 Feature Drop 지원 범위는 AGP 4.2 ~ 9.0
+plugins {
+    id 'com.android.application' version '8.13.0' apply false
+    id 'com.android.library' version '8.13.0' apply false
+}

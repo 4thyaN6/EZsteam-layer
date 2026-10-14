@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Runtime library manifest. INTERNET is needed only for RootfsDownloader, which runs when the
+     host app calls it on a user action; it is merged into the host app's manifest. -->
+<!-- 런타임 라이브러리 매니페스트. INTERNET은 RootfsDownloader에만 필요하며, 호스트 앱이
+     사용자 조작으로 부를 때만 동작함. 호스트 앱 매니페스트로 합쳐짐 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>

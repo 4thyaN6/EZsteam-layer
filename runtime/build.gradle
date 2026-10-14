@@ -1,0 +1,31 @@
+// Steam runtime library module: glibc rootfs install, launcher, process counter.
+// Kept separate from any host app (test app now, EZlator later) so the runtime can be
+// added or removed as one unit; its package (app.ezsteam.runtime) is not moved into the host.
+// Steam 런타임 라이브러리 모듈: glibc rootfs 설치, 실행기, 프로세스 수 확인.
+// 호스트 앱(지금은 시험 앱, 나중에 EZlator)과 분리해 하나의 단위로 넣고 뺄 수 있게 함.
+// 패키지(app.ezsteam.runtime)는 호스트 쪽으로 옮기지 않음
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    namespace 'app.ezsteam.runtime'
+    // AGP 8.13 supports up to API 36 / AGP 8.13 지원 최대 API 36
+    compileSdk 36
+
+    defaultConfig {
+        // Runtime code uses API 26 or lower only / 런타임 코드는 API 26 이하만 씀
+        minSdk 26
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    // Same XZ version as EZlator (pure Java, decompresses rootfs.tar.xz)
+    // EZlator와 같은 XZ 버전(순수 Java, rootfs.tar.xz 풀기용)
+    implementation 'org.tukaani:xz:1.9'
+}

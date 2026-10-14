@@ -1,0 +1,21 @@
+// Gradle settings: plugin and dependency repositories
+// Gradle 설정: 플러그인·의존성 저장소
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "ezsteam-layer"
+// :runtime = separable Steam runtime, :app = test host app
+// :runtime = 분리 가능한 Steam 런타임, :app = 시험용 호스트 앱
+include(":runtime")
+include(":app")
