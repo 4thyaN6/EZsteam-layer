@@ -6,6 +6,14 @@ plugins {
     id 'com.android.application'
 }
 
+// Fixed debug key for CI builds: path given with -Pezsteam.debugKeystore (the developer's
+// Android Studio debug.keystore). Set explicitly because Gradle on the CI runner did not pick up
+// ~/.android/debug.keystore and made a new key on every build. Android Studio builds leave it unset.
+// CI 빌드용 고정 디버그 키: -Pezsteam.debugKeystore로 경로를 받음(개발자 Android Studio debug.keystore).
+// CI 실행기의 Gradle이 ~/.android/debug.keystore를 쓰지 않고 빌드마다 새 키를 만들어서 직접 지정함.
+// Android Studio 빌드에서는 설정하지 않음
+def fixedDebugKeystore = project.findProperty('ezsteam.debugKeystore')
+
 android {
     namespace 'app.ezsteam'
     // AGP 8.13 supports up to API 36 / AGP 8.13 지원 최대 API 36
@@ -41,7 +49,22 @@ android {
         }
     }
 
+    signingConfigs {
+        debug {
+            if (fixedDebugKeystore) {
+                // Standard Android Studio debug key values / Android Studio 기본 디버그 키 값
+                storeFile file(fixedDebugKeystore)
+                storePassword 'android'
+                keyAlias 'androiddebugkey'
+                keyPassword 'android'
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled false
         }

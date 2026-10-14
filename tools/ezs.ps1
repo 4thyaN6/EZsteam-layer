@@ -61,7 +61,22 @@ if ($built -ne $sha) {
 $apk = "$tmp\ezsteam-$built.apk"
 Invoke-WebRequest "$Url/app-debug.apk" -OutFile $apk -UseBasicParsing
 Write-Host "설치: $apk"
-& $Adb install -r $apk
-if ($LASTEXITCODE -ne 0) { throw 'adb install 실패 (태블릿 연결·USB 디버깅 확인)' }
+# adb writes failures to stderr; in Windows PowerShell 5.1 a redirected stderr line becomes an
+# error record, so keep going instead of stopping on it
+# adb는 실패를 stderr로 씀. Windows PowerShell 5.1은 리디렉션된 stderr 줄을 오류로 바꾸므로 멈추지 않게 함
+$ErrorActionPreference = 'Continue'
+$out = (& $Adb install -r $apk 2>&1 | Out-String)
+Write-Host $out
+if ($out -match 'INSTALL_FAILED_UPDATE_INCOMPATIBLE') {
+    # Installed app has a different signing key: only uninstall + install works (app data is lost,
+    # rootfs and driver are downloaded again in the app)
+    # 설치된 앱의 서명 키가 다름: 삭제 후 설치만 가능(앱 데이터가 지워지며 rootfs·드라이버는 앱에서 다시 받음)
+    $ans = Read-Host '서명이 달라 덮어 설치 불가. 삭제 후 설치할까요? (y/n)'
+    if ($ans -ne 'y') { return }
+    & $Adb uninstall app.ezsteam
+    $out = (& $Adb install $apk 2>&1 | Out-String)
+    Write-Host $out
+}
+if ($out -notmatch 'Success') { throw 'adb install 실패 (태블릿 연결·USB 디버깅 확인)' }
 Write-Host ''
 Write-Host "설치 완료. 앱 첫 줄이 'app build=$built'인지 확인"
