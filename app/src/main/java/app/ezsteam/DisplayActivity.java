@@ -48,6 +48,12 @@ public class DisplayActivity extends Activity {
 
     public static final String EXTRA_W = "w";
     public static final String EXTRA_H = "h";
+    /** "test" (test windows) or "steam" (Steam client) / "test"(시험 창) 또는 "steam"(Steam 클라이언트) */
+    public static final String EXTRA_MODE = "mode";
+    /** Lines kept in the log overlay (Steam prints many) / 로그 겹침 창에 남기는 줄 수(Steam은 많이 출력함) */
+    private static final int LOG_LINES = 300;
+    private final java.util.ArrayDeque<String> logLines = new java.util.ArrayDeque<>();
+    private String mode = "test";
     /** X display number used by display.sh / display.sh가 쓰는 X 디스플레이 번호 */
     private static final int DISPLAY = 98;
 
@@ -77,6 +83,8 @@ public class DisplayActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON | WindowManager.LayoutParams.FLAG_FULLSCREEN);
         int w = getIntent().getIntExtra(EXTRA_W, 1280);
         int h = getIntent().getIntExtra(EXTRA_H, 720);
+        String m = getIntent().getStringExtra(EXTRA_MODE);
+        if ("steam".equals(m)) mode = "steam";
 
         // Screen view full size, a small bar (stats + buttons) on top, log overlay below it
         // 화면 뷰는 전체 크기, 위에 작은 막대(통계 + 버튼), 그 아래 로그 겹침 표시
@@ -158,9 +166,16 @@ public class DisplayActivity extends Activity {
                 | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
     }
 
+    /** Append a log line, keeping the last LOG_LINES / 로그 줄 추가, 마지막 LOG_LINES줄만 유지 */
     private void log(String s) {
         runOnUiThread(() -> {
-            logView.append(s + "\n");
+            logLines.addLast(s);
+            if (logLines.size() > LOG_LINES) {
+                while (logLines.size() > LOG_LINES) logLines.removeFirst();
+                logView.setText(String.join("\n", logLines) + "\n");
+            } else {
+                logView.append(s + "\n");
+            }
             logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
         });
     }
@@ -185,12 +200,19 @@ public class DisplayActivity extends Activity {
                 log("먼저 [드라이버 설치]");
                 return;
             }
-            // Fake root: the X server needs setuid()/setgid() before xkbcomp (see drawtest.sh)
-            // 가짜 root: X 서버는 xkbcomp 전에 setuid()/setgid()가 필요함(drawtest.sh 참고)
-            c.rootId = true;
+            // Fake ids: the X server needs setuid()/setgid() before xkbcomp (see drawtest.sh).
+            // Test mode: fake root. Steam mode: fake user steam 1000:1000 (Steam refuses root).
+            // 가짜 id: X 서버는 xkbcomp 전에 setuid()/setgid()가 필요함(drawtest.sh 참고).
+            // test 모드: 가짜 root. steam 모드: 가짜 사용자 steam 1000:1000(Steam은 root 거부)
+            if ("steam".equals(mode)) {
+                c.changeId = "1000:1000";
+            } else {
+                c.rootId = true;
+            }
             c.display = ":" + DISPLAY;
+            log("모드 " + mode);
             Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/display.sh",
-                    Arrays.asList(Integer.toString(w), Integer.toString(h)), null, null);
+                    Arrays.asList(Integer.toString(w), Integer.toString(h), mode), null, null);
             proc = p;
             if (finishing) {
                 stopProcess();
@@ -232,7 +254,8 @@ public class DisplayActivity extends Activity {
         } catch (IOException e) {
             log("X 입력 연결 실패: " + e);
         }
-        runOnUiThread(() -> logScroll.setVisibility(View.GONE));
+        // Steam mode keeps the log open (first start can take minutes) / steam 모드는 로그를 열어 둠(첫 시작이 몇 분 걸릴 수 있음)
+        if (!"steam".equals(mode)) runOnUiThread(() -> logScroll.setVisibility(View.GONE));
     }
 
     // ---- touch: absolute pointer, like a touch screen / 터치: 터치스크린처럼 절대 위치 포인터

@@ -37,6 +37,8 @@
 | `rootfs-overlay/opt/ezsteam/drawtest.sh`, `xwd2png.py` | [그리기 시험]: Xvfb `:99` + Turnip `vkcube` 600프레임, fps, `xwd` 캡처를 `~/ezs-logs/drawtest.png`로 저장해 앱에 표시 |
 | `rootfs-overlay/opt/ezsteam/display.sh` | [화면 WxH]: Xvfb `:98` `-fbdir` + 시험 창(vkcube, xclock, xeyes, xcalc, keyview), 앱이 stdin을 닫으면 종료 |
 | `rootfs-overlay/opt/ezsteam/keyview.py` | 키 확인 창(libX11 ctypes): 키보드 포커스를 갖고 받은 X 키코드·키 이름을 창과 앱 로그(`KEY`)에 표시 |
+| `rootfs-overlay/opt/ezsteam/steam-install.sh` | [Steam 설치]: 사용자 steam(uid 1000), 클라이언트·CEF 라이브러리(apt), Valve 업데이트 서버(`client-update.steamstatic.com/steam_client_linuxarm64`)에서 기기가 직접 부트스트랩 받기(매니페스트 sha2 대조), `~/.local/share/Steam`에 풀기 |
+| `rootfs-overlay/opt/ezsteam/steam-run.sh` | `steamrtarm64/steam -no-cef-sandbox -cef-disable-gpu -chromeosnopreallocate -noverifyfiles` 실행, 종료 코드 42(자체 갱신)면 재시작, 전체 로그 `~/ezs-logs/steam.log` |
 | `rootfs-overlay/opt/ezsteam/ezsteam-prepare.sh` | Steam 시작 전 준비: `~/.steam/sdkarm64/steamclient.so` 연결, EZ Proton 설치 |
 | `rootfs-overlay/opt/ezsteam/compat/ezproton/` | 경량 호환 도구: Valve ARM64 Proton을 컨테이너 없이 직접 호출 |
 | `native/ezglibc/` | 이전 방식의 `libezglibc.so`(LD_PRELOAD 경로 변환). 실행에는 쓰지 않음. 나중 개선 작업용으로 CI에서 빌드·자체 시험만 유지 |
@@ -79,12 +81,13 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - targetSdk 28 이하(앱 저장소 파일 exec)
 - PRoot 옵션: `--kill-on-exit`, `/dev` `/proc` `/sys` 바인드, `files/ezs-data/shm` → `/dev/shm`, `--link2symlink`(앱 저장소는 하드 링크 거부), `--sysvipc`(System V IPC 흉내)
 - rootfs 경로는 짧게 유지: 유닉스 소켓 경로 제한 107바이트
-- Steam은 root 실행을 거부하므로 PRoot `-0`(가짜 root)는 쓰지 않음
+- Steam은 root 실행을 거부하므로 PRoot `-0`(가짜 root)는 쓰지 않고 `--change-id=1000:1000`을 씀(apt 설치에만 `-0`)
 
 ## 시험
 - 앱: GitHub Actions `build` → `apk` 아티팩트 설치 → [PRoot 상태] → [rootfs 설치] → [환경 시험] → [자식 프로세스] → [Steam 준비]
 - GPU: [드라이버 설치](Release의 `turnip.tar.xz`) → [GPU 확인]. KGSL 단독 Turnip은 X11 출력에 `MESA_VK_WSI_DEBUG=sw`가 필요해 묶음 `env`로 넣음
 - 실시간 화면: [시험 도구 설치] 후 [화면 1280x800] 등 → 한 손가락 = 왼쪽 버튼(탭·끌기), 두 손가락 탭 = 오른쪽 클릭, 두 손가락 세로 끌기 = 휠, [키보드] = 소프트 키보드(입력은 keyview 창과 위쪽 막대 `키`에 표시), [확대] = 확대 방식 전환, 뒤로 가기·[닫기] = 종료
+- Steam: [시험 도구 설치] → [Steam 설치] → [Steam 실행 1280x800]. 화면은 Xvfb `:98`, 실행 id는 PRoot `--change-id=1000:1000`(가짜 사용자 steam, Steam은 root 거부, Xvfb의 setuid/setgid도 처리됨). 첫 실행은 클라이언트 자체 갱신(수백 MB)으로 오래 걸림
 - [환경 시험]의 `pthread`, `sys-*` 항목이 FAIL `SIGSYS (seccomp)`이면 PRoot가 해당 호출을 처리하지 못한 것 → rootfs glibc 패치(termux-pacman 방식) 검토
 - (선택) 앱 없이: `tools/device-smoke.sh` 머리 주석 참고
 - 호스트: `make -C native/ezglibc test` (보관 중인 preload 라이브러리)

@@ -76,6 +76,15 @@ public class MainActivity extends Activity {
         int[] nat = nativeSize();
         addButton(row3, "화면 " + nat[0] + "x" + nat[1], v -> openDisplay(nat[0], nat[1]));
 
+        // Fourth row: Valve Linux ARM64 Steam client (downloaded by the device from Valve)
+        // 네 번째 줄: Valve Linux ARM64 Steam 클라이언트(기기가 Valve에서 직접 받음)
+        LinearLayout row4 = new LinearLayout(this);
+        row4.setOrientation(LinearLayout.HORIZONTAL);
+        root.addView(row4);
+        addButton(row4, "Steam 설치", v -> runTask("steam-install", this::doSteamInstall));
+        addButton(row4, "Steam 실행 1280x800", v -> openSteam(1280, 800));
+        addButton(row4, "Steam 실행 1920x1200", v -> openSteam(1920, 1200));
+
         // Screenshot area for the drawing test / 그리기 시험 화면 캡처 영역
         shotView = new android.widget.ImageView(this);
         shotView.setAdjustViewBounds(true);
@@ -139,6 +148,48 @@ public class MainActivity extends Activity {
         log("== display " + w + "x" + h);
         startActivity(new android.content.Intent(this, DisplayActivity.class)
                 .putExtra(DisplayActivity.EXTRA_W, w).putExtra(DisplayActivity.EXTRA_H, h));
+    }
+
+    /** Open the display in Steam mode / 화면을 Steam 모드로 엶 */
+    private void openSteam(int w, int h) {
+        if (busy) {
+            log("다른 작업 진행 중");
+            return;
+        }
+        if (!new File(RootfsInstaller.rootfsDir(this), "home/steam/.local/share/Steam/steamrtarm64/steam").isFile()) {
+            log("Steam 클라이언트 없음: [시험 도구 설치] → [Steam 설치] 먼저");
+            return;
+        }
+        log("== steam " + w + "x" + h);
+        startActivity(new android.content.Intent(this, DisplayActivity.class)
+                .putExtra(DisplayActivity.EXTRA_W, w).putExtra(DisplayActivity.EXTRA_H, h)
+                .putExtra(DisplayActivity.EXTRA_MODE, "steam"));
+    }
+
+    /**
+     * Install the client's libraries (apt) and download the ARM64 Steam bootstrap from Valve's
+     * update server. Runs as PRoot fake root, only on the button press.
+     * 클라이언트용 라이브러리(apt) 설치 + Valve 업데이트 서버에서 ARM64 Steam 부트스트랩 받기.
+     * PRoot 가짜 root로 실행하며 버튼을 누를 때만 동작함
+     */
+    private void doSteamInstall() throws Exception {
+        if (RootfsInstaller.installedVersion(this).isEmpty()) {
+            log("먼저 rootfs 설치");
+            return;
+        }
+        // Libraries + bootstrap + first self update need room / 라이브러리 + 부트스트랩 + 첫 자체 갱신에 공간 필요
+        long free = getFilesDir().getUsableSpace();
+        if (free < (3L << 30)) {
+            log("공간 부족: 남은 공간 " + (free >> 20) + " MB, 3072 MB 이상 필요");
+            return;
+        }
+        String dns = RootfsInstaller.writeResolvConf(this);
+        log("DNS: " + (dns.isEmpty() ? "알 수 없음 (네트워크 연결 확인)" : dns));
+        GlibcLauncher.Config c = config();
+        c.rootId = true;
+        Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/steam-install.sh", null, null, null);
+        pipe(p);
+        log("exit=" + p.waitFor());
     }
 
     private void addButton(LinearLayout row, String text, View.OnClickListener l) {

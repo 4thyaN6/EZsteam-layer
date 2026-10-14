@@ -57,6 +57,13 @@ public final class GlibcLauncher {
          *  which refuses to run as root.
          *  apt/dpkg 패키지 설치 전용 가짜 root(PRoot -0). Steam은 root 실행을 거부하므로 쓰지 않음 */
         public boolean rootId = false;
+        /** Fake user and group ids "uid:gid" (PRoot -i), e.g. "1000:1000". Lets setuid()/setgid() to
+         *  the program's own ids succeed (Android seccomp blocks the real calls) without being root,
+         *  which Steam refuses. Ignored when rootId is set.
+         *  가짜 사용자·그룹 id "uid:gid"(PRoot -i), 예: "1000:1000". 자기 id로의 setuid()/setgid()가
+         *  root가 아니어도 성공하게 함(안드로이드 seccomp이 실제 호출을 막음). Steam은 root를 거부하므로
+         *  Steam 실행에 씀. rootId가 켜져 있으면 무시함 */
+        public String changeId;
         /** PRoot log level (0 = quiet) / PRoot 로그 수준(0 = 조용히) */
         public int verbose = 0;
         /** Extra guest environment (e.g. Vulkan driver selection from DriverInstaller.apply)
@@ -128,6 +135,7 @@ public final class GlibcLauncher {
         if (c.link2symlink) cmd.add("--link2symlink");
         if (c.sysvipc) cmd.add("--sysvipc");
         if (c.rootId) cmd.add("--root-id");
+        else if (c.changeId != null && !c.changeId.isEmpty()) cmd.add("--change-id=" + c.changeId);
         return cmd;
     }
 
