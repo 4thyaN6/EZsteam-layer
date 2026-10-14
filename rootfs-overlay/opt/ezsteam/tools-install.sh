@@ -27,6 +27,7 @@ $APT clean
 rm -rf /var/lib/apt/lists/*
 
 after=$(du -sk /usr 2>/dev/null | cut -f1)
-echo "OK   tools : xvfb $(Xvfb -version 2>&1 | head -n 1)"
+# Installed versions (Xvfb has no -version option) / 설치된 버전(Xvfb에는 -version 옵션이 없음)
+echo "OK   tools : $(dpkg-query -W -f='${Package} ${Version}  ' xvfb x11-apps x11-xkb-utils 2>/dev/null)"
 echo "INFO size : /usr +$(( (after - before) / 1024 )) MB"
 echo "DONE"
