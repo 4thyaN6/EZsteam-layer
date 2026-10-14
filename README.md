@@ -29,6 +29,7 @@
 | `tools/device-smoke.sh` | `adb shell`에서 앱 없이 PRoot + rootfs 확인 |
 | `rootfs-overlay/opt/ezsteam/smoke.sh` | 환경 시험(스레드 생성, seccomp 차단 호출 항목 포함) |
 | `rootfs-overlay/opt/ezsteam/gpucheck.sh` | GPU 확인: `/dev/kgsl-3d0` 열기, KGSL 장치 정보 ioctl, 장치 파일, `vulkaninfo --summary` |
+| `rootfs-overlay/opt/ezsteam/vkcheck.py` | vulkaninfo 전체 결과를 `~/ezs-logs/vulkaninfo.txt`로 저장하고 vkd3d-proton·DXVK 요구 항목을 OK/FAIL/UNKNOWN으로 표시 |
 | `rootfs-overlay/opt/ezsteam/ezsteam-prepare.sh` | Steam 시작 전 준비: `~/.steam/sdkarm64/steamclient.so` 연결, EZ Proton 설치 |
 | `rootfs-overlay/opt/ezsteam/compat/ezproton/` | 경량 호환 도구: Valve ARM64 Proton을 컨테이너 없이 직접 호출 |
 | `native/ezglibc/` | 이전 방식의 `libezglibc.so`(LD_PRELOAD 경로 변환). 실행에는 쓰지 않음. 나중 개선 작업용으로 CI에서 빌드·자체 시험만 유지 |
