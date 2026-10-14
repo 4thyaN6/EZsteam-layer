@@ -45,6 +45,14 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - Steam이 넘기는 `STEAM_COMPAT_DATA_PATH`, `STEAM_COMPAT_CLIENT_INSTALL_PATH`(없으면 `proton`이 멈춤)
 - Valve Proton 파일은 각 기기의 Steam이 공식 서버에서 받음(이 저장소는 포함·재배포하지 않음)
 
+## 고정 작업 순서 (Windows)
+1. 받은 라운드 zip 안의 `ezsteam-layer` 폴더를 `D:\AndroidStudioProject\`에 덮어쓰기
+2. `ezs-push.bat` 더블클릭 → 커밋 메시지 입력(Enter = update) → 업로드
+3. GitHub Actions가 모두 초록이 되면 `ezs-install.bat` 더블클릭 → 최신 APK를 받아 태블릿에 덮어 설치(최신이 아니면 기다리라고 알려 줌)
+4. 앱 첫 줄 `app build=<커밋 7자리>`로 새 APK인지 확인
+- 최신 APK 고정 주소: 사전 출시 `apk-latest`(main 빌드마다 CI가 교체). rootfs·드라이버용 `releases/latest`에는 영향 없음
+- CI 서명: 저장소 비밀값 `DEBUG_KEYSTORE_B64`(PC의 debug.keystore)로 고정 → 삭제 없이 덮어 설치
+
 ## 빌드 (Windows + Android Studio)
 - 기준: Android Studio Otter 3 Feature Drop 2025.2.3, AGP 8.13.0, Gradle 8.13(wrapper), compileSdk 36, targetSdk 28, Java 17
 - PRoot: CI 아티팩트 `proot`의 `out/jni/*.so`를 `runtime/src/main/jniLibs/arm64-v8a/`에 넣음(없으면 빌드 때 경고, 앱은 실행 불가). 직접 만들려면 리눅스/WSL에서 `ANDROID_NDK=<NDK 경로> sh tools/build-proot-android.sh`

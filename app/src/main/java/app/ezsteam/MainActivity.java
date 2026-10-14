@@ -71,12 +71,25 @@ public class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(root);
 
+        // Which build is running (compare with the commit on GitHub) / 실행 중인 빌드(GitHub 커밋과 비교)
+        log("app build=" + BuildConfig.GIT_SHA + ", 설치 시각=" + installTime());
         log("installed=" + RootfsInstaller.installedVersion(this)
                 + " bundled=" + RootfsInstaller.bundledVersion(this));
         if (RootfsInstaller.installedVersion(this).isEmpty()) {
             log("rootfs 미설치: [rootfs 설치]를 누르십시오 (APK에 없으면 GitHub Release에서 받음)");
         } else if (RootfsInstaller.needsInstall(this)) {
             log("APK 안 rootfs가 설치본과 다름: [rootfs 설치]로 갱신");
+        }
+    }
+
+    /** When this APK was installed or updated (tells whether "install -r" took effect)
+     *  이 APK를 설치·갱신한 시각("install -r"이 적용됐는지 확인용) */
+    private String installTime() {
+        try {
+            long t = getPackageManager().getPackageInfo(getPackageName(), 0).lastUpdateTime;
+            return new java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.ROOT).format(new java.util.Date(t));
+        } catch (Exception e) {
+            return "?";
         }
     }
 
@@ -124,7 +137,8 @@ public class MainActivity extends Activity {
     private GlibcLauncher.Config config() {
         // Bring the rootfs scripts up to this APK's version / rootfs 스크립트를 이 APK 버전으로 맞춤
         try {
-            RootfsInstaller.syncScripts(this);
+            int n = RootfsInstaller.syncScripts(this);
+            if (n > 0) log("스크립트 동기화 " + n + "개 (APK → rootfs /opt/ezsteam)");
         } catch (java.io.IOException e) {
             log("스크립트 복사 실패: " + e);
         }

@@ -8,6 +8,10 @@ ok()   { echo "OK   $1 : $2"; }
 fail() { echo "FAIL $1 : $2"; }
 info() { echo "INFO $1 : $2"; }
 
+# 0. Which copy of this script is running (changes with every script update)
+#    실행 중인 이 스크립트의 판(스크립트가 바뀔 때마다 값이 바뀜)
+info script "gpucheck $(md5sum "$0" 2>/dev/null | cut -c1-8)"
+
 # 1. Who we are inside the guest (uid must be the app uid, not root)
 #    guest 안에서 본 사용자(uid는 root가 아닌 앱 uid여야 함)
 info id "$(id 2>&1)"

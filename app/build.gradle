@@ -23,6 +23,10 @@ android {
         // rootfs.tar.xz가 있는 GitHub Release 주소(gradle.properties에서 설정)
         buildConfigField 'String', 'ROOTFS_BASE_URL',
                 "\"${project.findProperty('ezsteam.rootfsBaseUrl') ?: ''}\""
+
+        // Commit of this build (CI passes it; "local" for Android Studio builds), shown on screen
+        // 이 빌드의 커밋(CI가 넘김, Android Studio 빌드는 "local"), 화면에 표시함
+        buildConfigField 'String', 'GIT_SHA', "\"${project.findProperty('ezsteam.gitSha') ?: 'local'}\""
     }
 
     buildFeatures {

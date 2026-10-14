@@ -137,7 +137,30 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleDebug --no-daemon \
-            "-Pezsteam.rootfsBaseUrl=https://github.com/${{ github.repository }}/releases/latest/download/"
+            "-Pezsteam.rootfsBaseUrl=https://github.com/${{ github.repository }}/releases/latest/download/" \
+            "-Pezsteam.gitSha=${GITHUB_SHA::7}"
+          # Build id next to the APK (read by tools/ezs.ps1 to know whether the APK is current)
+          # APK 옆의 빌드 번호(tools/ezs.ps1이 APK가 최신인지 확인할 때 읽음)
+          echo "${GITHUB_SHA::7}" > app/build/outputs/apk/debug/apk.version
+
+      # Every main-branch build replaces the APK of the fixed pre-release "apk-latest", so the
+      # install script always downloads from the same address. Pre-releases are not "latest",
+      # so the rootfs/driver address (releases/latest) is unaffected.
+      # main 빌드마다 고정 사전 출시 "apk-latest"의 APK를 바꿔 올림. 설치 스크립트는 항상 같은 주소에서 받음.
+      # 사전 출시는 "latest"가 아니므로 rootfs·드라이버 주소(releases/latest)에는 영향 없음
+      - name: apk-latest
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-latest
+          name: apk-latest (main 최신 시험 APK)
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          body: "main ${{ github.sha }}"
+          files: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/debug/apk.version
 
       - uses: actions/upload-artifact@v4
         with:
