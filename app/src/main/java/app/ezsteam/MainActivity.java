@@ -296,6 +296,13 @@ public class MainActivity extends Activity {
             log("먼저 [드라이버 설치]");
             return;
         }
+        // Fake root for this test: the X server runs xkbcomp after setgid()/setuid() to its own ids,
+        // which Android's app seccomp blocks (PRoot answers ENOSYS, the child exits). PRoot's
+        // fake root answers them. Steam later runs without it, against the app's own X server.
+        // 이 시험은 가짜 root로 실행: X 서버는 자기 id로 setgid()/setuid()를 부른 뒤 xkbcomp를 실행하는데
+        // 안드로이드 앱 seccomp이 막아(PRoot는 ENOSYS) 자식이 종료됨. PRoot 가짜 root는 이를 처리함.
+        // Steam은 나중에 가짜 root 없이 앱 X 서버로 실행함
+        c.rootId = true;
         File png = new File(c.rootfs, "home/steam/ezs-logs/drawtest.png");
         png.delete();
         Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/drawtest.sh", null, null, null);

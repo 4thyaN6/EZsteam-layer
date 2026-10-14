@@ -13,6 +13,11 @@ rm -f "$OUT/drawtest.png" /tmp/ezs-shot.xwd
 command -v Xvfb >/dev/null 2>&1 || { echo "FAIL tools : Xvfb 없음 ([시험 도구 설치] 먼저)"; exit 0; }
 command -v vkcube >/dev/null 2>&1 || { echo "FAIL tools : vkcube 없음 (rootfs vulkan-tools)"; exit 0; }
 echo "INFO driver : VK_DRIVER_FILES=${VK_DRIVER_FILES:-(없음)} MESA_VK_WSI_DEBUG=${MESA_VK_WSI_DEBUG:-(없음)}"
+# The app runs this test as PRoot fake root (uid 0 here): the X server needs setuid()/setgid()
+# to succeed before it starts xkbcomp
+# 앱은 이 시험을 PRoot 가짜 root(여기서는 uid 0)로 실행함: X 서버는 xkbcomp를 띄우기 전에
+# setuid()/setgid()가 성공해야 함
+echo "INFO id : $(id -u):$(id -g)"
 
 # 1. Virtual X server on :99 (1280x720, 24-bit) / 가상 X 서버 :99(1280x720, 24비트)
 # Xvfb creates the socket folder only as root: make it here (sticky, writable by all)

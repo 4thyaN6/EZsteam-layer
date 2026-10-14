@@ -25,9 +25,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Reuse the last build while the build script (which pins the sources) is unchanged
+      # 빌드 스크립트(소스 고정 포함)가 그대로면 지난 빌드 결과를 재사용함
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          key: proot-${{ hashFiles('tools/build-proot-android.sh') }}
+          path: |
+            out/jni/
+            runtime/src/main/assets/proot-source.txt
+
       # libproot.so + libproot-loader.so + proot-source.txt (pinned termux/proot commit)
       # PRoot 본체, 로더, 소스 기록(termux/proot 고정 커밋)
       - name: proot
+        if: steps.cache.outputs.cache-hit != 'true'
         run: sh tools/build-proot-android.sh out/jni
 
       - uses: actions/upload-artifact@v4
@@ -45,12 +56,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Reuse the last driver package while the build script (Mesa version, options) is unchanged.
+      # A rebuild takes minutes; a cache hit takes seconds.
+      # 빌드 스크립트(Mesa 버전, 옵션)가 그대로면 지난 드라이버 묶음을 재사용함.
+      # 다시 빌드하면 수 분, 캐시를 쓰면 수 초
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          key: turnip-${{ hashFiles('tools/build-turnip-glibc.sh') }}
+          path: out-turnip/
+
       # Mesa source is fetched on the runner host (retries, mirrors, sha256), then built in the container
       # Mesa 소스는 실행기 본체에서 받고(재시도, 미러, sha256) 컨테이너에서 빌드함
       - name: mesa source
+        if: steps.cache.outputs.cache-hit != 'true'
         run: sh tools/build-turnip-glibc.sh fetch src-mesa/mesa.tar.xz
 
       - name: turnip
+        if: steps.cache.outputs.cache-hit != 'true'
         run: docker run --rm -v "$PWD:/src" -w /src debian:trixie sh tools/build-turnip-glibc.sh build out-turnip src-mesa/mesa.tar.xz
 
       - uses: actions/upload-artifact@v4
@@ -76,9 +99,22 @@ jobs:
           make -C native/ezglibc test
           objdump -T native/ezglibc/libezglibc.so | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1
 
+      # Reuse the last rootfs while its build scripts are unchanged. The helper scripts in
+      # rootfs-overlay are not part of the key: the app copies them from the APK before each run.
+      # A reused rootfs keeps its version string, so the app does not download it again.
+      # rootfs 빌드 스크립트가 그대로면 지난 rootfs를 재사용함. rootfs-overlay 보조 스크립트는
+      # 앱이 실행 전에 APK에서 복사하므로 키에 넣지 않음. 재사용하면 버전 문자열이 그대로라
+      # 앱이 다시 받지 않음
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          key: rootfs-${{ hashFiles('tools/build-rootfs.sh', 'tools/fix-abs-symlinks.sh') }}
+          path: out/
+
       # rootfs.tar.xz + .sha256 + rootfs.version + rootfs.packages.txt
       # rootfs 압축 파일, 체크섬, 버전, 패키지 목록 생성
       - name: rootfs
+        if: steps.cache.outputs.cache-hit != 'true'
         run: sh tools/build-rootfs.sh out
 
       - uses: actions/upload-artifact@v4
