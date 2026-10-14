@@ -15,12 +15,22 @@ command -v vkcube >/dev/null 2>&1 || { echo "FAIL tools : vkcube 없음 (rootfs 
 echo "INFO driver : VK_DRIVER_FILES=${VK_DRIVER_FILES:-(없음)} MESA_VK_WSI_DEBUG=${MESA_VK_WSI_DEBUG:-(없음)}"
 
 # 1. Virtual X server on :99 (1280x720, 24-bit) / 가상 X 서버 :99(1280x720, 24비트)
+# Xvfb creates the socket folder only as root: make it here (sticky, writable by all)
+# Xvfb는 root일 때만 소켓 폴더를 만들므로 여기서 만듦(sticky, 모두 쓰기 가능)
+mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+# Keyboard map compiler and its output folder must be usable, else Xvfb stops at start
+# 키보드 배치 컴파일러와 출력 폴더를 쓸 수 있어야 함. 아니면 Xvfb가 시작 단계에서 멈춤
+if ! command -v xkbcomp >/dev/null 2>&1 || [ ! -d /usr/share/X11/xkb ]; then
+    echo "FAIL xkb : xkbcomp 또는 xkb-data 없음 ([시험 도구 설치] 다시)"; exit 0
+fi
+[ -w /var/lib/xkb ] || mkdir -p /var/lib/xkb 2>/dev/null
+echo "INFO xkb : xkbcomp $(xkbcomp -version 2>&1 | head -n 1), /var/lib/xkb $( [ -w /var/lib/xkb ] && echo 쓰기가능 || echo 쓰기불가)"
 Xvfb :99 -screen 0 1280x720x24 -nolisten tcp -ac >/tmp/ezs-xvfb.log 2>&1 &
 XPID=$!
 i=0
 while [ ! -S /tmp/.X11-unix/X99 ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
 if [ ! -S /tmp/.X11-unix/X99 ]; then
-    echo "FAIL xvfb : 시작 안 됨"; tail -n 20 /tmp/ezs-xvfb.log; kill $XPID 2>/dev/null; exit 0
+    echo "FAIL xvfb : 시작 안 됨"; head -n 40 /tmp/ezs-xvfb.log; kill $XPID 2>/dev/null; exit 0
 fi
 echo "OK   xvfb : :99 1280x720x24"
 export DISPLAY=:99

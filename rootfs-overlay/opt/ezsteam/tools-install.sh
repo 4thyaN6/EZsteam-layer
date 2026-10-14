@@ -15,7 +15,14 @@ echo "INFO resolv : $(grep -c nameserver /etc/resolv.conf 2>/dev/null) nameserve
 before=$(du -sk /usr 2>/dev/null | cut -f1)
 
 $APT update || { echo "FAIL apt-update : 네트워크·DNS 확인"; exit 1; }
-$APT install -y --no-install-recommends xvfb x11-apps || { echo "FAIL apt-install"; exit 1; }
+# x11-xkb-utils (xkbcomp) and xkb-data are named explicitly: Xvfb compiles the keyboard map with
+# them at start and cannot run without
+# x11-xkb-utils(xkbcomp), xkb-data는 명시함: Xvfb가 시작할 때 키보드 배치를 이것으로 컴파일하며
+# 없으면 실행되지 않음
+$APT install -y --no-install-recommends xvfb x11-apps x11-xkb-utils xkb-data || { echo "FAIL apt-install"; exit 1; }
+# Folder for the compiled keyboard map, writable by the app user who runs Xvfb
+# 컴파일된 키보드 배치 폴더(Xvfb를 실행하는 앱 사용자가 쓸 수 있어야 함)
+mkdir -p /var/lib/xkb && chmod 1777 /var/lib/xkb
 $APT clean
 rm -rf /var/lib/apt/lists/*
 
