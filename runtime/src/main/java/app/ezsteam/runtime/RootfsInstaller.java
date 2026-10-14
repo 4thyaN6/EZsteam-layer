@@ -147,6 +147,38 @@ public final class RootfsInstaller {
         }
     }
 
+    /**
+     * Write <rootfs>/etc/resolv.conf from the DNS servers of the device's current network, so
+     * programs in the rootfs (apt) can resolve names. Android itself has no resolv.conf.
+     * Returns the servers written ("" when none is known, then the file is left as it is).
+     * 기기 현재 네트워크의 DNS 서버로 <rootfs>/etc/resolv.conf를 씀. rootfs 안 프로그램(apt)이
+     * 이름을 찾을 수 있게 함(안드로이드에는 resolv.conf가 없음). 쓴 서버 목록을 돌려줌
+     * (모르면 "" 이고 파일은 그대로 둠)
+     */
+    public static String writeResolvConf(Context ctx) throws IOException {
+        android.net.ConnectivityManager cm =
+                (android.net.ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+        android.net.Network net = cm != null ? cm.getActiveNetwork() : null;
+        android.net.LinkProperties lp = net != null ? cm.getLinkProperties(net) : null;
+        if (lp == null || lp.getDnsServers().isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        StringBuilder list = new StringBuilder();
+        for (java.net.InetAddress a : lp.getDnsServers()) {
+            String ip = a.getHostAddress();
+            // Drop an IPv6 scope suffix ("%wlan0") that resolv.conf does not accept
+            // resolv.conf가 받지 않는 IPv6 범위 표시("%wlan0")를 뺌
+            int pct = ip.indexOf('%');
+            if (pct >= 0) ip = ip.substring(0, pct);
+            sb.append("nameserver ").append(ip).append('\n');
+            list.append(ip).append(' ');
+        }
+        File f = new File(rootfsDir(ctx), "etc/resolv.conf");
+        try (FileOutputStream os = new FileOutputStream(f)) {
+            os.write(sb.toString().getBytes(StandardCharsets.US_ASCII));
+        }
+        return list.toString().trim();
+    }
+
     /** Asset folder holding the rootfs helper scripts / rootfs 보조 스크립트가 든 asset 폴더 */
     public static final String SCRIPTS_ASSET = "ezsteam";
 

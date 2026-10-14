@@ -65,7 +65,11 @@ Write-Host "설치: $apk"
 # error record, so keep going instead of stopping on it
 # adb는 실패를 stderr로 씀. Windows PowerShell 5.1은 리디렉션된 stderr 줄을 오류로 바꾸므로 멈추지 않게 함
 $ErrorActionPreference = 'Continue'
-$out = (& $Adb install -r $apk 2>&1 | Out-String)
+# Each output item as plain text: Out-String wraps long error lines at the console width,
+# which split "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in two
+# 출력 항목을 일반 문자열로 바꿈: Out-String은 긴 오류 줄을 창 폭에서 끊어
+# "INSTALL_FAILED_UPDATE_INCOMPATIBLE"이 둘로 나뉨
+$out = (& $Adb install -r $apk 2>&1 | ForEach-Object { "$_" }) -join "`n"
 Write-Host $out
 if ($out -match 'INSTALL_FAILED_UPDATE_INCOMPATIBLE') {
     # Installed app has a different signing key: only uninstall + install works (app data is lost,
@@ -74,7 +78,7 @@ if ($out -match 'INSTALL_FAILED_UPDATE_INCOMPATIBLE') {
     $ans = Read-Host '서명이 달라 덮어 설치 불가. 삭제 후 설치할까요? (y/n)'
     if ($ans -ne 'y') { return }
     & $Adb uninstall app.ezsteam
-    $out = (& $Adb install $apk 2>&1 | Out-String)
+    $out = (& $Adb install $apk 2>&1 | ForEach-Object { "$_" }) -join "`n"
     Write-Host $out
 }
 if ($out -notmatch 'Success') { throw 'adb install 실패 (태블릿 연결·USB 디버깅 확인)' }

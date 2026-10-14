@@ -5,4 +5,7 @@
      사용자 조작으로 부를 때만 동작함. 호스트 앱 매니페스트로 합쳐짐 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Read the current network's DNS servers for the rootfs resolv.conf (RootfsInstaller) -->
+    <!-- rootfs resolv.conf용으로 현재 네트워크의 DNS 서버를 읽음(RootfsInstaller) -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 </manifest>

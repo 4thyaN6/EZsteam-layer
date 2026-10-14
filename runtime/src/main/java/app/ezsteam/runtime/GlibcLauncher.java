@@ -53,6 +53,10 @@ public final class GlibcLauncher {
         public boolean link2symlink = true;
         /** Emulate System V IPC (X MIT-SHM, some libraries) / System V IPC 흉내(X MIT-SHM, 일부 라이브러리) */
         public boolean sysvipc = true;
+        /** Fake root (PRoot -0) for package installs with apt/dpkg only. Never for Steam,
+         *  which refuses to run as root.
+         *  apt/dpkg 패키지 설치 전용 가짜 root(PRoot -0). Steam은 root 실행을 거부하므로 쓰지 않음 */
+        public boolean rootId = false;
         /** PRoot log level (0 = quiet) / PRoot 로그 수준(0 = 조용히) */
         public int verbose = 0;
         /** Extra guest environment (e.g. Vulkan driver selection from DriverInstaller.apply)
@@ -123,6 +127,7 @@ public final class GlibcLauncher {
         for (String[] b : c.binds) cmd.add("--bind=" + b[0] + ":" + b[1]);
         if (c.link2symlink) cmd.add("--link2symlink");
         if (c.sysvipc) cmd.add("--sysvipc");
+        if (c.rootId) cmd.add("--root-id");
         return cmd;
     }
 

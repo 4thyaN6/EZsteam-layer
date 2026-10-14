@@ -31,6 +31,8 @@ import java.util.List;
 public class MainActivity extends Activity {
 
     private TextView logView;
+    /** Screenshot of the drawing test (hidden until there is one) / 그리기 시험 화면 캡처(생기기 전엔 숨김) */
+    private android.widget.ImageView shotView;
     private ScrollView scroll;
     private volatile boolean busy;
 
@@ -60,6 +62,15 @@ public class MainActivity extends Activity {
         root.addView(row2);
         addButton(row2, "드라이버 설치", v -> runTask("driver", this::doDriverInstall));
         addButton(row2, "GPU 확인", v -> runTask("gpu", this::doGpuCheck));
+        addButton(row2, "시험 도구 설치", v -> runTask("tools", this::doToolsInstall));
+        addButton(row2, "그리기 시험", v -> runTask("draw", this::doDrawTest));
+
+        // Screenshot area for the drawing test / 그리기 시험 화면 캡처 영역
+        shotView = new android.widget.ImageView(this);
+        shotView.setAdjustViewBounds(true);
+        shotView.setVisibility(View.GONE);
+        root.addView(shotView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, (int) (240 * getResources().getDisplayMetrics().density)));
 
         scroll = new ScrollView(this);
         logView = new TextView(this);
@@ -249,6 +260,54 @@ public class MainActivity extends Activity {
         Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/gpucheck.sh", null, null, null);
         pipe(p);
         log("exit=" + p.waitFor());
+    }
+
+    /**
+     * Install the optional test tools (Xvfb, xwd) with apt inside the rootfs. Runs as PRoot fake
+     * root and uses the device's DNS servers. Only on a button press; downloads from Debian mirrors.
+     * 선택 시험 도구(Xvfb, xwd)를 rootfs 안에서 apt로 설치함. PRoot 가짜 root로 실행하고
+     * 기기 DNS 서버를 씀. 버튼을 누를 때만 동작하며 Debian 미러에서 받음
+     */
+    private void doToolsInstall() throws Exception {
+        if (RootfsInstaller.installedVersion(this).isEmpty()) {
+            log("먼저 rootfs 설치");
+            return;
+        }
+        String dns = RootfsInstaller.writeResolvConf(this);
+        log("DNS: " + (dns.isEmpty() ? "알 수 없음 (네트워크 연결 확인)" : dns));
+        GlibcLauncher.Config c = config();
+        c.rootId = true;
+        Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/tools-install.sh", null, null, null);
+        pipe(p);
+        log("exit=" + p.waitFor());
+    }
+
+    /**
+     * Drawing test: Xvfb + vkcube through Turnip, frames per second, then show the screenshot.
+     * 그리기 시험: Xvfb + Turnip으로 그리는 vkcube, 초당 프레임, 이어서 화면 캡처 표시
+     */
+    private void doDrawTest() throws Exception {
+        if (RootfsInstaller.installedVersion(this).isEmpty()) {
+            log("먼저 rootfs 설치");
+            return;
+        }
+        GlibcLauncher.Config c = config();
+        if (!DriverInstaller.apply(this, c, TURNIP)) {
+            log("먼저 [드라이버 설치]");
+            return;
+        }
+        File png = new File(c.rootfs, "home/steam/ezs-logs/drawtest.png");
+        png.delete();
+        Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/drawtest.sh", null, null, null);
+        pipe(p);
+        log("exit=" + p.waitFor());
+        if (png.isFile()) {
+            android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeFile(png.getPath());
+            runOnUiThread(() -> {
+                shotView.setImageBitmap(bmp);
+                shotView.setVisibility(View.VISIBLE);
+            });
+        }
     }
 
     /** Driver package name in the Release / Release의 드라이버 묶음 이름 */
