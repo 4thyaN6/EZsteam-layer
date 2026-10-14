@@ -1,14 +1,16 @@
 #!/bin/sh
 # Live display test: virtual X server (Xvfb) on :98 whose screen memory is a file
 # (-fbdir, XWD format), shown live by the app (DisplayActivity) and driven by the app through XTEST.
-# Test windows: vkcube (Turnip), xclock, xeyes (follows the pointer), xcalc (click / key test).
+# Test windows: vkcube (Turnip), xclock, xeyes (follows the pointer), xcalc (click test),
+# keyview.py (key test, holds the keyboard focus).
 #   display.sh <width> <height>
 # Prints "READY <width> <height> <framebuffer file>" when the app may open the screen, then waits
 # until the app closes stdin, and stops everything it started.
 # Runs as PRoot fake root (Xvfb needs setuid()/setgid() before xkbcomp, see drawtest.sh).
 # 실시간 화면 시험: 화면 메모리를 파일(-fbdir, XWD 형식)로 두는 가상 X 서버(Xvfb) :98.
 # 앱(DisplayActivity)이 이 파일을 실시간으로 보여 주고 XTEST로 입력을 넣음.
-# 시험 창: vkcube(Turnip), xclock, xeyes(포인터를 따라봄), xcalc(클릭·키 시험).
+# 시험 창: vkcube(Turnip), xclock, xeyes(포인터를 따라봄), xcalc(클릭 시험),
+# keyview.py(키 시험, 키보드 포커스를 가짐).
 #   display.sh <가로> <세로>
 # 앱이 화면을 열어도 될 때 "READY <가로> <세로> <화면 파일>"을 출력하고, 앱이 stdin을 닫을
 # 때까지 기다린 뒤 자기가 띄운 것을 모두 끔.
@@ -60,6 +62,10 @@ start() {
 start xclock -geometry 300x300+$((W - 320))+20 -update 1
 start xeyes -geometry 300x200+520+20
 start xcalc -geometry +520+260
+# Key check window (takes the keyboard focus); its lines also go to the app log
+# 키 확인 창(키보드 포커스를 가져감). 받은 키 줄은 앱 로그에도 나옴
+python3 /opt/ezsteam/keyview.py 20 520 2>&1 | sed -u 's/^/KEY  /' &
+PIDS="$PIDS $!"
 
 # vkcube keeps drawing (500x500 at 0,0); restarted if it ends
 # vkcube는 계속 그림(0,0 위치 500x500). 끝나면 다시 띄움

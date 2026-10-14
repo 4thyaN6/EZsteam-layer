@@ -59,6 +59,12 @@ public class DisplayActivity extends Activity {
     private volatile XvfbFramebuffer fb;
     private volatile boolean finishing;
 
+    /** Last key sent to X, shown in the top bar / X로 보낸 마지막 키, 위쪽 막대에 표시 */
+    private volatile String lastKey = "-";
+    private volatile boolean shaderLogged;
+    private static final String[] SCALE_NAMES = {"선형", "바이큐빅", "바이큐빅+선명"};
+    private Button scaleButton;
+
     // Touch state / 터치 상태
     private boolean leftDown, twoFinger, scrolled;
     private long twoFingerStart;
@@ -89,6 +95,7 @@ public class DisplayActivity extends Activity {
         statsView.setTextSize(12);
         statsView.setText(w + "x" + h + " 시작 중");
         bar.addView(statsView);
+        scaleButton = addButton(bar, "확대: " + SCALE_NAMES[FramebufferView.SCALE_SHARP], v -> cycleScale());
         addButton(bar, "키보드", v -> toggleKeyboard());
         addButton(bar, "로그", v -> logScroll.setVisibility(logScroll.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
         addButton(bar, "닫기", v -> finish());
@@ -107,8 +114,17 @@ public class DisplayActivity extends Activity {
         setContentView(root);
         hideSystemBars();
 
-        view.setStatsListener((fps, ms, changed, fw, fh) -> runOnUiThread(() -> statsView.setText(String.format(Locale.ROOT,
-                "%dx%d  화면 %.0ffps  내용변경 %.0f/s  업로드 %.1fms  ", fw, fh, fps, changed, ms))));
+        view.setStatsListener((fps, ms, changed, fw, fh) -> {
+            String err = view.shaderError;
+            if (err != null && !shaderLogged) {
+                shaderLogged = true;
+                log("확대 셰이더 오류(선형으로 대체): " + err);
+            }
+            runOnUiThread(() -> statsView.setText(String.format(Locale.ROOT,
+                    "%dx%d  화면 %.0ffps  내용변경 %.0f/s  업로드 %.1fms  키 %s  ", fw, fh, fps, changed, ms, lastKey)));
+        });
+        // Soft keyboard text arrives here as key events / 소프트 키보드 텍스트는 키 이벤트로 바뀌어 여기로 옴
+        view.setKeyListener(this::sendKey);
         view.setOnTouchListener((v, e) -> onTouch(e));
         view.requestFocus();
 
@@ -116,7 +132,7 @@ public class DisplayActivity extends Activity {
         new Thread(() -> start(w, h), "ezs-display").start();
     }
 
-    private void addButton(LinearLayout bar, String text, View.OnClickListener l) {
+    private Button addButton(LinearLayout bar, String text, View.OnClickListener l) {
         Button b = new Button(this);
         b.setText(text);
         b.setAllCaps(false);
@@ -124,6 +140,14 @@ public class DisplayActivity extends Activity {
         // Buttons must not take key focus from the screen view / 버튼이 화면 뷰의 키 포커스를 가져가지 않게 함
         b.setFocusable(false);
         bar.addView(b);
+        return b;
+    }
+
+    /** Next scaling mode: linear → bicubic → bicubic + sharpen / 다음 확대 방식: 선형 → 바이큐빅 → 바이큐빅 + 선명 */
+    private void cycleScale() {
+        int m = (view.getScaleMode() + 1) % SCALE_NAMES.length;
+        view.setScaleMode(m);
+        scaleButton.setText("확대: " + SCALE_NAMES[m]);
     }
 
     /** Immersive full screen (system bars hidden) / 몰입형 전체 화면(시스템 막대 숨김) */
@@ -289,11 +313,27 @@ public class DisplayActivity extends Activity {
     public boolean dispatchKeyEvent(KeyEvent e) {
         // Back closes the screen; everything else goes to X / 뒤로 가기는 화면 닫기, 나머지는 X로 보냄
         if (e.getKeyCode() == KeyEvent.KEYCODE_BACK) return super.dispatchKeyEvent(e);
+        // Text delivered as one event (some keyboards): split into key events
+        // 한 이벤트로 온 텍스트(일부 키보드): 키 이벤트로 나눔
+        if (e.getAction() == KeyEvent.ACTION_MULTIPLE && e.getKeyCode() == KeyEvent.KEYCODE_UNKNOWN) {
+            view.sendChars(e.getCharacters());
+            return true;
+        }
+        return sendKey(e) || super.dispatchKeyEvent(e);
+    }
+
+    /**
+     * Send one Android key event to X; false when it has no X keycode (or input is not connected).
+     * 안드로이드 키 이벤트 하나를 X로 보냄. X 키코드가 없거나 입력이 연결되지 않았으면 false
+     */
+    private boolean sendKey(KeyEvent e) {
         XTestClient x = xtest;
         int code = XKeys.keycode(e);
-        if (x == null || code == 0) return super.dispatchKeyEvent(e);
-        boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
+        if (code == 0) lastKey = "?" + e.getKeyCode();
+        if (x == null || code == 0) return false;
         if (e.getAction() == KeyEvent.ACTION_MULTIPLE) return true;
+        boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
+        if (down) lastKey = KeyEvent.keyCodeToString(e.getKeyCode()).replace("KEYCODE_", "") + "→" + code;
         // Soft keyboards send capitals as one event with the Shift meta flag: wrap it in Shift
         // 소프트 키보드는 대문자를 Shift 메타 플래그가 붙은 이벤트 하나로 보내므로 Shift로 감쌈
         boolean wrapShift = XKeys.fromSoftKeyboard(e) && e.isShiftPressed() && code != XKeys.SHIFT_L;

@@ -19,7 +19,7 @@
 | `runtime/.../ChildProcessCounter.java` | 앱에서 시작된 프로세스 목록(/proc) |
 | `runtime/.../DriverInstaller.java` | glibc Vulkan 드라이버 묶음 받기·설치(`files/ezs-data/drivers/<이름>`)·적용(guest `/opt/ezdrv`, `VK_DRIVER_FILES`, 묶음 `env`) |
 | `runtime/.../XvfbFramebuffer.java` | Xvfb `-fbdir` 화면 파일(XWD) 매핑, 픽셀(B G R X 32비트) 직접 접근 |
-| `runtime/.../FramebufferView.java` | 위 화면을 OpenGL ES 3 텍스처로 매 프레임 올려 비율 유지 표시(GPU 확대·축소), fps·업로드 시간·내용 변경 수 |
+| `runtime/.../FramebufferView.java` | 위 화면을 OpenGL ES 3 텍스처로 매 프레임 올려 비율 유지 표시. 확대 방식 선형 / 바이큐빅(Catmull-Rom) / 바이큐빅 + CAS 방식 선명화, fps·업로드 시간·내용 변경 수, 소프트 키보드 텍스트 → 키 이벤트 |
 | `runtime/.../XTestClient.java`, `XKeys.java` | X11 소켓 직접 통신으로 XTEST 포인터·버튼·키 입력 주입(Xlib 불필요), 안드로이드 키 → X 키코드(evdev + 8) |
 | `runtime/src/main/jniLibs/arm64-v8a/` | `libproot.so`, `libproot-loader.so`(CI가 만듦, 저장소에는 없음) |
 | `app/` | 시험용 호스트 앱(targetSdk 28): rootfs 설치, 환경 시험, 자식 프로세스 수, Steam 준비, PRoot 상태, 실시간 화면(`DisplayActivity`) |
@@ -35,7 +35,8 @@
 | `rootfs-overlay/opt/ezsteam/vkcheck.py` | vulkaninfo 전체 결과를 `~/ezs-logs/vulkaninfo.txt`로 저장하고 vkd3d-proton·DXVK 요구 항목을 OK/FAIL/UNKNOWN으로 표시 |
 | `rootfs-overlay/opt/ezsteam/tools-install.sh` | [시험 도구 설치]: PRoot 가짜 root(`--root-id`) + 기기 DNS로 `apt-get install xvfb x11-apps`(기본 rootfs에는 넣지 않음) |
 | `rootfs-overlay/opt/ezsteam/drawtest.sh`, `xwd2png.py` | [그리기 시험]: Xvfb `:99` + Turnip `vkcube` 600프레임, fps, `xwd` 캡처를 `~/ezs-logs/drawtest.png`로 저장해 앱에 표시 |
-| `rootfs-overlay/opt/ezsteam/display.sh` | [화면 WxH]: Xvfb `:98` `-fbdir` + 시험 창(vkcube, xclock, xeyes, xcalc), 앱이 stdin을 닫으면 종료 |
+| `rootfs-overlay/opt/ezsteam/display.sh` | [화면 WxH]: Xvfb `:98` `-fbdir` + 시험 창(vkcube, xclock, xeyes, xcalc, keyview), 앱이 stdin을 닫으면 종료 |
+| `rootfs-overlay/opt/ezsteam/keyview.py` | 키 확인 창(libX11 ctypes): 키보드 포커스를 갖고 받은 X 키코드·키 이름을 창과 앱 로그(`KEY`)에 표시 |
 | `rootfs-overlay/opt/ezsteam/ezsteam-prepare.sh` | Steam 시작 전 준비: `~/.steam/sdkarm64/steamclient.so` 연결, EZ Proton 설치 |
 | `rootfs-overlay/opt/ezsteam/compat/ezproton/` | 경량 호환 도구: Valve ARM64 Proton을 컨테이너 없이 직접 호출 |
 | `native/ezglibc/` | 이전 방식의 `libezglibc.so`(LD_PRELOAD 경로 변환). 실행에는 쓰지 않음. 나중 개선 작업용으로 CI에서 빌드·자체 시험만 유지 |
@@ -83,7 +84,7 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 ## 시험
 - 앱: GitHub Actions `build` → `apk` 아티팩트 설치 → [PRoot 상태] → [rootfs 설치] → [환경 시험] → [자식 프로세스] → [Steam 준비]
 - GPU: [드라이버 설치](Release의 `turnip.tar.xz`) → [GPU 확인]. KGSL 단독 Turnip은 X11 출력에 `MESA_VK_WSI_DEBUG=sw`가 필요해 묶음 `env`로 넣음
-- 실시간 화면: [시험 도구 설치] 후 [화면 1280x800] 등 → 한 손가락 = 왼쪽 버튼(탭·끌기), 두 손가락 탭 = 오른쪽 클릭, 두 손가락 세로 끌기 = 휠, [키보드] = 소프트 키보드, 뒤로 가기·[닫기] = 종료
+- 실시간 화면: [시험 도구 설치] 후 [화면 1280x800] 등 → 한 손가락 = 왼쪽 버튼(탭·끌기), 두 손가락 탭 = 오른쪽 클릭, 두 손가락 세로 끌기 = 휠, [키보드] = 소프트 키보드(입력은 keyview 창과 위쪽 막대 `키`에 표시), [확대] = 확대 방식 전환, 뒤로 가기·[닫기] = 종료
 - [환경 시험]의 `pthread`, `sys-*` 항목이 FAIL `SIGSYS (seccomp)`이면 PRoot가 해당 호출을 처리하지 못한 것 → rootfs glibc 패치(termux-pacman 방식) 검토
 - (선택) 앱 없이: `tools/device-smoke.sh` 머리 주석 참고
 - 호스트: `make -C native/ezglibc test` (보관 중인 preload 라이브러리)
