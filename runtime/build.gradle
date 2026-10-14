@@ -22,6 +22,17 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+
+    // The rootfs helper scripts (rootfs-overlay/opt/ezsteam) also ship inside the APK as
+    // assets "ezsteam/...", so script fixes reach the device with an APK update alone
+    // (RootfsInstaller.syncScripts copies them into the rootfs before programs run)
+    // rootfs 보조 스크립트(rootfs-overlay/opt/ezsteam)를 APK assets "ezsteam/..."에도 넣음.
+    // 스크립트 수정은 APK 갱신만으로 기기에 반영됨(RootfsInstaller.syncScripts가 실행 전에 rootfs로 복사)
+    sourceSets {
+        main {
+            assets.srcDirs += ['../rootfs-overlay/opt']
+        }
+    }
 }
 
 dependencies {

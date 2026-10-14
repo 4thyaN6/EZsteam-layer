@@ -50,7 +50,7 @@ public class MainActivity extends Activity {
         root.addView(row);
         addButton(row, "rootfs 설치", v -> runTask("install", this::doInstall));
         addButton(row, "환경 시험", v -> runTask("smoke", this::doSmoke));
-        addButton(row, "자식 프로세스", v -> runTask("procs", this::doProcs));
+        addButton(row, "자식 프로세스", v -> runTask("procs", this::doProcsLive));
         addButton(row, "Steam 준비", v -> runTask("prepare", this::doPrepare));
         addButton(row, "PRoot 상태", v -> runTask("proot", this::doProotInfo));
 
@@ -122,6 +122,12 @@ public class MainActivity extends Activity {
 
     /** Launcher config for this app (PRoot from nativeLibraryDir) / 이 앱의 실행기 설정(nativeLibraryDir의 PRoot 사용) */
     private GlibcLauncher.Config config() {
+        // Bring the rootfs scripts up to this APK's version / rootfs 스크립트를 이 APK 버전으로 맞춤
+        try {
+            RootfsInstaller.syncScripts(this);
+        } catch (java.io.IOException e) {
+            log("스크립트 복사 실패: " + e);
+        }
         GlibcLauncher.Config c = new GlibcLauncher.Config();
         c.rootfs = RootfsInstaller.rootfsDir(this);
         c.nativeLibDir = new File(getApplicationInfo().nativeLibraryDir);
@@ -227,9 +233,6 @@ public class MainActivity extends Activity {
                 ? "드라이버: " + TURNIP + " " + DriverInstaller.installedVersion(this, TURNIP)
                 : "드라이버: 없음 (KGSL 장치 확인만 함)");
         Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/gpucheck.sh", null, null, null);
-        // Snapshot while the guest is still running / guest가 실행 중일 때 목록을 찍음
-        Thread.sleep(300);
-        doProcs();
         pipe(p);
         log("exit=" + p.waitFor());
     }
@@ -249,6 +252,28 @@ public class MainActivity extends Activity {
         String v = DriverInstaller.installFromRelease(this, base, TURNIP, (done, total) ->
                 log("  받음 " + (done >> 20) + (total > 0 ? " / " + (total >> 20) : "") + " MB"));
         log(v.equals(before) ? "이미 같은 버전: " + v : "설치 완료: " + TURNIP + " " + v);
+    }
+
+    /**
+     * Count child processes while a guest program is surely alive (guest "sleep 3"), and report
+     * how many /proc entries the app can see, to tell "no children" from "cannot see them".
+     * guest 프로그램("sleep 3")이 확실히 살아 있는 동안 자식 프로세스를 셈. 앱이 볼 수 있는
+     * /proc 항목 수도 기록해 "자식이 없음"과 "보이지 않음"을 구분함
+     */
+    private void doProcsLive() throws Exception {
+        if (RootfsInstaller.installedVersion(this).isEmpty()) {
+            doProcs();
+            return;
+        }
+        Process p = GlibcLauncher.start(config(), "/bin/sleep", java.util.Arrays.asList("3"), null, null);
+        Thread.sleep(1000);
+        log("guest sleep 실행 중=" + p.isAlive() + ", 앱 pid=" + android.os.Process.myPid());
+        String[] all = new File("/proc").list();
+        int visible = 0;
+        if (all != null) for (String n : all) if (n.matches("\\d+")) visible++;
+        log("/proc에서 보이는 프로세스 " + visible + "개");
+        doProcs();
+        p.waitFor();
     }
 
     private void doProcs() {

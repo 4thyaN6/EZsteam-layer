@@ -60,7 +60,11 @@ EOF
 #    Vulkan 로더·드라이버(rootfs의 vulkan-tools, 드라이버 묶음이 있을 때만)
 if command -v vulkaninfo >/dev/null 2>&1; then
     info vk-icd "VK_DRIVER_FILES=${VK_DRIVER_FILES:-(없음)}"
-    vulkaninfo --summary 2>&1 | head -n 40
+    # No X server is running for this check: hide DISPLAY so vulkaninfo does not try to open
+    # a window surface (it aborts with "XCB failed to connect" otherwise)
+    # 이 확인에는 X 서버가 없으므로 DISPLAY를 숨김(없으면 vulkaninfo가 창 표면을 만들려다
+    # "XCB failed to connect"로 중단됨)
+    env -u DISPLAY -u WAYLAND_DISPLAY vulkaninfo --summary 2>&1 | head -n 60
 else
     info vulkaninfo "없음 (rootfs에 vulkan-tools 없음)"
 fi

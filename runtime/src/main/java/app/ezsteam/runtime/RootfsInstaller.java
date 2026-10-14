@@ -147,6 +147,53 @@ public final class RootfsInstaller {
         }
     }
 
+    /** Asset folder holding the rootfs helper scripts / rootfs 보조 스크립트가 든 asset 폴더 */
+    public static final String SCRIPTS_ASSET = "ezsteam";
+
+    /**
+     * Copy the helper scripts bundled in the APK (assets/ezsteam/**) over <rootfs>/opt/ezsteam,
+     * so the APK's copy wins over the one in an older rootfs. Files are small; all are made
+     * executable (0755). Does nothing when the rootfs is not installed.
+     * APK에 든 보조 스크립트(assets/ezsteam/**)를 <rootfs>/opt/ezsteam에 덮어 복사함.
+     * 이전 rootfs에 든 것보다 APK 쪽이 우선함. 파일이 작아 매번 복사하며 모두 실행 가능(0755)으로 둠.
+     * rootfs가 설치되지 않았으면 아무것도 하지 않음
+     */
+    public static int syncScripts(Context ctx) throws IOException {
+        File root = rootfsDir(ctx);
+        if (installedVersion(ctx).isEmpty()) return 0;
+        return copyAssetTree(ctx, SCRIPTS_ASSET, new File(root, "opt/" + SCRIPTS_ASSET));
+    }
+
+    /** Recursive asset copy; returns the number of files written / asset 재귀 복사, 쓴 파일 수를 돌려줌 */
+    private static int copyAssetTree(Context ctx, String path, File dest) throws IOException {
+        String[] names = ctx.getAssets().list(path);
+        if (names == null || names.length == 0) {
+            // A file (list() is empty for files) / 파일임(파일은 list()가 비어 있음)
+            File parent = dest.getParentFile();
+            if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+                throw new IOException("cannot create " + parent);
+            }
+            File tmp = new File(dest.getPath() + ".new");
+            try (InputStream in = ctx.getAssets().open(path);
+                 FileOutputStream out = new FileOutputStream(tmp)) {
+                byte[] b = new byte[8192];
+                int n;
+                while ((n = in.read(b)) > 0) out.write(b, 0, n);
+            }
+            try {
+                android.system.Os.chmod(tmp.getPath(), 0755);
+            } catch (android.system.ErrnoException e) {
+                throw new IOException(e);
+            }
+            // Replace atomically (a running script keeps its old inode) / 원자적으로 교체(실행 중인 스크립트는 이전 파일 유지)
+            if (!tmp.renameTo(dest)) throw new IOException("cannot replace " + dest);
+            return 1;
+        }
+        int count = 0;
+        for (String n : names) count += copyAssetTree(ctx, path + "/" + n, new File(dest, n));
+        return count;
+    }
+
     /**
      * Delete a tree without following symlinks (lstat-based).
      * 심볼릭 링크를 따라가지 않고 트리를 지움(lstat 기준)
