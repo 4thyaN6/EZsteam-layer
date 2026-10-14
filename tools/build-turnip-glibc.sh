@@ -6,7 +6,15 @@
 # DriverInstaller가 설치하는 드라이버 묶음("turnip")으로 묶음.
 # CI arm64 실행기의 debian:trixie arm64 컨테이너(rootfs와 같은 릴리스) 안에서 실행함
 #
-#   docker run --rm -v "$PWD:/src" -w /src debian:trixie sh tools/build-turnip-glibc.sh out-turnip
+#   sh tools/build-turnip-glibc.sh fetch out-turnip/mesa.tar.xz          (runner host / 실행기 본체)
+#   docker run --rm -v "$PWD:/src" -w /src debian:trixie \
+#       sh tools/build-turnip-glibc.sh build out-turnip out-turnip/mesa.tar.xz   (container / 컨테이너)
+#
+# The source is fetched on the runner host, not in the container: the container's TLS connection
+# to archive.mesa3d.org failed in CI (curl exit 35). Mirrors are tried in order with retries,
+# and the same published sha256 is checked whichever mirror answered.
+# 소스는 컨테이너가 아니라 실행기 본체에서 받음: CI에서 컨테이너의 archive.mesa3d.org TLS 연결이
+# 실패함(curl 종료 코드 35). 미러를 순서대로 재시도하며, 어느 미러든 같은 공개 sha256으로 확인함
 #
 # Output / 결과물:
 #   turnip.tar.xz, turnip.tar.xz.sha256, turnip.version
@@ -24,11 +32,36 @@ set -eu
 # 고정 소스: Mesa 26.2.4(2026-10-01), Adreno 840 포함(26.0.0에서 추가)
 MESA_VER=26.2.4
 MESA_URL=https://archive.mesa3d.org/mesa-$MESA_VER.tar.xz
+MESA_MIRRORS="$MESA_URL https://mesa.freedesktop.org/archive/mesa-$MESA_VER.tar.xz"
 MESA_SHA256=bce5f7fbebb934373b86c999a064d52fb5065878dc57f287f95346648ec832e9
 PKG=turnip
 REV=1
 
-OUT="$(mkdir -p "$1" && cd "$1" && pwd)"
+# fetch <file>: download the release tarball (host side) and verify it
+# fetch <파일>: 릴리스 tarball을 받고(본체 쪽) 확인함
+if [ "${1:-}" = "fetch" ]; then
+    DEST="$2"
+    mkdir -p "$(dirname "$DEST")"
+    for u in $MESA_MIRRORS; do
+        echo "fetch: $u"
+        if curl -fL --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 -o "$DEST" "$u" \
+            && echo "$MESA_SHA256  $DEST" | sha256sum -c -; then
+            echo "$u" > "$DEST.url"
+            exit 0
+        fi
+        rm -f "$DEST"
+    done
+    echo "mesa source not reachable from any mirror" >&2
+    exit 1
+fi
+
+# build <outdir> <tarball>: build inside the debian:trixie container
+# build <결과 폴더> <tarball>: debian:trixie 컨테이너 안에서 빌드함
+[ "${1:-}" = "build" ] || { echo "usage: $0 fetch <file> | build <outdir> <tarball>" >&2; exit 2; }
+OUT="$(mkdir -p "$2" && cd "$2" && pwd)"
+TARBALL="$3"
+[ -f "$TARBALL" ] || { echo "tarball not found: $TARBALL" >&2; exit 1; }
+[ -f "$TARBALL.url" ] && MESA_URL="$(cat "$TARBALL.url")"
 WORK=/tmp/turnip-build
 rm -rf "$WORK" && mkdir -p "$WORK"
 
@@ -37,7 +70,7 @@ rm -rf "$WORK" && mkdir -p "$WORK"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
-    ca-certificates curl xz-utils build-essential meson ninja-build pkgconf bison flex glslang-tools \
+    ca-certificates xz-utils build-essential meson ninja-build pkgconf bison flex glslang-tools \
     python3 python3-mako python3-yaml python3-packaging \
     libexpat1-dev zlib1g-dev libzstd-dev \
     libx11-dev libx11-xcb-dev libxcb1-dev libxcb-dri3-dev libxcb-present-dev libxcb-shm0-dev \
@@ -45,11 +78,10 @@ apt-get install -y --no-install-recommends \
 meson --version
 glslangValidator --version | head -n 1
 
-# 2. Source (checked against the published sha256)
-#    소스 받기(공개된 sha256으로 확인)
-curl -fsSL -o "$WORK/mesa.tar.xz" "$MESA_URL"
-echo "$MESA_SHA256  $WORK/mesa.tar.xz" | sha256sum -c -
-tar -xJf "$WORK/mesa.tar.xz" -C "$WORK"
+# 2. Source fetched by the host step, checked again here
+#    본체 단계가 받은 소스를 여기서 다시 확인함
+echo "$MESA_SHA256  $TARBALL" | sha256sum -c -
+tar -xJf "$TARBALL" -C "$WORK"
 SRC="$WORK/mesa-$MESA_VER"
 
 # 3. Configure: Turnip only, KGSL kernel interface, X11 platform, everything else off
