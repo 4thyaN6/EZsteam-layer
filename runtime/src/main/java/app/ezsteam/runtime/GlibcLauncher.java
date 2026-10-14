@@ -55,6 +55,9 @@ public final class GlibcLauncher {
         public boolean sysvipc = true;
         /** PRoot log level (0 = quiet) / PRoot 로그 수준(0 = 조용히) */
         public int verbose = 0;
+        /** Extra guest environment (e.g. Vulkan driver selection from DriverInstaller.apply)
+         *  guest 추가 환경변수(예: DriverInstaller.apply가 넣는 Vulkan 드라이버 선택) */
+        public Map<String, String> env = new LinkedHashMap<>();
     }
 
     private GlibcLauncher() {
@@ -96,6 +99,7 @@ public final class GlibcLauncher {
         env.put("TMPDIR", "/tmp");
         env.put("XDG_RUNTIME_DIR", "/run/user/ezg");
         env.put("DISPLAY", c.display);
+        env.putAll(c.env);
         return env;
     }
 

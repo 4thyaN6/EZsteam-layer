@@ -17,15 +17,18 @@
 | `runtime/.../RootfsDownloader.java` | GitHub Release에서 `rootfs.tar.xz` 받기(sha256 확인, 버튼 누를 때만) |
 | `runtime/.../TarExtractor.java`, `RootfsInstaller.java` | rootfs를 `files/ezs`에 풂(링크·권한 유지, 홈 폴더 보존). 원본은 Release 파일 또는 개발용 asset |
 | `runtime/.../ChildProcessCounter.java` | 앱에서 시작된 프로세스 목록(/proc) |
+| `runtime/.../DriverInstaller.java` | glibc Vulkan 드라이버 묶음 받기·설치(`files/ezs-data/drivers/<이름>`)·적용(guest `/opt/ezdrv`, `VK_DRIVER_FILES`, 묶음 `env`) |
 | `runtime/src/main/jniLibs/arm64-v8a/` | `libproot.so`, `libproot-loader.so`(CI가 만듦, 저장소에는 없음) |
 | `app/` | 시험용 호스트 앱(targetSdk 28): rootfs 설치, 환경 시험, 자식 프로세스 수, Steam 준비, PRoot 상태 |
 | `.github/workflows/build.yml` | NDK로 PRoot, arm64 실행기에서 rootfs, 이어서 APK 빌드. 태그 빌드는 Release에 올림 |
 | `tools/build-proot-android.sh` | termux/proot 고정 커밋 + talloc 단일 파일본을 NDK(API 26)로 빌드 |
-| `tools/build-rootfs.sh` | Debian 13 trixie arm64 + python3로 `rootfs.tar.xz`·sha256·버전·패키지 목록 생성 |
+| `tools/build-rootfs.sh` | Debian 13 trixie arm64 + python3 + Vulkan 로더·vulkaninfo + Turnip 런타임 라이브러리로 `rootfs.tar.xz`·sha256·버전·패키지 목록 생성 |
+| `tools/build-turnip-glibc.sh` | Mesa 26.2.4 Turnip(KGSL + X11, glibc aarch64)을 trixie 컨테이너에서 빌드해 `turnip.tar.xz` 묶음 생성 |
 | `tools/measure-phantom.ps1` | 자식 프로세스 수·종료 기록 측정(Windows PowerShell + adb) |
 | `tools/fix-abs-symlinks.sh` | rootfs 절대 심볼릭 링크를 상대 링크로 변환 |
 | `tools/device-smoke.sh` | `adb shell`에서 앱 없이 PRoot + rootfs 확인 |
 | `rootfs-overlay/opt/ezsteam/smoke.sh` | 환경 시험(스레드 생성, seccomp 차단 호출 항목 포함) |
+| `rootfs-overlay/opt/ezsteam/gpucheck.sh` | GPU 확인: `/dev/kgsl-3d0` 열기, KGSL 장치 정보 ioctl, 장치 파일, `vulkaninfo --summary` |
 | `rootfs-overlay/opt/ezsteam/ezsteam-prepare.sh` | Steam 시작 전 준비: `~/.steam/sdkarm64/steamclient.so` 연결, EZ Proton 설치 |
 | `rootfs-overlay/opt/ezsteam/compat/ezproton/` | 경량 호환 도구: Valve ARM64 Proton을 컨테이너 없이 직접 호출 |
 | `native/ezglibc/` | 이전 방식의 `libezglibc.so`(LD_PRELOAD 경로 변환). 실행에는 쓰지 않음. 나중 개선 작업용으로 CI에서 빌드·자체 시험만 유지 |
@@ -46,7 +49,7 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - PRoot: CI 아티팩트 `proot`의 `out/jni/*.so`를 `runtime/src/main/jniLibs/arm64-v8a/`에 넣음(없으면 빌드 때 경고, 앱은 실행 불가). 직접 만들려면 리눅스/WSL에서 `ANDROID_NDK=<NDK 경로> sh tools/build-proot-android.sh`
 - 호스트 앱은 `packaging { jniLibs { useLegacyPackaging true } }` 필요(`libproot.so`를 nativeLibraryDir로 풀어 실행)
 - rootfs는 EZlator imagefs처럼 GitHub Release에서 받음: `gradle.properties`의 `ezsteam.rootfsBaseUrl`에 `https://github.com/<소유자>/<저장소>/releases/latest/download/` 기재(CI는 자동 기재). 첫 Release는 `v*` 태그를 올리면 CI가 만듦
-- rootfs는 APK에 넣지 않음(CI도 넣지 않음). Release 자산: `rootfs.tar.xz`, `rootfs.tar.xz.sha256`, `rootfs.version`, `rootfs.packages.txt`
+- rootfs는 APK에 넣지 않음(CI도 넣지 않음). Release 자산: `rootfs.tar.xz`, `rootfs.tar.xz.sha256`, `rootfs.version`, `rootfs.packages.txt`, 드라이버 `turnip.tar.xz`, `turnip.tar.xz.sha256`, `turnip.version`
 - Release는 사전 출시(prerelease)로 두지 않음: `releases/latest` 주소가 사전 출시를 찾지 않음
 - 개발용으로 `app/src/main/assets/rootfs.tar.xz`(+ `rootfs.version`)를 넣으면 받기 대신 그것을 씀
 - `.gitattributes`로 스크립트 LF 유지(Windows에서 받아도 rootfs 안 스크립트가 깨지지 않게)
@@ -64,6 +67,7 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 
 ## 시험
 - 앱: GitHub Actions `build` → `apk` 아티팩트 설치 → [PRoot 상태] → [rootfs 설치] → [환경 시험] → [자식 프로세스] → [Steam 준비]
+- GPU: [드라이버 설치](Release의 `turnip.tar.xz`) → [GPU 확인]. KGSL 단독 Turnip은 X11 출력에 `MESA_VK_WSI_DEBUG=sw`가 필요해 묶음 `env`로 넣음
 - [환경 시험]의 `pthread`, `sys-*` 항목이 FAIL `SIGSYS (seccomp)`이면 PRoot가 해당 호출을 처리하지 못한 것 → rootfs glibc 패치(termux-pacman 방식) 검토
 - (선택) 앱 없이: `tools/device-smoke.sh` 머리 주석 참고
 - 호스트: `make -C native/ezglibc test` (보관 중인 preload 라이브러리)
@@ -72,4 +76,5 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - 이 저장소: GPL-3.0 예정(LICENSE 파일은 저장소 생성 때 추가)
 - PRoot(termux/proot): GPL-2.0-or-later, 사용 커밋은 APK 안 `assets/proot-source.txt`와 `tools/build-proot-android.sh`에 기록
 - talloc: LGPL-3.0-or-later(Winlator-Cmod의 단일 파일본, 출처·해시는 `tools/build-proot-android.sh`)
+- Mesa(Turnip): MIT, 사용 소스·해시는 묶음 안 `source.txt`와 `tools/build-turnip-glibc.sh`
 - rootfs의 Debian 패키지 목록: Release의 `rootfs.packages.txt`, rootfs 안 `/opt/ezsteam/packages.txt`

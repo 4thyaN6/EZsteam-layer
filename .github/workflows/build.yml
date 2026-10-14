@@ -38,6 +38,22 @@ jobs:
             runtime/src/main/assets/proot-source.txt
           retention-days: 14
 
+  turnip:
+    # Mesa Turnip for glibc aarch64 (KGSL + X11), built in the same Debian release as the rootfs
+    # rootfs와 같은 Debian 릴리스에서 glibc aarch64용 Mesa Turnip(KGSL + X11) 빌드
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: turnip
+        run: docker run --rm -v "$PWD:/src" -w /src debian:trixie sh tools/build-turnip-glibc.sh out-turnip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turnip
+          path: out-turnip/
+          retention-days: 14
+
   rootfs:
     # Native arm64: no emulation for gcc, tests or docker
     # arm64 기본 실행기: gcc·시험·docker 모두 에뮬레이션 없음
@@ -67,7 +83,7 @@ jobs:
           retention-days: 7
 
   apk:
-    needs: [proot, rootfs]
+    needs: [proot, rootfs, turnip]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -116,6 +132,15 @@ jobs:
           name: rootfs
           path: out
 
+      # Driver package from the turnip job (downloaded by the app's [드라이버 설치])
+      # turnip 작업이 만든 드라이버 묶음(앱의 [드라이버 설치]가 받음)
+      - name: turnip files
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/download-artifact@v4
+        with:
+          name: turnip
+          path: out-turnip
+
       # Tagged builds go to GitHub Releases (not marked prerelease, so releases/latest finds them)
       # 태그 빌드는 GitHub Releases에 올림(사전 출시로 두지 않아야 releases/latest가 찾음)
       - name: release
@@ -128,3 +153,6 @@ jobs:
             out/rootfs.tar.xz.sha256
             out/rootfs.version
             out/rootfs.packages.txt
+            out-turnip/turnip.tar.xz
+            out-turnip/turnip.tar.xz.sha256
+            out-turnip/turnip.version

@@ -24,7 +24,13 @@ set -eu
 OUT="$1"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE="${EZS_BASE_IMAGE:-debian:trixie}"
-PKGS="python3 binutils ca-certificates"
+# python3: Valve proton script. libvulkan1 + vulkan-tools: Vulkan loader and vulkaninfo.
+# The rest are the runtime libraries of the Turnip package (tools/build-turnip-glibc.sh, needed.txt).
+# python3: Valve proton 스크립트. libvulkan1 + vulkan-tools: Vulkan 로더와 vulkaninfo.
+# 나머지는 Turnip 묶음의 런타임 라이브러리(tools/build-turnip-glibc.sh, needed.txt)
+PKGS="python3 binutils ca-certificates libvulkan1 vulkan-tools libstdc++6 \
+      libx11-xcb1 libxcb1 libxcb-dri3-0 libxcb-present0 libxcb-shm0 libxcb-xfixes0 libxcb-randr0 \
+      libxcb-sync1 libxshmfence1 libexpat1 libzstd1 zlib1g"
 WORK="$(mktemp -d)"
 NAME="ezs-rootfs-$$"
 

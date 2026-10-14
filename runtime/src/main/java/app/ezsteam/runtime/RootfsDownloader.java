@@ -36,7 +36,12 @@ public final class RootfsDownloader {
 
     /** Read the version string published next to the archive / 압축 파일 옆에 올린 버전 문자열을 읽음 */
     public static String remoteVersion(String baseUrl) throws IOException {
-        return new String(fetchSmall(join(baseUrl, VERSION)), StandardCharsets.UTF_8).trim();
+        return remoteText(baseUrl, VERSION);
+    }
+
+    /** Read a small text asset of the Release (e.g. "turnip.version") / Release의 작은 텍스트 자산을 읽음 */
+    public static String remoteText(String baseUrl, String name) throws IOException {
+        return new String(fetchSmall(join(baseUrl, name)), StandardCharsets.UTF_8).trim();
     }
 
     /**
@@ -45,7 +50,16 @@ public final class RootfsDownloader {
      * 압축 파일을 dest에 받고 올라온 체크섬과 SHA-256을 비교함. 실패하면 받던 파일을 지움
      */
     public static void download(String baseUrl, File dest, Progress progress) throws IOException {
-        String expected = new String(fetchSmall(join(baseUrl, CHECKSUM)), StandardCharsets.US_ASCII)
+        download(baseUrl, ARCHIVE, CHECKSUM, dest, progress);
+    }
+
+    /**
+     * Same as above for any Release asset pair (archive + "<archive>.sha256"), e.g. driver packages.
+     * 임의의 Release 자산 쌍(압축 파일 + "<압축 파일>.sha256")에 대해 위와 같이 동작함(예: 드라이버 묶음)
+     */
+    public static void download(String baseUrl, String archive, String checksum, File dest,
+                                Progress progress) throws IOException {
+        String expected = new String(fetchSmall(join(baseUrl, checksum)), StandardCharsets.US_ASCII)
                 .trim().split("\\s+")[0].toLowerCase(java.util.Locale.ROOT);
         if (expected.length() != 64) throw new IOException("bad checksum file");
 
@@ -56,7 +70,7 @@ public final class RootfsDownloader {
             throw new IOException(e);
         }
 
-        HttpURLConnection c = open(join(baseUrl, ARCHIVE));
+        HttpURLConnection c = open(join(baseUrl, archive));
         long total = c.getContentLengthLong();
         boolean ok = false;
         try (InputStream in = c.getInputStream(); OutputStream out = new FileOutputStream(dest)) {

@@ -10,6 +10,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import app.ezsteam.runtime.ChildProcessCounter;
+import app.ezsteam.runtime.DriverInstaller;
 import app.ezsteam.runtime.GlibcLauncher;
 import app.ezsteam.runtime.RootfsDownloader;
 import app.ezsteam.runtime.RootfsInstaller;
@@ -52,6 +53,13 @@ public class MainActivity extends Activity {
         addButton(row, "자식 프로세스", v -> runTask("procs", this::doProcs));
         addButton(row, "Steam 준비", v -> runTask("prepare", this::doPrepare));
         addButton(row, "PRoot 상태", v -> runTask("proot", this::doProotInfo));
+
+        // Second row: GPU checks / 두 번째 줄: GPU 확인
+        LinearLayout row2 = new LinearLayout(this);
+        row2.setOrientation(LinearLayout.HORIZONTAL);
+        root.addView(row2);
+        addButton(row2, "드라이버 설치", v -> runTask("driver", this::doDriverInstall));
+        addButton(row2, "GPU 확인", v -> runTask("gpu", this::doGpuCheck));
 
         scroll = new ScrollView(this);
         logView = new TextView(this);
@@ -196,6 +204,51 @@ public class MainActivity extends Activity {
                 Collections.emptyList(), null, null);
         pipe(p);
         log("exit=" + p.waitFor());
+    }
+
+    /**
+     * Run /opt/ezsteam/gpucheck.sh (KGSL device open + ioctl, Vulkan if present) and, while it
+     * runs, list the app's child processes (PRoot tracer + guest programs).
+     * /opt/ezsteam/gpucheck.sh 실행(KGSL 장치 열기·ioctl, 있으면 Vulkan). 실행 중에
+     * 앱 자식 프로세스 목록(PRoot 추적 프로세스 + guest 프로그램)도 기록함
+     */
+    private void doGpuCheck() throws Exception {
+        if (RootfsInstaller.installedVersion(this).isEmpty()) {
+            log("먼저 rootfs 설치");
+            return;
+        }
+        GlibcLauncher.Config c = config();
+        if (!new File(c.rootfs, "opt/ezsteam/gpucheck.sh").isFile()) {
+            log("gpucheck.sh 없음: 새 rootfs로 [rootfs 설치]를 다시 하십시오");
+            return;
+        }
+        // Use the Turnip package when installed (vulkaninfo then sees it) / Turnip 묶음이 있으면 사용
+        log(DriverInstaller.apply(this, c, TURNIP)
+                ? "드라이버: " + TURNIP + " " + DriverInstaller.installedVersion(this, TURNIP)
+                : "드라이버: 없음 (KGSL 장치 확인만 함)");
+        Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/gpucheck.sh", null, null, null);
+        // Snapshot while the guest is still running / guest가 실행 중일 때 목록을 찍음
+        Thread.sleep(300);
+        doProcs();
+        pipe(p);
+        log("exit=" + p.waitFor());
+    }
+
+    /** Driver package name in the Release / Release의 드라이버 묶음 이름 */
+    private static final String TURNIP = "turnip";
+
+    /** Download and install the Turnip package from the Release (button only)
+     *  Release에서 Turnip 묶음을 받아 설치함(버튼을 누를 때만) */
+    private void doDriverInstall() throws Exception {
+        String base = BuildConfig.ROOTFS_BASE_URL;
+        if (base.isEmpty()) {
+            log("Release 주소 없음: gradle.properties의 ezsteam.rootfsBaseUrl을 설정하십시오");
+            return;
+        }
+        String before = DriverInstaller.installedVersion(this, TURNIP);
+        String v = DriverInstaller.installFromRelease(this, base, TURNIP, (done, total) ->
+                log("  받음 " + (done >> 20) + (total > 0 ? " / " + (total >> 20) : "") + " MB"));
+        log(v.equals(before) ? "이미 같은 버전: " + v : "설치 완료: " + TURNIP + " " + v);
     }
 
     private void doProcs() {
