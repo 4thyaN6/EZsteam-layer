@@ -65,6 +65,17 @@ public class MainActivity extends Activity {
         addButton(row2, "시험 도구 설치", v -> runTask("tools", this::doToolsInstall));
         addButton(row2, "그리기 시험", v -> runTask("draw", this::doDrawTest));
 
+        // Third row: live display test per X screen size (16:10 like the device, then the device's own size)
+        // 세 번째 줄: X 화면 크기별 실시간 화면 시험(기기와 같은 16:10, 마지막은 기기 자체 해상도)
+        LinearLayout row3 = new LinearLayout(this);
+        row3.setOrientation(LinearLayout.HORIZONTAL);
+        root.addView(row3);
+        addButton(row3, "화면 1280x800", v -> openDisplay(1280, 800));
+        addButton(row3, "화면 1920x1200", v -> openDisplay(1920, 1200));
+        addButton(row3, "화면 2560x1600", v -> openDisplay(2560, 1600));
+        int[] nat = nativeSize();
+        addButton(row3, "화면 " + nat[0] + "x" + nat[1], v -> openDisplay(nat[0], nat[1]));
+
         // Screenshot area for the drawing test / 그리기 시험 화면 캡처 영역
         shotView = new android.widget.ImageView(this);
         shotView.setAdjustViewBounds(true);
@@ -102,6 +113,32 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             return "?";
         }
+    }
+
+    /** Device screen size in landscape (long side first) / 가로 방향 기준 기기 화면 크기(긴 변 먼저) */
+    @SuppressWarnings("deprecation")
+    private int[] nativeSize() {
+        android.util.DisplayMetrics m = new android.util.DisplayMetrics();
+        getWindowManager().getDefaultDisplay().getRealMetrics(m);
+        return new int[]{Math.max(m.widthPixels, m.heightPixels), Math.min(m.widthPixels, m.heightPixels)};
+    }
+
+    /**
+     * Open the live display test with the given X screen size (not while another task runs).
+     * 주어진 X 화면 크기로 실시간 화면 시험을 엶(다른 작업 중에는 열지 않음)
+     */
+    private void openDisplay(int w, int h) {
+        if (busy) {
+            log("다른 작업 진행 중");
+            return;
+        }
+        if (RootfsInstaller.installedVersion(this).isEmpty()) {
+            log("먼저 rootfs 설치");
+            return;
+        }
+        log("== display " + w + "x" + h);
+        startActivity(new android.content.Intent(this, DisplayActivity.class)
+                .putExtra(DisplayActivity.EXTRA_W, w).putExtra(DisplayActivity.EXTRA_H, h));
     }
 
     private void addButton(LinearLayout row, String text, View.OnClickListener l) {

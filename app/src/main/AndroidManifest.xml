@@ -23,5 +23,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Live display test (Xvfb screen + XTEST input), landscape full screen -->
+        <!-- 실시간 화면 시험(Xvfb 화면 + XTEST 입력), 가로 전체 화면 -->
+        <activity
+            android:name=".DisplayActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation|smallestScreenSize"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+            android:windowSoftInputMode="adjustNothing|stateHidden" />
     </application>
 </manifest>
