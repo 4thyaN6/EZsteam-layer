@@ -206,6 +206,9 @@ public class DisplayActivity extends Activity {
             // test 모드: 가짜 root. steam 모드: 가짜 사용자 steam 1000:1000(Steam은 root 거부)
             if ("steam".equals(mode)) {
                 c.changeId = "1000:1000";
+                // PRoot prints where a crashing program stopped (patched PRoot, tools/patches)
+                // 죽은 프로그램의 멈춘 위치를 PRoot가 출력함(패치된 PRoot, tools/patches)
+                c.env.put("PROOT_CRASH_LOG", "1");
             } else {
                 c.rootId = true;
             }

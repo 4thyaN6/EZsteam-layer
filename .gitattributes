@@ -8,6 +8,10 @@ Makefile        text eol=lf
 *.vdf           text eol=lf
 rootfs-overlay/opt/ezsteam/compat/ezproton/ezproton text eol=lf
 *.yml           text eol=lf
+# Python helpers run in the rootfs; PRoot patches must match the sources byte for byte
+# rootfs에서 실행하는 Python 보조 파일, 소스와 바이트 단위로 맞아야 하는 PRoot 패치
+*.py            text eol=lf
+*.patch         text eol=lf
 gradlew         text eol=lf
 
 # Windows script keeps CRLF / Windows 스크립트는 CRLF 유지

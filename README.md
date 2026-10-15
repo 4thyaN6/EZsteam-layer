@@ -24,7 +24,8 @@
 | `runtime/src/main/jniLibs/arm64-v8a/` | `libproot.so`, `libproot-loader.so`(CI가 만듦, 저장소에는 없음) |
 | `app/` | 시험용 호스트 앱(targetSdk 28): rootfs 설치, 환경 시험, 자식 프로세스 수, Steam 준비, PRoot 상태, 실시간 화면(`DisplayActivity`) |
 | `.github/workflows/build.yml` | NDK로 PRoot, arm64 실행기에서 rootfs, 이어서 APK 빌드. 태그 빌드는 Release에 올림 |
-| `tools/build-proot-android.sh` | termux/proot 고정 커밋 + talloc 단일 파일본을 NDK(API 26)로 빌드 |
+| `tools/build-proot-android.sh` | termux/proot 고정 커밋 + `tools/patches/proot-*.patch` + talloc 단일 파일본을 NDK(API 26)로 빌드 |
+| `tools/patches/` | PRoot 패치: robust-list·SysV 세마포어 에뮬레이션(steamclienttermux, MIT, Valve ARM64 `steamclient.so`가 `get_robust_list`를 검사), `PROOT_CRASH_LOG` 크래시 위치 출력. 출처·라이선스는 `tools/patches/README.md` |
 | `tools/build-rootfs.sh` | Debian 13 trixie arm64 + python3 + Vulkan 로더·vulkaninfo + Turnip 런타임 라이브러리로 `rootfs.tar.xz`·sha256·버전·패키지 목록 생성 |
 | `tools/build-turnip-glibc.sh` | Mesa 26.2.4 Turnip(KGSL + X11, glibc aarch64)을 trixie 컨테이너에서 빌드해 `turnip.tar.xz` 묶음 생성 |
 | `tools/measure-phantom.ps1` | 자식 프로세스 수·종료 기록 측정(Windows PowerShell + adb) |
@@ -39,6 +40,7 @@
 | `rootfs-overlay/opt/ezsteam/keyview.py` | 키 확인 창(libX11 ctypes): 키보드 포커스를 갖고 받은 X 키코드·키 이름을 창과 앱 로그(`KEY`)에 표시 |
 | `rootfs-overlay/opt/ezsteam/steam-install.sh` | [Steam 설치]: 사용자 steam(uid 1000), 클라이언트·CEF 라이브러리(apt), Valve 업데이트 서버(`client-update.steamstatic.com/steam_client_linuxarm64`)에서 기기가 직접 부트스트랩 받기(매니페스트 sha2 대조), `~/.local/share/Steam`에 풀기 |
 | `rootfs-overlay/opt/ezsteam/steam-deps.sh` | 설치된 클라이언트 ELF 파일에 ldd → 없는 라이브러리 목록, `install` 모드에서 이름 규칙(libfoo-1.2.so.3 → libfoo-1.2-3/…t64)으로 Debian 패키지를 찾아 설치 |
+| `rootfs-overlay/opt/ezsteam/bin/lsof` | Steam의 `lsof -i TCP@127.0.0.1:포트` 질의에 실제 lsof가 답하지 못하면(안드로이드가 소켓 주인을 숨김) steamwebhelper 네트워크 프로세스로 답함 |
 | `rootfs-overlay/opt/ezsteam/steam-run.sh` | `steamrtarm64/steam -no-cef-sandbox -cef-disable-gpu -chromeosnopreallocate -noverifyfiles` 실행, 종료 코드 42(자체 갱신)면 재시작, 전체 로그 `~/ezs-logs/steam.log` |
 | `rootfs-overlay/opt/ezsteam/ezsteam-prepare.sh` | Steam 시작 전 준비: `~/.steam/sdkarm64/steamclient.so` 연결, EZ Proton 설치 |
 | `rootfs-overlay/opt/ezsteam/compat/ezproton/` | 경량 호환 도구: Valve ARM64 Proton을 컨테이너 없이 직접 호출 |
@@ -95,7 +97,8 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 
 ## 라이선스
 - 이 저장소: GPL-3.0 예정(LICENSE 파일은 저장소 생성 때 추가)
-- PRoot(termux/proot): GPL-2.0-or-later, 사용 커밋은 APK 안 `assets/proot-source.txt`와 `tools/build-proot-android.sh`에 기록
+- PRoot(termux/proot): GPL-2.0-or-later, 사용 커밋·패치는 APK 안 `assets/proot-source.txt`와 `tools/build-proot-android.sh`에 기록
+- PRoot 패치 일부: steamclienttermux(MIT), 원문 `tools/patches/LICENSE.steamclienttermux`
 - talloc: LGPL-3.0-or-later(Winlator-Cmod의 단일 파일본, 출처·해시는 `tools/build-proot-android.sh`)
 - Mesa(Turnip): MIT, 사용 소스·해시는 묶음 안 `source.txt`와 `tools/build-turnip-glibc.sh`
 - rootfs의 Debian 패키지 목록: Release의 `rootfs.packages.txt`, rootfs 안 `/opt/ezsteam/packages.txt`

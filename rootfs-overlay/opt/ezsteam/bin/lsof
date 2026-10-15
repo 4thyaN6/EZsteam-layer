@@ -1,0 +1,32 @@
+#!/bin/sh
+# lsof wrapper for the Steam client. The client asks "lsof -i TCP@127.0.0.1:<port>" to check that
+# the peer of its local WebSocket is its own steamwebhelper. Android may hide the owner of TCP
+# sockets (/proc/net) from apps, so when the real lsof finds nothing for that query, answer with
+# the steamwebhelper network process (same idea as steamclienttermux's shim). Everything else
+# goes to the real lsof unchanged.
+# Steam 클라이언트용 lsof 감쌈. 클라이언트는 "lsof -i TCP@127.0.0.1:<포트>"로 로컬 WebSocket
+# 상대가 자기 steamwebhelper인지 확인함. 안드로이드는 앱에게 TCP 소켓 주인(/proc/net)을 숨길 수
+# 있으므로, 이 질의에서 실제 lsof가 아무것도 못 찾으면 steamwebhelper 네트워크 프로세스로 답함
+# (steamclienttermux 심과 같은 방식). 나머지는 실제 lsof로 그대로 넘김
+REAL=/usr/bin/lsof
+case " $* " in
+    *" -i TCP@127.0.0.1:"*) ;;
+    *) exec "$REAL" "$@" ;;
+esac
+
+# Real lsof first / 실제 lsof 먼저
+out=$("$REAL" "$@" 2>/dev/null) && [ -n "$out" ] && { printf '%s\n' "$out"; exit 0; }
+
+port=0
+for a do
+    case "$a" in TCP@127.0.0.1:*) port=${a##*:} ;; esac
+done
+# Field output (-F style): p=pid, R=parent pid, u=uid, n=connection
+# 필드 출력(-F 형식): p=pid, R=부모 pid, u=uid, n=연결
+ps -eo pid=,ppid=,args= | awk -v uid="$(id -u)" -v port="$port" '
+    /steamwebhelper/ && /NetworkService/ && !found {
+        print "p" $1; print "R" $2; print "u" uid
+        print "n127.0.0.1:" port "->127.0.0.1:27060"
+        found = 1
+    }
+    END { exit found ? 0 : 1 }'

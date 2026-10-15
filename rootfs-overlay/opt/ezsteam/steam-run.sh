@@ -20,6 +20,30 @@ mkdir -p "$HOME/ezs-logs"
 echo "INFO id : $(id)"
 sh /opt/ezsteam/ezsteam-prepare.sh
 
+# lsof wrapper first in PATH (see /opt/ezsteam/bin/lsof) / lsof 감쌈을 PATH 맨 앞에 둠(/opt/ezsteam/bin/lsof 참고)
+export PATH=/opt/ezsteam/bin:$PATH
+# Folder the client writes crash dumps to / 클라이언트가 크래시 덤프를 쓰는 폴더
+mkdir -p /tmp/dumps
+# Private session D-Bus started before Steam: when the client's updater starts D-Bus itself, the
+# bus inherits the updater's pipe and the launch waits minutes (reported by steamclienttermux)
+# Steam보다 먼저 띄우는 전용 세션 D-Bus: 클라이언트 갱신기가 D-Bus를 직접 띄우면 버스가
+# 갱신기 파이프를 물려받아 시작이 몇 분 늦어짐(steamclienttermux 보고)
+if command -v dbus-daemon >/dev/null 2>&1; then
+    # Address written to a file, not a pipe: the forked daemon may keep the descriptor open
+    # 주소는 파이프가 아닌 파일로 받음: fork된 데몬이 디스크립터를 계속 열어 둘 수 있음
+    rm -f /tmp/ezs-dbus.addr
+    dbus-daemon --session --fork --print-address=3 3>/tmp/ezs-dbus.addr >/dev/null 2>&1
+    addr=$(head -n 1 /tmp/ezs-dbus.addr 2>/dev/null)
+    if [ -n "$addr" ]; then
+        export DBUS_SESSION_BUS_ADDRESS="$addr"
+        echo "OK   dbus : $addr"
+    else
+        echo "WARN dbus : 세션 버스 시작 실패"
+    fi
+else
+    echo "WARN dbus : dbus-daemon 없음 ([Steam 설치] 다시)"
+fi
+
 # Key lines of the log, live / 로그의 주요 줄을 실시간으로 보냄
 tail -n 0 -F "$LOG" 2>/dev/null | grep --line-buffered -iE \
     'error|fail|fatal|denied|missing|not found|update|download|restart|webhelper|login|exit' \

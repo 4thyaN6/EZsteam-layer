@@ -49,7 +49,7 @@ libgtk2.0-0t64 libibus-1.0-5 libvpx9 libnss3 libnspr4 libsdl2-2.0-0 libopenal1 l
 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libdrm2 libgbm1 libxcomposite1 libxdamage1
 libxrandr2 libxfixes3 libxkbcommon0 libxss1 libxtst6 libxi6 libxcursor1 libxinerama1
 libasound2t64 libpulse0 libpango-1.0-0 libcairo2 libdbus-1-3 libudev1 libgl1 libegl1
-libfontconfig1 fonts-dejavu-core libsdl3-0 libpipewire-0.3-0t64 locales"
+libfontconfig1 fonts-dejavu-core libsdl3-0 libpipewire-0.3-0t64 locales dbus"
 echo "INFO resolv : $(grep -c nameserver /etc/resolv.conf 2>/dev/null) nameserver"
 before=$(du -sk /usr 2>/dev/null | cut -f1)
 $APT update || { echo "FAIL apt-update : 네트워크·DNS 확인"; exit 1; }

@@ -38,6 +38,17 @@ trap 'rm -rf "$WORK"' EXIT
 #    소스 받기(talloc은 고정 해시로 확인)
 git clone -q "$PROOT_REPO" "$WORK/proot"
 git -C "$WORK/proot" checkout -q "$PROOT_REV"
+# Project patches in name order (see tools/patches/README.md): robust-list / SysV semaphore
+# emulation needed by Valve's ARM64 Steam client, crash report for diagnosis
+# 프로젝트 패치를 이름 순서로 적용(tools/patches/README.md 참고): Valve ARM64 Steam 클라이언트가
+# 필요로 하는 robust-list·SysV 세마포어 에뮬레이션, 진단용 크래시 보고
+PATCHES=""
+for p in "$HERE"/tools/patches/proot-*.patch; do
+    [ -f "$p" ] || continue
+    git -C "$WORK/proot" apply "$p"
+    PATCHES="$PATCHES $(basename "$p")=$(sha256sum "$p" | cut -c1-16)"
+    echo "applied $(basename "$p")"
+done
 mkdir -p "$WORK/talloc"
 curl -fsSL -o "$WORK/talloc/talloc.c" "$TALLOC_BASE/talloc.c"
 curl -fsSL -o "$WORK/talloc/talloc.h" "$TALLOC_BASE/talloc.h"
@@ -83,6 +94,7 @@ chmod 755 "$OUT/libproot.so" "$OUT/libproot-loader.so"
 mkdir -p "$(dirname "$SRCINFO")"
 cat > "$SRCINFO" <<EOF
 proot: $PROOT_REPO commit $PROOT_REV (GPL-2.0-or-later)
+proot patches (tools/patches in this project's source):${PATCHES:- none}
 talloc: $TALLOC_BASE (talloc 2.1.14 single-file copy, LGPL-3.0-or-later)
 ndk: $(basename "$NDK"), API $API
 EOF

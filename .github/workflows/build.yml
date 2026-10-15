@@ -30,7 +30,7 @@ jobs:
       - id: cache
         uses: actions/cache@v4
         with:
-          key: proot-${{ hashFiles('tools/build-proot-android.sh') }}
+          key: proot-${{ hashFiles('tools/build-proot-android.sh', 'tools/patches/**') }}
           path: |
             out/jni/
             runtime/src/main/assets/proot-source.txt

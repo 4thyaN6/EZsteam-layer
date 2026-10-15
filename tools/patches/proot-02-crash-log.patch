@@ -1,0 +1,99 @@
+diff --git a/src/tracee/event.c b/src/tracee/event.c
+index 6141e19..2450cd7 100644
+--- a/src/tracee/event.c
++++ b/src/tracee/event.c
+@@ -35,6 +35,8 @@
+ #include <stdlib.h>     /* atexit(3), getenv(3), */
+ #include <talloc.h>     /* talloc_*, */
+ #include <inttypes.h>   /* PRI*, */
++#include <stdio.h>      /* fprintf(3), fopen(3), */
++#include <limits.h>     /* PATH_MAX, */
+ 
+ #include "tracee/event.h"
+ #include "tracee/seccomp.h"
+@@ -55,6 +57,75 @@
+ static bool seccomp_after_ptrace_enter = false;
+ static bool seccomp_ptrace_event_supported = false;
+ 
++/**
++ * Print where a guest program crashed (signal, fault address, registers, the mapped file that
++ * holds the instruction pointer, command line) to stderr, only when PROOT_CRASH_LOG is set.
++ * Adapted from steamclienttermux (MIT, Hunter Davis and contributors).
++ * 게스트 프로그램이 어디서 죽었는지(시그널, 오류 주소, 레지스터, 명령 위치가 속한 매핑 파일,
++ * 명령줄)를 stderr로 출력함. PROOT_CRASH_LOG가 설정됐을 때만 동작함.
++ * steamclienttermux(MIT, Hunter Davis and contributors)에서 가져와 맞춤
++ */
++static void report_guest_crash(Tracee *tracee, int signal)
++{
++	if (getenv("PROOT_CRASH_LOG") == NULL)
++		return;
++
++	/* Signal stops do not necessarily have a fresh CURRENT register bank.
++	 * 시그널 정지에서는 CURRENT 레지스터가 최신이 아닐 수 있음 */
++	(void) fetch_regs(tracee);
++	siginfo_t info = {};
++	(void) ptrace(PTRACE_GETSIGINFO, tracee->pid, NULL, &info);
++	word_t ip = peek_reg(tracee, CURRENT, INSTR_POINTER);
++	word_t sp = peek_reg(tracee, CURRENT, STACK_POINTER);
++	fprintf(stderr,
++		"PROOT_CRASH pid=%d vpid=%" PRIu64 " signal=%d code=%d "
++		"fault=%p ip=%#lx sp=%#lx"
++#ifdef ARCH_ARM64
++		" lr=%#lx"
++#endif
++		" exe=%s\n",
++		tracee->pid, tracee->vpid, signal, info.si_code, info.si_addr,
++		(unsigned long) ip, (unsigned long) sp,
++#ifdef ARCH_ARM64
++		(unsigned long) tracee->_regs[CURRENT].regs[30],
++#endif
++		tracee->exe != NULL ? tracee->exe : "(unknown)");
++
++	char path[64];
++	snprintf(path, sizeof(path), "/proc/%d/cmdline", tracee->pid);
++	FILE *f = fopen(path, "r");
++	if (f != NULL) {
++		char command[4096];
++		size_t count = fread(command, 1, sizeof(command) - 1, f);
++		fclose(f);
++		for (size_t i = 0; i < count; i++)
++			if (command[i] == '\0') command[i] = ' ';
++		command[count] = '\0';
++		fprintf(stderr, "PROOT_CRASH cmdline=%s\n", command);
++	}
++
++	/* Mapping that holds the instruction pointer and the link register
++	 * 명령 위치(ip)와 복귀 주소(lr)가 속한 매핑 */
++	snprintf(path, sizeof(path), "/proc/%d/maps", tracee->pid);
++	f = fopen(path, "r");
++	if (f == NULL)
++		return;
++	char line[PATH_MAX + 160];
++	while (fgets(line, sizeof(line), f) != NULL) {
++		unsigned long start, end;
++		if (sscanf(line, "%lx-%lx", &start, &end) != 2)
++			continue;
++		if ((unsigned long) ip >= start && (unsigned long) ip < end)
++			fprintf(stderr, "PROOT_CRASH ip-map=%s", line);
++#ifdef ARCH_ARM64
++		unsigned long lr = (unsigned long) tracee->_regs[CURRENT].regs[30];
++		if (lr >= start && lr < end)
++			fprintf(stderr, "PROOT_CRASH lr-map=%s", line);
++#endif
++	}
++	fclose(f);
++}
++
+ /* Whether the kernel lets PTRACE_GETEVENTMSG read the message of the
+  * last ptrace event, see handle_tracee_event().  */
+ static enum {
+@@ -503,6 +574,9 @@ int handle_tracee_event(Tracee *tracee, int tracee_status)
+ 		/* Don't use WSTOPSIG() to extract the signal
+ 		 * since it clears the PTRACE_EVENT_* bits. */
+ 		signal = (tracee_status & 0xfff00) >> 8;
++		if (signal == SIGSEGV || signal == SIGBUS || signal == SIGILL
++		    || signal == SIGABRT || signal == SIGFPE)
++			report_guest_crash(tracee, signal);
+ 
+ 		switch (signal) {
+ 			static bool deliver_sigtrap = false;
