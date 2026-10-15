@@ -95,6 +95,7 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - 프로세스 절감: [CEF 절감: 켬/끔](메인 네 번째 줄, 기본 켬) → steamwebhelper.sh에 Chromium 플래그(`--no-zygote --in-process-gpu --renderer-process-limit=1`, 오디오 서비스 내장) 삽입. 네트워크 서비스 내장은 UI WebSocket 실패(0x3008)로 제외, EZ Proton은 `tabtip.exe` 끔, Steam 모드에서 display.sh가 steam-run.sh로 exec. 화면 [프로세스]: 현재·최대 목록, [Proton]: Proton 로그 마지막 200줄
 - 게임 화면 전달: [게임 화면: …](메인 다섯 번째 줄) → `PutImage`(기본, `MESA_VK_WSI_DEBUG=sw,noshm` + DXVK 수직 동기 끔·60fps 제한) / `SHM 동기 끔` / `SHM mailbox` / `SHM fifo`. 근거: Mesa X11 sw 경로의 present id는 MIT-SHM + Present COMPLETE 이벤트로만 올라가고, DXVK는 FIFO에서만 present id를 제한 시간 없이 기다림. [DXVK HUD: 켬/끔] → `DXVK_HUD=fps,frametimes,gpuload`
 - 화면 위쪽 둘째 줄: 경과 시간, 게임 화면 방식, CPU 사용률(2초 주기, 100% = 코어 하나): 자식 전체·게임·Xvfb·PRoot. [프로세스] 창에도 CPU% 열
+- [로그 저장](화면 위쪽): 안드로이드 파일 선택 창으로 zip 하나 저장(권한 불필요, 자동 전송 없음). 앱 로그, 프로세스·게임 스레드 목록, `~/ezs-logs/*`(steam.log, Proton 로그), `/tmp/ezs-lsof.log`. 파일당 끝부분 32MB까지. 계정 이름이 들어 있을 수 있어 공유 전 확인. [Proton]: Proton 로그가 여러 개면 최신 순 목록에서 고름
 - 화면 위쪽 막대 `자식 N(최대 M)`: 앱 자식 프로세스 수(안드로이드 한도: 모든 앱 합계 32), 28개 이상이면 로그에 `PROC` 목록. `여유`: 기기 여유 메모리
 - [환경 시험]의 `pthread`, `sys-*` 항목이 FAIL `SIGSYS (seccomp)`이면 PRoot가 해당 호출을 처리하지 못한 것 → rootfs glibc 패치(termux-pacman 방식) 검토
 - (선택) 앱 없이: `tools/device-smoke.sh` 머리 주석 참고

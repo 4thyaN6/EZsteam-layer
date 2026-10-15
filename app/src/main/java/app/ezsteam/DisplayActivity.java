@@ -128,6 +128,7 @@ public class DisplayActivity extends Activity {
         addButton(bar, "프로세스", v -> showProcesses());
         addButton(bar, "Proton", v -> showProtonLog());
         addButton(bar, "로그", v -> logScroll.setVisibility(logScroll.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
+        addButton(bar, "로그 저장", v -> saveLogs());
         addButton(bar, "닫기", v -> finish());
         root.addView(bar, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END));
 
@@ -672,23 +673,135 @@ public class DisplayActivity extends Activity {
      * 현재 Proton 로그의 마지막 200줄을 거르지 않고 보여 주는 창
      */
     private void showProtonLog() {
-        File f = protonLogFile;
+        // Every Proton log (one per game, steam-<appid>.log), newest first: the log of a game that
+        // already exited stays reachable after another game ran
+        // 모든 Proton 로그(게임마다 하나, steam-<appid>.log), 최신 순: 이미 끝난 게임의 로그도
+        // 다른 게임을 실행한 뒤에 볼 수 있음
+        File dir = new File(RootfsInstaller.rootfsDir(this), "home/steam/ezs-logs");
+        File[] fs = dir.listFiles((d, n) -> n.startsWith("steam-") && n.endsWith(".log"));
+        if (fs == null || fs.length == 0) {
+            showTextWindow("Proton 로그", "Proton 로그 없음 (게임을 EZ Proton으로 실행하면 생김)");
+            return;
+        }
+        Arrays.sort(fs, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+        if (fs.length == 1) {
+            showProtonLogFile(fs[0]);
+            return;
+        }
+        java.text.SimpleDateFormat tf = new java.text.SimpleDateFormat("MM-dd HH:mm:ss", Locale.ROOT);
+        String[] items = new String[fs.length];
+        for (int i = 0; i < fs.length; i++) {
+            items[i] = String.format(Locale.ROOT, "%s  %s  %.1f MB", fs[i].getName(),
+                    tf.format(new java.util.Date(fs[i].lastModified())), fs[i].length() / 1048576f);
+        }
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Proton 로그 선택 (최신 순)")
+                .setItems(items, (dlg, which) -> showProtonLogFile(fs[which]))
+                .setPositiveButton("닫기", null)
+                .show();
+    }
+
+    /** Last 200 lines of one Proton log, unfiltered / Proton 로그 하나의 마지막 200줄, 거르지 않음 */
+    private void showProtonLogFile(File f) {
         String text;
-        if (f == null) {
-            text = "Proton 로그 없음 (게임을 EZ Proton으로 실행하면 생김)";
-        } else {
-            try {
-                java.util.List<String> ls = java.nio.file.Files.readAllLines(f.toPath(), StandardCharsets.UTF_8);
-                StringBuilder sb = new StringBuilder(f.getName() + " (" + ls.size() + "줄 중 마지막 200줄)\n");
-                for (String l : ls.subList(Math.max(0, ls.size() - 200), ls.size())) {
-                    sb.append(l.length() > 300 ? l.substring(0, 300) : l).append('\n');
-                }
-                text = sb.toString();
-            } catch (IOException | RuntimeException e) {
-                text = "읽기 실패: " + e;
+        try {
+            java.util.List<String> ls = java.nio.file.Files.readAllLines(f.toPath(), StandardCharsets.UTF_8);
+            StringBuilder sb = new StringBuilder(f.getName() + " (" + ls.size() + "줄 중 마지막 200줄)\n");
+            for (String l : ls.subList(Math.max(0, ls.size() - 200), ls.size())) {
+                sb.append(l.length() > 300 ? l.substring(0, 300) : l).append('\n');
             }
+            text = sb.toString();
+        } catch (IOException | RuntimeException e) {
+            text = "읽기 실패: " + e;
         }
         showTextWindow("Proton 로그", text);
+    }
+
+    /** Request code of the "save logs" file picker / "로그 저장" 파일 선택 창 요청 코드 */
+    private static final int REQ_SAVE_LOGS = 7301;
+    /** Largest part of one log file put into the zip (its end) / zip에 넣는 로그 파일 하나의 최대 크기(끝부분) */
+    private static final long LOG_SAVE_MAX = 32L << 20;
+
+    /**
+     * [로그 저장]: the user picks where to save one zip (Android file picker, no storage permission
+     * needed). Nothing is sent anywhere; the file stays where the user saves it. The logs can hold
+     * the Steam account name and paths, so the user checks them before sharing.
+     * [로그 저장]: 사용자가 zip 하나를 저장할 위치를 고름(안드로이드 파일 선택 창, 저장소 권한 불필요).
+     * 어디로도 보내지 않으며 사용자가 저장한 곳에만 남음. 로그에 Steam 계정 이름과 경로가 들어 있을 수
+     * 있으므로 공유 전에 사용자가 확인함
+     */
+    private void saveLogs() {
+        String name = "ezsteam-logs-" + new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT)
+                .format(new java.util.Date()) + ".zip";
+        android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT);
+        i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
+        i.setType("application/zip");
+        i.putExtra(android.content.Intent.EXTRA_TITLE, name);
+        try {
+            startActivityForResult(i, REQ_SAVE_LOGS);
+        } catch (RuntimeException e) {
+            log("로그 저장 창을 열 수 없음: " + e);
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, android.content.Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_SAVE_LOGS) return;
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            log("로그 저장 취소");
+            return;
+        }
+        android.net.Uri uri = data.getData();
+        // Snapshots taken on the UI thread; writing happens in the background
+        // UI 스레드에서 현재 내용을 떠 두고, 쓰기는 백그라운드에서 함
+        String appLog = String.join("\n", logLines) + "\n";
+        new Thread(() -> writeLogZip(uri, appLog, processText()), "ezs-log-save").start();
+    }
+
+    /**
+     * Zip: app log, process list with game threads, every file in ~/ezs-logs (steam.log, Proton logs)
+     * and /tmp/ezs-lsof.log. Files larger than LOG_SAVE_MAX keep only their end.
+     * zip 내용: 앱 로그, 게임 스레드를 포함한 프로세스 목록, ~/ezs-logs의 모든 파일(steam.log,
+     * Proton 로그), /tmp/ezs-lsof.log. LOG_SAVE_MAX보다 큰 파일은 끝부분만 넣음
+     */
+    private void writeLogZip(android.net.Uri uri, String appLog, String procs) {
+        File rootfs = RootfsInstaller.rootfsDir(this);
+        java.util.List<File> files = new java.util.ArrayList<>();
+        File[] logs = new File(rootfs, "home/steam/ezs-logs").listFiles(File::isFile);
+        if (logs != null) files.addAll(Arrays.asList(logs));
+        File lsof = new File(rootfs, "tmp/ezs-lsof.log");
+        if (lsof.isFile()) files.add(lsof);
+        int n = 0;
+        try (java.io.OutputStream os = getContentResolver().openOutputStream(uri);
+             java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(os)) {
+            zip.putNextEntry(new java.util.zip.ZipEntry("app-log.txt"));
+            zip.write(appLog.getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+            zip.putNextEntry(new java.util.zip.ZipEntry("processes.txt"));
+            zip.write(procs.getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+            byte[] buf = new byte[1 << 16];
+            for (File f : files) {
+                zip.putNextEntry(new java.util.zip.ZipEntry("logs/" + f.getName()));
+                try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(f, "r")) {
+                    long len = in.length();
+                    if (len > LOG_SAVE_MAX) {
+                        in.seek(len - LOG_SAVE_MAX);
+                        zip.write(("[앞부분 " + (len - LOG_SAVE_MAX) + "바이트 생략]\n").getBytes(StandardCharsets.UTF_8));
+                    }
+                    int r;
+                    while ((r = in.read(buf)) > 0) zip.write(buf, 0, r);
+                } catch (IOException e) {
+                    zip.write(("[읽기 실패: " + e + "]\n").getBytes(StandardCharsets.UTF_8));
+                }
+                zip.closeEntry();
+                n++;
+            }
+            log("로그 저장 완료: 로그 파일 " + n + "개 + 앱 로그 + 프로세스 목록 (계정 이름이 들어 있을 수 있으니 공유 전 확인)");
+        } catch (IOException | RuntimeException e) {
+            log("로그 저장 실패: " + e);
+        }
     }
 
     /** Scrollable, selectable text window / 스크롤·선택 가능한 글 창 */
@@ -729,6 +842,11 @@ public class DisplayActivity extends Activity {
      * 열: pid, 상태(R 실행, S 대기, D 디스크 대기, T 정지), 메모리, CPU 시간, 이름
      */
     private void showProcesses() {
+        showTextWindow("자식 프로세스", processText());
+    }
+
+    /** Text of the process window (also saved by [로그 저장]) / 프로세스 창 내용([로그 저장]에도 들어감) */
+    private String processText() {
         java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps =
                 app.ezsteam.runtime.ChildProcessCounter.descendants(android.os.Process.myPid());
         // CPU% = use over the last 2 s monitor interval (100 = one core) / CPU% = 마지막 2초 감시 주기 사용률(100 = 코어 하나)
@@ -746,7 +864,7 @@ public class DisplayActivity extends Activity {
                     .append(app.ezsteam.runtime.ChildProcessCounter.threads(game.pid));
         }
         sb.append("\n최대 ").append(procMax).append("개, ").append(procListAtMax);
-        showTextWindow("자식 프로세스", sb.toString());
+        return sb.toString();
     }
 
     @Override
