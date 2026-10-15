@@ -44,6 +44,16 @@ fi
 # 앱 로그 화면용 Proton 로그: ~/ezs-logs/steam-<appid>.log(Proton의 PROTON_LOG/PROTON_LOG_DIR).
 # 사용자가 이미 정했으면 그대로 둠
 export PROTON_LOG="${PROTON_LOG:-1}"
+# Wine debug channels for that log: errors and loaded DLLs only (Proton's default adds +seh, which
+# writes every exception; FEX raises many misalignment exceptions, so that log slows the game)
+# 그 로그의 Wine 디버그 채널: 오류와 불러온 DLL만(Proton 기본값은 +seh로 모든 예외를 기록하는데,
+# FEX는 정렬 예외를 많이 내므로 그 기록이 게임을 느리게 함)
+export WINEDEBUG="${WINEDEBUG:-+timestamp,+pid,+loaddll,err+all,fixme-all}"
+# Fewer resident Wine processes (Android allows 32 extra processes for all apps together):
+# tabtip.exe (touch keyboard helper) is not needed; Proton appends this to its own overrides
+# 상주 Wine 프로세스 줄이기(안드로이드는 모든 앱 합계 추가 프로세스 32개까지 허용):
+# tabtip.exe(터치 키보드 보조)는 필요 없음. Proton이 자기 설정 뒤에 이 값을 덧붙임
+export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}tabtip.exe=d"
 export PROTON_LOG_DIR="${PROTON_LOG_DIR:-$HOME/ezs-logs}"
 mkdir -p "$PROTON_LOG_DIR"
 

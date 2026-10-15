@@ -85,6 +85,13 @@ public class MainActivity extends Activity {
         addButton(row4, "Steam 실행 1280x800", v -> openSteam(1280, 800));
         addButton(row4, "Steam 실행 1920x1200", v -> openSteam(1920, 1200));
         addButton(row4, "속도 시험", v -> runTask("speed", this::doSpeedTest));
+        Button cef = addButton(row4, cefLabel(cefSlim(this)), null);
+        cef.setOnClickListener(v -> {
+            boolean on = !cefSlim(this);
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_CEF_SLIM, on).apply();
+            cef.setText(cefLabel(on));
+            log("CEF 절감 " + (on ? "켬: " + CEF_SLIM_FLAGS : "끔") + " (다음 Steam 실행부터)");
+        });
 
         // Screenshot area for the drawing test / 그리기 시험 화면 캡처 영역
         shotView = new android.widget.ImageView(this);
@@ -213,12 +220,39 @@ public class MainActivity extends Activity {
         log("exit=" + p.waitFor());
     }
 
-    private void addButton(LinearLayout row, String text, View.OnClickListener l) {
+    /** Settings file and keys / 설정 파일과 키 */
+    static final String PREFS = "ezsteam";
+    static final String KEY_CEF_SLIM = "cef_slim";
+    /**
+     * Chromium flags for the Steam web helper that merge helper processes into fewer ones
+     * (Android allows 32 extra processes for all apps together): no zygote (needs no sandbox, which
+     * the client already runs without), GPU and network service in the browser process, audio
+     * service in process, one renderer process. Steam's own flags come after these and win on
+     * conflicts. Effect on the process count is not measured yet.
+     * Steam 웹 도우미 보조 프로세스를 줄이는 Chromium 플래그(안드로이드는 모든 앱 합계 추가 프로세스
+     * 32개까지 허용): zygote 없음(샌드박스 없이 실행해야 하며 클라이언트는 이미 그렇게 실행 중),
+     * GPU·네트워크 서비스를 브라우저 프로세스 안에서, 오디오 서비스도 안에서, 렌더러 1개.
+     * Steam 자체 플래그가 뒤에 오므로 겹치면 Steam 값이 우선함. 프로세스 수 효과는 아직 측정 전
+     */
+    static final String CEF_SLIM_FLAGS = "--no-sandbox --no-zygote --in-process-gpu --renderer-process-limit=1"
+            + " --enable-features=NetworkServiceInProcess --disable-features=AudioServiceOutOfProcess";
+
+    /** CEF process saving on (default) or off / CEF 프로세스 절감 켬(기본) 또는 끔 */
+    static boolean cefSlim(android.content.Context ctx) {
+        return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_CEF_SLIM, true);
+    }
+
+    private static String cefLabel(boolean on) {
+        return "CEF 절감: " + (on ? "켬" : "끔");
+    }
+
+    private Button addButton(LinearLayout row, String text, View.OnClickListener l) {
         Button b = new Button(this);
         b.setText(text);
         b.setAllCaps(false);
         b.setOnClickListener(l);
         row.addView(b, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        return b;
     }
 
     /** Body of a background task / 백그라운드 작업 본체 */

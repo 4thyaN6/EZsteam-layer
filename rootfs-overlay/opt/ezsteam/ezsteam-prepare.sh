@@ -79,6 +79,35 @@ else
     echo "$LOG_TAG aarch64 steamclient.so not found yet"
 fi
 
+# Extra Chromium flags for the Steam web helper: its wrapper script (steamrtarm64/steamwebhelper.sh,
+# launch line `exec taskset ... $(pwd)/steamwebhelper "$@" ...`) gets ${EZS_CEF_FLAGS:-} inserted
+# once; the app sets EZS_CEF_FLAGS (empty = unchanged behaviour). Re-applied after Steam updates.
+# Steam 웹 도우미용 추가 Chromium 플래그: 감쌈 스크립트(steamrtarm64/steamwebhelper.sh, 실행 줄
+# `exec taskset ... $(pwd)/steamwebhelper "$@" ...`)에 ${EZS_CEF_FLAGS:-}를 한 번 끼워 넣음.
+# 앱이 EZS_CEF_FLAGS를 정함(비면 기존 동작 그대로). Steam 갱신 뒤에도 다시 적용됨
+WH="$STEAM_DIR/steamrtarm64/steamwebhelper.sh"
+if [ -f "$WH" ]; then
+    python3 - "$WH" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+if "${EZS_CEF_FLAGS" in s:
+    print("ezsteam-prepare: webhelper flags hook present")
+    sys.exit(0)
+old = '/steamwebhelper "$@"'
+n = s.count(old)
+if n != 1:
+    print(f"ezsteam-prepare: webhelper launch line not found ({n}), flags not applied")
+    for line in s.splitlines():
+        if "steamwebhelper" in line and "exec" in line:
+            print("ezsteam-prepare:   " + line.strip()[:160])
+    sys.exit(0)
+open(p, "w").write(s.replace(old, '/steamwebhelper ${EZS_CEF_FLAGS:-} "$@"'))
+print("ezsteam-prepare: webhelper flags hook added")
+PYEOF
+fi
+echo "$LOG_TAG cef flags: ${EZS_CEF_FLAGS:-(없음)}"
+
 # Compatibility tool (always refreshed so updates of this layer take effect)
 # 호환 도구(이 레이어 갱신이 반영되도록 매번 덮어씀)
 DEST="$STEAM_DIR/compatibilitytools.d/ezproton"

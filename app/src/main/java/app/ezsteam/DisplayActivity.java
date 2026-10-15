@@ -118,6 +118,7 @@ public class DisplayActivity extends Activity {
         scaleButton = addButton(bar, "확대: " + SCALE_NAMES[FramebufferView.SCALE_SHARP], v -> cycleScale());
         addButton(bar, "키보드", v -> toggleKeyboard());
         addButton(bar, "프로세스", v -> showProcesses());
+        addButton(bar, "Proton", v -> showProtonLog());
         addButton(bar, "로그", v -> logScroll.setVisibility(logScroll.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
         addButton(bar, "닫기", v -> finish());
         root.addView(bar, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END));
@@ -227,6 +228,9 @@ public class DisplayActivity extends Activity {
                 // PRoot 크래시 보고(tools/patches)는 꺼 둠: FEX는 SIGBUS/SIGSEGV를 많이 스스로 처리하므로
                 // 하나하나 보고하면 로그가 넘치고 게임이 느려짐. 크래시 위치가 필요할 때만 CRASH_LOG를 true로
                 if (CRASH_LOG) c.env.put("PROOT_CRASH_LOG", "1");
+                // Fewer Steam web helper processes (option on the main screen, on by default)
+                // Steam 웹 도우미 프로세스 줄이기(메인 화면 옵션, 기본 켬)
+                if (MainActivity.cefSlim(this)) c.env.put("EZS_CEF_FLAGS", MainActivity.CEF_SLIM_FLAGS);
             } else {
                 c.rootId = true;
             }
@@ -426,7 +430,12 @@ public class DisplayActivity extends Activity {
 
     /** Proton log lines shown in the app log / 앱 로그에 보여 줄 Proton 로그 줄 */
     private static final java.util.regex.Pattern PROTON_KEY = java.util.regex.Pattern.compile(
-            "err:|unhandled|exception|wine: |fex|failed|abort", java.util.regex.Pattern.CASE_INSENSITIVE);
+            "err:|unhandled|wine: |failed|abort|dxvk|vkd3d|vulkan|d3d1|steamapi", java.util.regex.Pattern.CASE_INSENSITIVE);
+    /** FEX's per-site misalignment exception lines are counted, not shown one by one
+     *  FEX의 위치별 정렬 예외 줄은 하나씩 보여 주지 않고 개수만 셈 */
+    private static final String MISALIGN = "Exception: Code: 80000002";
+    /** Current Proton log file, for the [Proton] window / [Proton] 창용 현재 Proton 로그 파일 */
+    private volatile File protonLogFile;
 
     /**
      * Reads the lines appended to a growing file since the last call; starts over when the file shrinks.
@@ -502,14 +511,21 @@ public class DisplayActivity extends Activity {
                     if (fs != null) for (File f : fs) if (newest == null || f.lastModified() > newest.lastModified()) newest = f;
                     if (newest != null && !newest.equals(proton.file)) {
                         proton.file = newest;
+                        protonLogFile = newest;
                         proton.pos = 0;
                         proton.partial.setLength(0);
                         log("PROTON 로그: " + newest.getName());
                     }
                 }
+                int misalign = 0;
                 for (String line : proton.poll()) {
-                    if (PROTON_KEY.matcher(line).find()) log("PROTON " + (line.length() > 220 ? line.substring(0, 220) : line));
+                    if (line.contains(MISALIGN)) {
+                        misalign++;
+                    } else if (PROTON_KEY.matcher(line).find()) {
+                        log("PROTON " + (line.length() > 220 ? line.substring(0, 220) : line));
+                    }
                 }
+                if (misalign > 0) log("PROTON (FEX 정렬 예외 " + misalign + "건)");
                 SystemClock.sleep(500);
             }
         }, "ezs-steamlog");
@@ -562,27 +578,56 @@ public class DisplayActivity extends Activity {
     }
 
     /**
-     * Window with this app's child processes now and at the highest count (pid, memory, name),
-     * so the list does not get lost among log lines.
-     * 이 앱의 자식 프로세스를 현재와 가장 많았던 때로 보여 주는 창(pid, 메모리, 이름).
-     * 목록이 로그 줄 사이에 묻히지 않게 함
+     * Window with the last 200 lines of the current Proton log, unfiltered.
+     * 현재 Proton 로그의 마지막 200줄을 거르지 않고 보여 주는 창
      */
-    private void showProcesses() {
+    private void showProtonLog() {
+        File f = protonLogFile;
+        String text;
+        if (f == null) {
+            text = "Proton 로그 없음 (게임을 EZ Proton으로 실행하면 생김)";
+        } else {
+            try {
+                java.util.List<String> ls = java.nio.file.Files.readAllLines(f.toPath(), StandardCharsets.UTF_8);
+                StringBuilder sb = new StringBuilder(f.getName() + " (" + ls.size() + "줄 중 마지막 200줄)\n");
+                for (String l : ls.subList(Math.max(0, ls.size() - 200), ls.size())) {
+                    sb.append(l.length() > 300 ? l.substring(0, 300) : l).append('\n');
+                }
+                text = sb.toString();
+            } catch (IOException | RuntimeException e) {
+                text = "읽기 실패: " + e;
+            }
+        }
+        showTextWindow("Proton 로그", text);
+    }
+
+    /** Scrollable, selectable text window / 스크롤·선택 가능한 글 창 */
+    private void showTextWindow(String title, String text) {
         TextView tv = new TextView(this);
         tv.setTypeface(Typeface.MONOSPACE);
         tv.setTextSize(11);
         tv.setTextIsSelectable(true);
         int pad = (int) (12 * getResources().getDisplayMetrics().density);
         tv.setPadding(pad, pad, pad, pad);
-        tv.setText("현재 " + procNow + "개 (한도: 모든 앱 합계 32)\n" + procListNow
-                + "\n최대 " + procMax + "개, " + procListAtMax);
+        tv.setText(text);
         ScrollView sv = new ScrollView(this);
         sv.addView(tv);
         new android.app.AlertDialog.Builder(this)
-                .setTitle("자식 프로세스")
+                .setTitle(title)
                 .setView(sv)
                 .setPositiveButton("닫기", null)
                 .show();
+    }
+
+    /**
+     * Window with this app's child processes now and at the highest count (pid, memory, name),
+     * so the list does not get lost among log lines.
+     * 이 앱의 자식 프로세스를 현재와 가장 많았던 때로 보여 주는 창(pid, 메모리, 이름).
+     * 목록이 로그 줄 사이에 묻히지 않게 함
+     */
+    private void showProcesses() {
+        showTextWindow("자식 프로세스", "현재 " + procNow + "개 (한도: 모든 앱 합계 32)\n" + procListNow
+                + "\n최대 " + procMax + "개, " + procListAtMax);
     }
 
     @Override
@@ -606,6 +651,14 @@ public class DisplayActivity extends Activity {
      * display.sh의 stdin을 닫음(그러면 Xvfb와 시험 창을 끔). 3초 뒤에도 남으면 강제 종료함.
      * 화면 파일 매핑은 여기서 fb를 닫을 때까지 유지됨
      */
+    /** Send a signal to every child process of this app (same uid) / 이 앱의 모든 자식 프로세스에 시그널을 보냄(같은 uid) */
+    private static void signalChildren(int sig) {
+        for (app.ezsteam.runtime.ChildProcessCounter.Proc pr
+                : app.ezsteam.runtime.ChildProcessCounter.descendants(android.os.Process.myPid())) {
+            android.os.Process.sendSignal(pr.pid, sig);
+        }
+    }
+
     private void stopProcess() {
         Process p = proc;
         if (p != null) {
@@ -613,7 +666,17 @@ public class DisplayActivity extends Activity {
                 p.getOutputStream().close();
             } catch (IOException ignored) {
             }
-            for (int i = 0; i < 30 && p.isAlive(); i++) SystemClock.sleep(100);
+            // Test mode stops by itself after stdin closes; Steam mode (and anything left) is ended
+            // here: SIGTERM to every child process, then SIGKILL to those still there after 3 s
+            // test 모드는 stdin이 닫히면 스스로 끝남. Steam 모드(와 남은 것)는 여기서 끝냄:
+            // 모든 자식 프로세스에 SIGTERM, 3초 뒤에도 남은 것은 SIGKILL
+            if (!"steam".equals(mode)) {
+                for (int i = 0; i < 30 && p.isAlive(); i++) SystemClock.sleep(100);
+            }
+            signalChildren(15);
+            for (int i = 0; i < 30 && !app.ezsteam.runtime.ChildProcessCounter
+                    .descendants(android.os.Process.myPid()).isEmpty(); i++) SystemClock.sleep(100);
+            signalChildren(9);
             if (p.isAlive()) p.destroy();
         }
         XvfbFramebuffer f = fb;

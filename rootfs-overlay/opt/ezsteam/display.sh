@@ -59,8 +59,9 @@ if [ "$MODE" = steam ]; then
     # 2a. Steam client; its own output is filtered by steam-run.sh
     # 2a. Steam 클라이언트. 출력 거르기는 steam-run.sh가 함
     echo "READY $W $H $FB/Xvfb_screen0"
-    sh /opt/ezsteam/steam-run.sh &
-    PIDS="$!"
+    # This shell becomes the Steam run script (one process less; the app ends everything on close)
+    # 이 셸이 Steam 실행 스크립트로 바뀜(프로세스 1개 절약, 닫을 때는 앱이 모두 종료시킴)
+    exec sh /opt/ezsteam/steam-run.sh
 else
 # 2. Test windows (skipped when the program is missing); positions follow the screen width
 # 2. 시험 창(프로그램이 없으면 건너뜀). 위치는 화면 가로에 맞춤
