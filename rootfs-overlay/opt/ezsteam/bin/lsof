@@ -36,10 +36,12 @@ port=0
 for a do
     case "$a" in TCP@127.0.0.1:*) port=${a##*:} ;; esac
 done
-# Field output (-F style): p=pid, R=parent pid, u=uid, n=connection
-# 필드 출력(-F 형식): p=pid, R=부모 pid, u=uid, n=연결
+# Field output (-F style): p=pid, R=parent pid, u=uid, n=connection. Only the network service
+# process itself matches (its --utility-sub-type), not a process that merely names the feature
+# 필드 출력(-F 형식): p=pid, R=부모 pid, u=uid, n=연결. 네트워크 서비스 프로세스 자신(--utility-sub-type)만
+# 맞춤(기능 이름만 인자로 가진 프로세스는 제외)
 out=$(ps -eo pid=,ppid=,args= | awk -v uid="$(id -u)" -v port="$port" '
-    /steamwebhelper/ && /NetworkService/ && !found {
+    /steamwebhelper/ && /network\.mojom\.NetworkService/ && !found {
         print "p" $1; print "R" $2; print "u" uid
         print "n127.0.0.1:" port "->127.0.0.1:27060"
         found = 1

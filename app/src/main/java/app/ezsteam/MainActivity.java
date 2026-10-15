@@ -226,16 +226,19 @@ public class MainActivity extends Activity {
     /**
      * Chromium flags for the Steam web helper that merge helper processes into fewer ones
      * (Android allows 32 extra processes for all apps together): no zygote (needs no sandbox, which
-     * the client already runs without), GPU and network service in the browser process, audio
-     * service in process, one renderer process. Steam's own flags come after these and win on
-     * conflicts. Effect on the process count is not measured yet.
+     * the client already runs without), GPU in the browser process, audio service in process, one
+     * renderer process. The network service stays a separate process: with it in process the client
+     * no longer accepts its UI WebSocket (0x3008, measured). Steam's own flags come after these
+     * and win on conflicts. Measured with the network service also in process: 9 -> 4 helpers.
      * Steam 웹 도우미 보조 프로세스를 줄이는 Chromium 플래그(안드로이드는 모든 앱 합계 추가 프로세스
      * 32개까지 허용): zygote 없음(샌드박스 없이 실행해야 하며 클라이언트는 이미 그렇게 실행 중),
-     * GPU·네트워크 서비스를 브라우저 프로세스 안에서, 오디오 서비스도 안에서, 렌더러 1개.
-     * Steam 자체 플래그가 뒤에 오므로 겹치면 Steam 값이 우선함. 프로세스 수 효과는 아직 측정 전
+     * GPU를 브라우저 프로세스 안에서, 오디오 서비스도 안에서, 렌더러 1개. 네트워크 서비스는 별도
+     * 프로세스로 둠: 안에서 돌리면 클라이언트가 UI WebSocket을 받아들이지 않음(0x3008, 실측).
+     * Steam 자체 플래그가 뒤에 오므로 겹치면 Steam 값이 우선함. 네트워크 서비스까지 안에서 돌렸을
+     * 때 실측: 도우미 9개 → 4개
      */
     static final String CEF_SLIM_FLAGS = "--no-sandbox --no-zygote --in-process-gpu --renderer-process-limit=1"
-            + " --enable-features=NetworkServiceInProcess --disable-features=AudioServiceOutOfProcess";
+            + " --disable-features=AudioServiceOutOfProcess";
 
     /** CEF process saving on (default) or off / CEF 프로세스 절감 켬(기본) 또는 끔 */
     static boolean cefSlim(android.content.Context ctx) {
