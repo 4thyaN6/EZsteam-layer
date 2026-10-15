@@ -40,7 +40,7 @@
 | `rootfs-overlay/opt/ezsteam/keyview.py` | 키 확인 창(libX11 ctypes): 키보드 포커스를 갖고 받은 X 키코드·키 이름을 창과 앱 로그(`KEY`)에 표시 |
 | `rootfs-overlay/opt/ezsteam/steam-install.sh` | [Steam 설치]: 사용자 steam(uid 1000), 클라이언트·CEF 라이브러리(apt), Valve 업데이트 서버(`client-update.steamstatic.com/steam_client_linuxarm64`)에서 기기가 직접 부트스트랩 받기(매니페스트 sha2 대조), `~/.local/share/Steam`에 풀기 |
 | `rootfs-overlay/opt/ezsteam/steam-deps.sh` | 설치된 클라이언트 ELF 파일에 ldd → 없는 라이브러리 목록, `install` 모드에서 이름 규칙(libfoo-1.2.so.3 → libfoo-1.2-3/…t64)으로 Debian 패키지를 찾아 설치 |
-| `rootfs-overlay/opt/ezsteam/bin/lsof` | Steam의 `lsof -i TCP@127.0.0.1:포트` 질의에 실제 lsof가 답하지 못하면(안드로이드가 소켓 주인을 숨김) steamwebhelper 네트워크 프로세스로 답함 |
+| `rootfs-overlay/opt/ezsteam/bin/lsof` | `/usr/bin/lsof` 자리에 설치(dpkg-divert, 클라이언트가 절대 경로로 실행). Steam의 `lsof -i TCP@127.0.0.1:포트` 질의만 steamwebhelper 네트워크 프로세스로 답함(안드로이드가 소켓 주인을 숨김), 나머지는 원본 `lsof.distrib`. 호출 기록 `/tmp/ezs-lsof.log` |
 | `rootfs-overlay/opt/ezsteam/steam-run.sh` | `steamrtarm64/steam -no-cef-sandbox -cef-disable-gpu -chromeosnopreallocate -noverifyfiles` 실행, 종료 코드 42(자체 갱신)면 재시작, 전체 로그 `~/ezs-logs/steam.log` |
 | `rootfs-overlay/opt/ezsteam/ezsteam-prepare.sh` | Steam 시작 전 준비: `~/.steam/sdkarm64/steamclient.so` 연결, EZ Proton 설치 |
 | `rootfs-overlay/opt/ezsteam/compat/ezproton/` | 경량 호환 도구: Valve ARM64 Proton을 컨테이너 없이 직접 호출 |

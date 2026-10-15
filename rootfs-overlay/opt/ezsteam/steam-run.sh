@@ -46,9 +46,32 @@ fi
 
 # Key lines of the log, live / 로그의 주요 줄을 실시간으로 보냄
 tail -n 0 -F "$LOG" 2>/dev/null | grep --line-buffered -iE \
-    'error|fail|fatal|denied|missing|not found|update|download|restart|webhelper|login|exit' \
+    'error|fail|fatal|denied|missing|not found|update|download|restart|webhelper|login|exit|lsof|assert|websocket' \
     | sed -u 's/^/STEAM /' &
 TAILPID=$!
+
+# Diagnosis once the UI transport fails: Steam/CEF processes, lsof calls, ends of the client's logs
+# UI 연결이 실패하면 한 번 진단: Steam·CEF 프로세스, lsof 호출, 클라이언트 로그 끝부분
+: > /tmp/ezs-lsof.log
+(
+    i=0
+    while [ $i -lt 600 ]; do
+        if grep -q 'Failed to connect to websocket' "$LOG" 2>/dev/null; then
+            sleep 5
+            echo "DIAG ---- 프로세스"
+            ps -eo pid,ppid,stat,rss,args 2>/dev/null | grep -E 'steam|webhelper' | grep -v grep | cut -c1-200 | sed 's/^/DIAG /'
+            echo "DIAG ---- lsof 호출 (마지막 10)"
+            tail -n 10 /tmp/ezs-lsof.log 2>/dev/null | sed 's/^/DIAG /'
+            for f in $(ls -t "$STEAM_DIR"/logs/*.txt "$STEAM_DIR"/logs/*.log 2>/dev/null | head -n 4); do
+                echo "DIAG ---- $(basename "$f") (마지막 15)"
+                tail -n 15 "$f" | cut -c1-220 | sed 's/^/DIAG /'
+            done
+            break
+        fi
+        sleep 2; i=$((i + 1))
+    done
+) &
+DIAGPID=$!
 
 cd "$STEAM_DIR" || exit 0
 n=0
@@ -65,6 +88,6 @@ while :; do
     if [ $rc -eq 42 ] && [ $n -lt 6 ]; then continue; fi
     break
 done
-kill $TAILPID 2>/dev/null
+kill $TAILPID $DIAGPID 2>/dev/null
 tail -n 20 "$LOG" | sed 's/^/LOG   /'
 echo "DONE steam"

@@ -68,6 +68,22 @@ if [ -f /etc/locale.gen ] && ! locale -a 2>/dev/null | grep -qi '^en_US.utf8$'; 
     locale-gen >/dev/null 2>&1 && echo "OK   locale : en_US.UTF-8"
 fi
 
+# 2b. lsof wrapper in place of /usr/bin/lsof: the client runs /usr/bin/lsof and /bin/lsof by
+#     absolute path (/bin is /usr/bin in trixie). The original is kept as /usr/bin/lsof.distrib.
+# 2b. /usr/bin/lsof 자리에 lsof 감쌈: 클라이언트가 /usr/bin/lsof, /bin/lsof를 절대 경로로 실행함
+#     (trixie에서 /bin은 /usr/bin). 원본은 /usr/bin/lsof.distrib로 보존함
+if [ ! -e /usr/bin/lsof.distrib ] && [ -e /usr/bin/lsof ] && [ ! -L /usr/bin/lsof ]; then
+    dpkg-divert --local --rename --divert /usr/bin/lsof.distrib --add /usr/bin/lsof >/dev/null
+fi
+ln -sfn /opt/ezsteam/bin/lsof /usr/bin/lsof && echo "OK   lsof : /usr/bin/lsof -> /opt/ezsteam/bin/lsof"
+
+# 2c. IPv4-only localhost: the client's local bridge was unreliable when localhost resolved to
+#     IPv6 first (steamclienttermux). The original file is kept once as /etc/hosts.ezs-orig.
+# 2c. IPv4 전용 localhost: localhost가 IPv6로 먼저 풀리면 클라이언트 로컬 연결이 불안정했음
+#     (steamclienttermux). 원본은 /etc/hosts.ezs-orig로 한 번 보존함
+[ -e /etc/hosts.ezs-orig ] || cp /etc/hosts /etc/hosts.ezs-orig 2>/dev/null
+printf '127.0.0.1 localhost localhost.localdomain\n' > /etc/hosts && echo "OK   hosts : IPv4 localhost"
+
 # 3. The client asks for libvpx.so.6; trixie ships libvpx.so.9 (same link the packagings make)
 # 3. 클라이언트는 libvpx.so.6을 찾고 trixie에는 libvpx.so.9가 있음(패키징들과 같은 링크)
 LIBDIR=/usr/lib/aarch64-linux-gnu
