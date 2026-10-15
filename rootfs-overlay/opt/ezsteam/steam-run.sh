@@ -30,6 +30,9 @@ cd "$STEAM_DIR" || exit 0
 n=0
 while :; do
     n=$((n + 1))
+    # Missing libraries of the (possibly just updated) client, report only
+    # (방금 갱신됐을 수 있는) 클라이언트의 없는 라이브러리, 보고만 함
+    sh /opt/ezsteam/steam-deps.sh check
     echo "INFO steam : 시작 $n ($(date +%H:%M:%S))"
     "$BIN" -no-cef-sandbox -cef-disable-gpu -chromeosnopreallocate -noverifyfiles >>"$LOG" 2>&1
     rc=$?

@@ -2,7 +2,9 @@
 # Prepare the rootfs for Valve's Linux ARM64 Steam client and download its bootstrap from Valve's
 # own update server (client-update.steamstatic.com). Nothing from Valve is stored in this project:
 # the device downloads it directly. Runs as PRoot fake root on a user action only.
-#   steam-install.sh [stable|publicbeta]
+#   steam-install.sh [stable|publicbeta] [reinstall]
+# Pressing it again after the client's first self update skips the bootstrap and installs the
+# libraries the updated client needs (steam-deps.sh); "reinstall" downloads the bootstrap again.
 # Steps: "steam" user entry (uid 1000), libraries for the client and its web helper (CEF),
 # libvpx.so.6 name, bootstrap zip (manifest "steam_client_linuxarm64", sha256 checked when the
 # manifest has it), unpacked to ~/.local/share/Steam with the folder links the client expects.
@@ -10,7 +12,9 @@
 # Valve Linux ARM64 Steam 클라이언트용 rootfs 준비 + Valve 자체 업데이트 서버
 # (client-update.steamstatic.com)에서 부트스트랩 받기. 이 프로젝트는 Valve 파일을 보관하지 않고
 # 기기가 직접 받음. 사용자 조작 때만 PRoot 가짜 root로 실행함.
-#   steam-install.sh [stable|publicbeta]
+#   steam-install.sh [stable|publicbeta] [reinstall]
+# 클라이언트가 첫 자체 갱신을 한 뒤 다시 누르면 부트스트랩은 건너뛰고 갱신된 클라이언트가
+# 필요로 하는 라이브러리를 설치함(steam-deps.sh). "reinstall"이면 부트스트랩을 다시 받음.
 # 순서: "steam" 사용자 항목(uid 1000), 클라이언트·웹 도우미(CEF)용 라이브러리, libvpx.so.6 이름,
 # 부트스트랩 zip(매니페스트 "steam_client_linuxarm64", 매니페스트에 sha256이 있으면 확인),
 # ~/.local/share/Steam에 풀고 클라이언트가 기대하는 폴더 링크 생성.
@@ -45,7 +49,7 @@ libgtk2.0-0t64 libibus-1.0-5 libvpx9 libnss3 libnspr4 libsdl2-2.0-0 libopenal1 l
 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libdrm2 libgbm1 libxcomposite1 libxdamage1
 libxrandr2 libxfixes3 libxkbcommon0 libxss1 libxtst6 libxi6 libxcursor1 libxinerama1
 libasound2t64 libpulse0 libpango-1.0-0 libcairo2 libdbus-1-3 libudev1 libgl1 libegl1
-libfontconfig1 fonts-dejavu-core"
+libfontconfig1 fonts-dejavu-core libsdl3-0 libpipewire-0.3-0t64 locales"
 echo "INFO resolv : $(grep -c nameserver /etc/resolv.conf 2>/dev/null) nameserver"
 before=$(du -sk /usr 2>/dev/null | cut -f1)
 $APT update || { echo "FAIL apt-update : 네트워크·DNS 확인"; exit 1; }
@@ -57,10 +61,12 @@ if ! $APT install -y --no-install-recommends $PKGS; then
         $APT install -y --no-install-recommends "$p" >/dev/null 2>&1 || echo "FAIL pkg : $p"
     done
 fi
-$APT clean
-rm -rf /var/lib/apt/lists/*
-after=$(du -sk /usr 2>/dev/null | cut -f1)
-echo "INFO size : /usr +$(( (after - before) / 1024 )) MB"
+
+# The client sets the en_US.UTF-8 locale (warning without it) / 클라이언트는 en_US.UTF-8 로캘을 씀(없으면 경고)
+if [ -f /etc/locale.gen ] && ! locale -a 2>/dev/null | grep -qi '^en_US.utf8$'; then
+    sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
+    locale-gen >/dev/null 2>&1 && echo "OK   locale : en_US.UTF-8"
+fi
 
 # 3. The client asks for libvpx.so.6; trixie ships libvpx.so.9 (same link the packagings make)
 # 3. 클라이언트는 libvpx.so.6을 찾고 trixie에는 libvpx.so.9가 있음(패키징들과 같은 링크)
@@ -69,7 +75,9 @@ if [ ! -e $LIBDIR/libvpx.so.6 ] && [ -e $LIBDIR/libvpx.so.9 ]; then
     ln -s libvpx.so.9 $LIBDIR/libvpx.so.6 && echo "OK   libvpx : libvpx.so.6 -> libvpx.so.9"
 fi
 
-# 4. Bootstrap from Valve's update server / 4. Valve 업데이트 서버에서 부트스트랩 받기
+# 4. Bootstrap from Valve's update server, only when the client is not there yet
+# 4. Valve 업데이트 서버에서 부트스트랩 받기(클라이언트가 아직 없을 때만)
+bootstrap() {
 mkdir -p "$TMP" "$STEAM_DIR"
 if ! curl -fsSL --retry 3 -o "$TMP/manifest" "$BASE/$MANIFEST"; then
     echo "FAIL manifest : $BASE/$MANIFEST"; exit 1
@@ -122,9 +130,24 @@ for n in root steam; do ln -sfn "$STEAM_DIR" "$STEAM_HOME/.steam/$n"; done
 ln -sfn "$STEAM_DIR/steamrt64" "$STEAM_HOME/.steam/bin64"
 ln -sfn "$STEAM_DIR/steamrtarm64" "$STEAM_HOME/.steam/steamrtarm64"
 
-if [ -f steamrtarm64/steam ]; then
-    echo "OK   steam : $(du -sh "$STEAM_DIR" | cut -f1) $(file -b steamrtarm64/steam | cut -c1-60)"
+}
+
+if [ -x "$STEAM_DIR/steamrtarm64/steam" ] && [ "${2:-}" != reinstall ]; then
+    echo "INFO steam : 이미 설치됨, 부트스트랩 건너뜀"
+else
+    bootstrap
+fi
+if [ -f "$STEAM_DIR/steamrtarm64/steam" ]; then
+    echo "OK   steam : $(du -sh "$STEAM_DIR" | cut -f1) $(file -b "$STEAM_DIR/steamrtarm64/steam" | cut -c1-60)"
 else
     echo "FAIL steam : steamrtarm64/steam 없음 (zip 구성이 예상과 다름)"; ls "$STEAM_DIR" | head -n 20
 fi
+
+# 6. Libraries the (possibly self-updated) client needs / 6. (자체 갱신됐을 수 있는) 클라이언트가 필요로 하는 라이브러리
+sh /opt/ezsteam/steam-deps.sh install
+
+$APT clean
+rm -rf /var/lib/apt/lists/*
+after=$(du -sk /usr 2>/dev/null | cut -f1)
+echo "INFO size : /usr +$(( (after - before) / 1024 )) MB"
 echo "DONE"
