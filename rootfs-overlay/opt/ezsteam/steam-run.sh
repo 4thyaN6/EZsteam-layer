@@ -22,6 +22,14 @@ sh /opt/ezsteam/ezsteam-prepare.sh
 
 # lsof wrapper first in PATH (see /opt/ezsteam/bin/lsof) / lsof 감쌈을 PATH 맨 앞에 둠(/opt/ezsteam/bin/lsof 참고)
 export PATH=/opt/ezsteam/bin:$PATH
+# Vulkan present mode for games through Turnip's X11 software output: mailbox instead of the
+# FIFO that DXVK asks for (the Android proot Steam reference setup sets the same; a game stopped
+# right after creating its FIFO swapchain here). Set the variable beforehand to override.
+# Turnip X11 소프트웨어 출력으로 그리는 게임의 Vulkan 표시 방식: DXVK가 요청하는 FIFO 대신 mailbox
+# (안드로이드 proot Steam 참고 구성도 같은 값을 씀. 여기서는 FIFO 스왑체인을 만든 직후 게임이 멈췄음).
+# 미리 값을 정해 두면 그 값을 씀
+export MESA_VK_WSI_PRESENT_MODE="${MESA_VK_WSI_PRESENT_MODE:-mailbox}"
+echo "INFO vulkan : MESA_VK_WSI_PRESENT_MODE=$MESA_VK_WSI_PRESENT_MODE MESA_VK_WSI_DEBUG=${MESA_VK_WSI_DEBUG:-(없음)}"
 # Folder the client writes crash dumps to / 클라이언트가 크래시 덤프를 쓰는 폴더
 mkdir -p /tmp/dumps
 # Private session D-Bus started before Steam: when the client's updater starts D-Bus itself, the

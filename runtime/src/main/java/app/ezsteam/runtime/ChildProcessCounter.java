@@ -24,6 +24,11 @@ public final class ChildProcessCounter {
         public final int ppid;
         public final String name;
         public final long rssKb;
+        /** Kernel state letter (R running, S sleeping, D disk wait, T stopped/traced, Z zombie)
+         *  커널 상태 글자(R 실행, S 대기, D 디스크 대기, T 정지·추적, Z 좀비) */
+        public char state = '?';
+        /** CPU time used so far, in clock ticks (normally 1/100 s) / 지금까지 쓴 CPU 시간(보통 1/100초 단위) */
+        public long cpuTicks;
 
         Proc(int pid, int ppid, String name, long rssKb) {
             this.pid = pid;
@@ -31,6 +36,38 @@ public final class ChildProcessCounter {
             this.name = name;
             this.rssKb = rssKb;
         }
+    }
+
+    /**
+     * Threads of one process: id, name, state, CPU seconds and the kernel function it waits in
+     * (wchan, may be unreadable on Android). Tells a busy loop from a thread that is blocked.
+     * 한 프로세스의 스레드: id, 이름, 상태, CPU 초, 대기 중인 커널 함수(wchan, 안드로이드에서는
+     * 못 읽을 수 있음). 계속 도는 스레드와 막혀 있는 스레드를 구분하기 위함
+     */
+    public static String threads(int pid) {
+        StringBuilder sb = new StringBuilder();
+        File[] ts = new File("/proc/" + pid + "/task").listFiles();
+        if (ts == null) return "(스레드 목록을 읽지 못함)\n";
+        java.util.Arrays.sort(ts, (a, b) -> a.getName().compareTo(b.getName()));
+        for (File t : ts) {
+            String stat = readSmall(new File(t, "stat"));
+            if (stat == null) continue;
+            int l = stat.indexOf('('), r = stat.lastIndexOf(')');
+            if (l < 0 || r < l) continue;
+            String name = stat.substring(l + 1, r);
+            String[] f = stat.substring(r + 2).trim().split(" ");
+            long cpu = 0;
+            try {
+                cpu = Long.parseLong(f[11]) + Long.parseLong(f[12]);
+            } catch (RuntimeException ignored) {
+                // leave 0 / 0으로 둠
+            }
+            String wchan = readSmall(new File(t, "wchan"));
+            sb.append(String.format(java.util.Locale.ROOT, "%7s %c %7.1fs  %-16s %s%n", t.getName(),
+                    f.length > 0 && !f[0].isEmpty() ? f[0].charAt(0) : '?', cpu / 100.0, name,
+                    wchan == null || wchan.isEmpty() || "0".equals(wchan) ? "" : wchan.trim()));
+        }
+        return sb.toString();
     }
 
     private ChildProcessCounter() {
@@ -108,7 +145,16 @@ public final class ChildProcessCounter {
                 }
             }
         }
-        return new Proc(pid, ppid, name, rss);
+        Proc p = new Proc(pid, ppid, name, rss);
+        if (!f[0].isEmpty()) p.state = f[0].charAt(0);
+        try {
+            // utime and stime: fields 14 and 15 of stat, here 11 and 12 after the state
+            // utime, stime: stat의 14·15번째 항목, 여기서는 상태 뒤 11·12번째
+            p.cpuTicks = Long.parseLong(f[11]) + Long.parseLong(f[12]);
+        } catch (RuntimeException ignored) {
+            // leave 0 / 0으로 둠
+        }
+        return p;
     }
 
     private static String readSmall(File f) {

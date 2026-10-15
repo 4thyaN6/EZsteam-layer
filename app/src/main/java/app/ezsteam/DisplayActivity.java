@@ -551,7 +551,8 @@ public class DisplayActivity extends Activity {
                 procNow = ps.size();
                 StringBuilder list = new StringBuilder();
                 for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
-                    list.append(String.format(Locale.ROOT, "%6d %5dMB  %s%n", pr.pid, pr.rssKb / 1024, pr.name));
+                    list.append(String.format(Locale.ROOT, "%6d %c %5dMB %7.1fs  %s%n",
+                            pr.pid, pr.state, pr.rssKb / 1024, pr.cpuTicks / 100.0, pr.name));
                 }
                 procListNow = list.toString();
                 if (procNow > procMax) {
@@ -625,9 +626,40 @@ public class DisplayActivity extends Activity {
      * 이 앱의 자식 프로세스를 현재와 가장 많았던 때로 보여 주는 창(pid, 메모리, 이름).
      * 목록이 로그 줄 사이에 묻히지 않게 함
      */
+    /** Wine's own helper programs, not the game / Wine 자체 보조 프로그램(게임 아님) */
+    private static final java.util.Set<String> WINE_HELPERS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "services.exe", "winedevice.exe", "plugplay.exe", "rpcss.exe", "svchost.exe", "tabtip.exe",
+            "explorer.exe", "steam.exe", "start.exe", "conhost.exe", "rundll32.exe", "winemenubuilder.exe"));
+
+    /**
+     * Process window: the list now (state, memory, CPU seconds) and at the highest count, plus the
+     * threads of the game (largest non-helper .exe) to tell loading from a blocked thread.
+     * Columns: pid, state (R running, S sleeping, D disk wait, T stopped), memory, CPU time, name.
+     * 프로세스 창: 현재 목록(상태, 메모리, CPU 초)과 가장 많았던 때, 그리고 게임(보조 프로그램이 아닌
+     * 가장 큰 .exe)의 스레드 목록. 로딩 중인지 막힌 스레드인지 구분하기 위함.
+     * 열: pid, 상태(R 실행, S 대기, D 디스크 대기, T 정지), 메모리, CPU 시간, 이름
+     */
     private void showProcesses() {
-        showTextWindow("자식 프로세스", "현재 " + procNow + "개 (한도: 모든 앱 합계 32)\n" + procListNow
-                + "\n최대 " + procMax + "개, " + procListAtMax);
+        java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps =
+                app.ezsteam.runtime.ChildProcessCounter.descendants(android.os.Process.myPid());
+        StringBuilder sb = new StringBuilder("현재 " + ps.size() + "개 (한도: 모든 앱 합계 32)\n"
+                + "   pid 상태  메모리   CPU시간  이름\n");
+        app.ezsteam.runtime.ChildProcessCounter.Proc game = null;
+        for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
+            sb.append(String.format(Locale.ROOT, "%6d %c %5dMB %7.1fs  %s%n",
+                    pr.pid, pr.state, pr.rssKb / 1024, pr.cpuTicks / 100.0, pr.name));
+            String exe = pr.name.contains(" | ") ? pr.name.substring(0, pr.name.indexOf(" | ")) : pr.name;
+            if (exe.toLowerCase(Locale.ROOT).endsWith(".exe") && !WINE_HELPERS.contains(exe.toLowerCase(Locale.ROOT))
+                    && (game == null || pr.rssKb > game.rssKb)) {
+                game = pr;
+            }
+        }
+        if (game != null) {
+            sb.append("\n게임 스레드 (").append(game.pid).append(")\n   tid 상태   CPU시간  이름  대기함수\n")
+                    .append(app.ezsteam.runtime.ChildProcessCounter.threads(game.pid));
+        }
+        sb.append("\n최대 ").append(procMax).append("개, ").append(procListAtMax);
+        showTextWindow("자식 프로세스", sb.toString());
     }
 
     @Override
