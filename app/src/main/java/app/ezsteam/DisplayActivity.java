@@ -72,6 +72,9 @@ public class DisplayActivity extends Activity {
     private volatile int procNow, procMax;
     private volatile long memFreeMb;
     private volatile boolean procListLogged;
+    /** Process lists for the [프로세스] window: now, and at the highest count so far
+     *  [프로세스] 창용 프로세스 목록: 현재, 지금까지 가장 많았던 때 */
+    private volatile String procListNow = "", procListAtMax = "";
     /** Android kills an app's extra processes beyond 32 (all apps together); list ours when close
      *  안드로이드는 앱 추가 프로세스가 32개(모든 앱 합계)를 넘으면 종료시킴. 가까워지면 목록을 남김 */
     private static final int PROC_WARN = 28;
@@ -114,6 +117,7 @@ public class DisplayActivity extends Activity {
         bar.addView(statsView);
         scaleButton = addButton(bar, "확대: " + SCALE_NAMES[FramebufferView.SCALE_SHARP], v -> cycleScale());
         addButton(bar, "키보드", v -> toggleKeyboard());
+        addButton(bar, "프로세스", v -> showProcesses());
         addButton(bar, "로그", v -> logScroll.setVisibility(logScroll.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
         addButton(bar, "닫기", v -> finish());
         root.addView(bar, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END));
@@ -529,7 +533,16 @@ public class DisplayActivity extends Activity {
                 java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps =
                         app.ezsteam.runtime.ChildProcessCounter.descendants(android.os.Process.myPid());
                 procNow = ps.size();
-                if (procNow > procMax) procMax = procNow;
+                StringBuilder list = new StringBuilder();
+                for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
+                    list.append(String.format(Locale.ROOT, "%6d %5dMB  %s%n", pr.pid, pr.rssKb / 1024, pr.name));
+                }
+                procListNow = list.toString();
+                if (procNow > procMax) {
+                    procMax = procNow;
+                    procListAtMax = new java.text.SimpleDateFormat("HH:mm:ss", Locale.ROOT).format(new java.util.Date())
+                            + " 기준\n" + procListNow;
+                }
                 am.getMemoryInfo(mi);
                 memFreeMb = mi.availMem >> 20;
                 if (procNow >= PROC_WARN && !procListLogged) {
@@ -546,6 +559,30 @@ public class DisplayActivity extends Activity {
         }, "ezs-monitor");
         t.setDaemon(true);
         t.start();
+    }
+
+    /**
+     * Window with this app's child processes now and at the highest count (pid, memory, name),
+     * so the list does not get lost among log lines.
+     * 이 앱의 자식 프로세스를 현재와 가장 많았던 때로 보여 주는 창(pid, 메모리, 이름).
+     * 목록이 로그 줄 사이에 묻히지 않게 함
+     */
+    private void showProcesses() {
+        TextView tv = new TextView(this);
+        tv.setTypeface(Typeface.MONOSPACE);
+        tv.setTextSize(11);
+        tv.setTextIsSelectable(true);
+        int pad = (int) (12 * getResources().getDisplayMetrics().density);
+        tv.setPadding(pad, pad, pad, pad);
+        tv.setText("현재 " + procNow + "개 (한도: 모든 앱 합계 32)\n" + procListNow
+                + "\n최대 " + procMax + "개, " + procListAtMax);
+        ScrollView sv = new ScrollView(this);
+        sv.addView(tv);
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("자식 프로세스")
+                .setView(sv)
+                .setPositiveButton("닫기", null)
+                .show();
     }
 
     @Override
