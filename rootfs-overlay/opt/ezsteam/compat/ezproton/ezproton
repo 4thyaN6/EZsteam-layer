@@ -39,6 +39,14 @@ if [ -z "$PROTON_DIR" ] || [ ! -f "$PROTON_DIR/proton" ]; then
     exit 1
 fi
 
+# Proton log for the app's log view: ~/ezs-logs/steam-<appid>.log (Proton's PROTON_LOG/PROTON_LOG_DIR),
+# unless the user set them already
+# 앱 로그 화면용 Proton 로그: ~/ezs-logs/steam-<appid>.log(Proton의 PROTON_LOG/PROTON_LOG_DIR).
+# 사용자가 이미 정했으면 그대로 둠
+export PROTON_LOG="${PROTON_LOG:-1}"
+export PROTON_LOG_DIR="${PROTON_LOG_DIR:-$HOME/ezs-logs}"
+mkdir -p "$PROTON_LOG_DIR"
+
 # Valve's script is "#!/usr/bin/env python3"; under PRoot it resolves to the rootfs python3
 # Valve 스크립트는 "#!/usr/bin/env python3"이며 PRoot 안에서는 rootfs의 python3로 실행됨
 echo "ezproton: $PROTON_DIR $*" >&2

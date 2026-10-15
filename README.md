@@ -44,7 +44,7 @@
 | `rootfs-overlay/opt/ezsteam/steam-run.sh` | `steamrtarm64/steam -no-cef-sandbox -cef-disable-gpu -chromeosnopreallocate -noverifyfiles` 실행, 종료 코드 42(자체 갱신)면 재시작, 전체 로그 `~/ezs-logs/steam.log`(주요 줄은 앱이 직접 따라 읽어 표시, rootfs 안 tail/grep 프로세스 없음) |
 | `rootfs-overlay/opt/ezsteam/speedtest.sh` | [속도 시험]: Valve 업데이트 서버 파일(약 100 MB)로 네트워크만 / 네트워크+파일 받기 속도, 큰 파일 쓰기, 작은 파일 2000개 쓰기 속도 측정(PRoot 영향 확인) |
 | `rootfs-overlay/opt/ezsteam/ezsteam-prepare.sh` | Steam 시작 전 준비: `~/.steam/sdkarm64` 링크 폴더(클라이언트 `linuxarm64/*`, `steam-launch-wrapper`, aarch64 `steamclient.so`), EZ Proton 설치 |
-| `rootfs-overlay/opt/ezsteam/compat/ezproton/` | 경량 호환 도구: Valve ARM64 Proton을 컨테이너 없이 직접 호출 |
+| `rootfs-overlay/opt/ezsteam/compat/ezproton/` | 경량 호환 도구: Valve ARM64 Proton을 컨테이너 없이 직접 호출, Proton 로그 `~/ezs-logs/steam-<appid>.log`(앱 로그에 `PROTON` 줄로 표시) |
 | `native/ezglibc/` | 이전 방식의 `libezglibc.so`(LD_PRELOAD 경로 변환). 실행에는 쓰지 않음. 나중 개선 작업용으로 CI에서 빌드·자체 시험만 유지 |
 | `tools/build-ezglibc-aarch64.sh` | 위 라이브러리 교차 빌드(보관용) |
 

@@ -84,6 +84,14 @@ ln -sfn /opt/ezsteam/bin/lsof /usr/bin/lsof && echo "OK   lsof : /usr/bin/lsof -
 [ -e /etc/hosts.ezs-orig ] || cp /etc/hosts /etc/hosts.ezs-orig 2>/dev/null
 printf '127.0.0.1 localhost localhost.localdomain\n' > /etc/hosts && echo "OK   hosts : IPv4 localhost"
 
+# 2d. Machine id (the client and D-Bus read /etc/machine-id; missing in the base rootfs)
+# 2d. 기기 id(클라이언트와 D-Bus가 /etc/machine-id를 읽음, 기본 rootfs에는 없음)
+if [ ! -s /etc/machine-id ]; then
+    if command -v dbus-uuidgen >/dev/null 2>&1; then dbus-uuidgen > /etc/machine-id
+    else python3 -c 'import uuid; print(uuid.uuid4().hex)' > /etc/machine-id; fi
+    echo "OK   machine-id : 생성"
+fi
+
 # 3. The client asks for libvpx.so.6; trixie ships libvpx.so.9 (same link the packagings make)
 # 3. 클라이언트는 libvpx.so.6을 찾고 trixie에는 libvpx.so.9가 있음(패키징들과 같은 링크)
 LIBDIR=/usr/lib/aarch64-linux-gnu

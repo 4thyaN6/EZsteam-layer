@@ -75,6 +75,8 @@ public class DisplayActivity extends Activity {
     /** Android kills an app's extra processes beyond 32 (all apps together); list ours when close
      *  안드로이드는 앱 추가 프로세스가 32개(모든 앱 합계)를 넘으면 종료시킴. 가까워지면 목록을 남김 */
     private static final int PROC_WARN = 28;
+    /** Turn on PRoot's crash report (PROOT_CRASH_LOG) / PRoot 크래시 보고(PROOT_CRASH_LOG) 켜기 */
+    private static final boolean CRASH_LOG = false;
     private static final String[] SCALE_NAMES = {"선형", "바이큐빅", "바이큐빅+선명"};
     private Button scaleButton;
 
@@ -215,9 +217,12 @@ public class DisplayActivity extends Activity {
             // test 모드: 가짜 root. steam 모드: 가짜 사용자 steam 1000:1000(Steam은 root 거부)
             if ("steam".equals(mode)) {
                 c.changeId = "1000:1000";
-                // PRoot prints where a crashing program stopped (patched PRoot, tools/patches)
-                // 죽은 프로그램의 멈춘 위치를 PRoot가 출력함(패치된 PRoot, tools/patches)
-                c.env.put("PROOT_CRASH_LOG", "1");
+                // PRoot crash report (tools/patches) stays off: FEX handles many SIGBUS/SIGSEGV
+                // signals itself, and reporting each one floods the log and slows the game.
+                // Set CRASH_LOG to true only when a crash location is needed.
+                // PRoot 크래시 보고(tools/patches)는 꺼 둠: FEX는 SIGBUS/SIGSEGV를 많이 스스로 처리하므로
+                // 하나하나 보고하면 로그가 넘치고 게임이 느려짐. 크래시 위치가 필요할 때만 CRASH_LOG를 true로
+                if (CRASH_LOG) c.env.put("PROOT_CRASH_LOG", "1");
             } else {
                 c.rootId = true;
             }
@@ -415,49 +420,91 @@ public class DisplayActivity extends Activity {
                     + "|websocket|ezproton|proton|compat|launch|wrapper|fex|reaper|appid",
             java.util.regex.Pattern.CASE_INSENSITIVE);
 
+    /** Proton log lines shown in the app log / 앱 로그에 보여 줄 Proton 로그 줄 */
+    private static final java.util.regex.Pattern PROTON_KEY = java.util.regex.Pattern.compile(
+            "err:|unhandled|exception|wine: |fex|failed|abort", java.util.regex.Pattern.CASE_INSENSITIVE);
+
     /**
-     * Follow ~/ezs-logs/steam.log from the app (no tail/grep processes in the rootfs, which would
-     * count against Android's process limit) and show its key lines. When the UI WebSocket check
-     * fails, also show the last lsof calls.
-     * 앱에서 ~/ezs-logs/steam.log를 따라 읽고 주요 줄을 보여 줌(rootfs 안 tail/grep 프로세스를 없애
-     * 안드로이드 프로세스 한도를 아낌). UI WebSocket 확인이 실패하면 마지막 lsof 호출도 보여 줌
+     * Reads the lines appended to a growing file since the last call; starts over when the file shrinks.
+     * 지난 호출 이후 늘어난 파일의 새 줄을 읽음. 파일이 줄어들면 처음부터 읽음
+     */
+    private static final class LogFollower {
+        File file;
+        long pos;
+        final StringBuilder partial = new StringBuilder();
+        final byte[] buf = new byte[16384];
+
+        java.util.List<String> poll() {
+            java.util.List<String> out = new java.util.ArrayList<>();
+            if (file == null) return out;
+            try (java.io.RandomAccessFile f = new java.io.RandomAccessFile(file, "r")) {
+                if (f.length() < pos) {
+                    pos = 0;
+                    partial.setLength(0);
+                }
+                f.seek(pos);
+                int n;
+                while ((n = f.read(buf)) > 0) {
+                    pos += n;
+                    partial.append(new String(buf, 0, n, StandardCharsets.UTF_8));
+                    int nl;
+                    while ((nl = partial.indexOf("\n")) >= 0) {
+                        out.add(partial.substring(0, nl));
+                        partial.delete(0, nl + 1);
+                    }
+                }
+            } catch (IOException ignored) {
+                // Not created yet / 아직 없음
+            }
+            return out;
+        }
+    }
+
+    /**
+     * Follow ~/ezs-logs/steam.log and the newest Proton log (~/ezs-logs/steam-<appid>.log, written
+     * because ezproton sets PROTON_LOG) from the app, with no tail/grep processes in the rootfs
+     * (they would count against Android's process limit), and show their key lines. When the UI
+     * WebSocket check fails, also show the last lsof calls.
+     * 앱에서 ~/ezs-logs/steam.log와 가장 최근 Proton 로그(~/ezs-logs/steam-<appid>.log, ezproton이
+     * PROTON_LOG를 켜서 생김)를 따라 읽고 주요 줄을 보여 줌. rootfs 안 tail/grep 프로세스를 없애
+     * 안드로이드 프로세스 한도를 아낌. UI WebSocket 확인이 실패하면 마지막 lsof 호출도 보여 줌
      */
     private void startSteamLogTail(File rootfs) {
-        File logFile = new File(rootfs, "home/steam/ezs-logs/steam.log");
+        File logDir = new File(rootfs, "home/steam/ezs-logs");
         File lsofLog = new File(rootfs, "tmp/ezs-lsof.log");
         Thread t = new Thread(() -> {
-            long pos = 0;
+            LogFollower steam = new LogFollower();
+            steam.file = new File(logDir, "steam.log");
+            LogFollower proton = new LogFollower();
             boolean wsLogged = false;
-            StringBuilder partial = new StringBuilder();
-            byte[] buf = new byte[16384];
+            int tick = 0;
             while (!finishing) {
-                try (java.io.RandomAccessFile f = new java.io.RandomAccessFile(logFile, "r")) {
-                    // The run script empties the log at start: start over when it shrinks
-                    // 실행 스크립트가 시작 때 로그를 비우므로 줄어들면 처음부터 읽음
-                    if (f.length() < pos) {
-                        pos = 0;
-                        partial.setLength(0);
-                    }
-                    f.seek(pos);
-                    int n;
-                    while ((n = f.read(buf)) > 0) {
-                        pos += n;
-                        partial.append(new String(buf, 0, n, StandardCharsets.UTF_8));
-                        int nl;
-                        while ((nl = partial.indexOf("\n")) >= 0) {
-                            String line = partial.substring(0, nl);
-                            partial.delete(0, nl + 1);
-                            if (STEAM_KEY.matcher(line).find()) log("STEAM " + line);
-                            if (!wsLogged && line.contains("Failed to connect to websocket")) {
-                                wsLogged = true;
-                                log("DIAG ---- lsof 호출 (마지막 10)");
-                                java.util.List<String> ls = java.nio.file.Files.readAllLines(lsofLog.toPath());
-                                for (String l : ls.subList(Math.max(0, ls.size() - 10), ls.size())) log("DIAG " + l);
-                            }
+                for (String line : steam.poll()) {
+                    if (STEAM_KEY.matcher(line).find()) log("STEAM " + line);
+                    if (!wsLogged && line.contains("Failed to connect to websocket")) {
+                        wsLogged = true;
+                        log("DIAG ---- lsof 호출 (마지막 10)");
+                        try {
+                            java.util.List<String> ls = java.nio.file.Files.readAllLines(lsofLog.toPath());
+                            for (String l : ls.subList(Math.max(0, ls.size() - 10), ls.size())) log("DIAG " + l);
+                        } catch (IOException ignored) {
                         }
                     }
-                } catch (IOException ignored) {
-                    // Not created yet / 아직 없음
+                }
+                // Every 2 s look for a newer Proton log / 2초마다 더 새 Proton 로그를 찾음
+                if (tick++ % 4 == 0) {
+                    File[] fs = logDir.listFiles((d, name) -> name.startsWith("steam-") && name.endsWith(".log"));
+                    File newest = null;
+                    if (fs != null) for (File f : fs) if (newest == null || f.lastModified() > newest.lastModified()) newest = f;
+                    if (newest != null && !newest.equals(proton.file)) {
+                        proton.file = newest;
+                        proton.pos = 0;
+                        proton.partial.setLength(0);
+                        log("PROTON 로그: " + newest.getName());
+                    }
+                }
+                for (String line : proton.poll()) {
+                    if (PROTON_KEY.matcher(line).find()) log("PROTON " + (line.length() > 220 ? line.substring(0, 220) : line));
                 }
                 SystemClock.sleep(500);
             }
