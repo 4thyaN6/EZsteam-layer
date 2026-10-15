@@ -42,10 +42,37 @@ while IFS= read -r f; do
 done < "$HOME/.steam/.ezs-scan"
 rm -f "$HOME/.steam/.ezs-scan"
 
+# ~/.steam/sdkarm64 is a folder of links: every file of the client's linuxarm64 folder (the client
+# starts games through sdkarm64/steam-launch-wrapper), plus steamclient.so and steam-launch-wrapper
+# from wherever the client keeps them. Steam's own files are not changed.
+# ~/.steam/sdkarm64는 링크 폴더임: 클라이언트 linuxarm64 폴더의 모든 파일(클라이언트는
+# sdkarm64/steam-launch-wrapper로 게임을 시작함) + 클라이언트가 둔 위치의 steamclient.so,
+# steam-launch-wrapper. Steam 자체 파일은 바꾸지 않음
+SDK=$HOME/.steam/sdkarm64
+[ -L "$SDK" ] && rm -f "$SDK"
+mkdir -p "$SDK"
+find "$SDK" -maxdepth 1 -type l ! -exec test -e {} \; -delete 2>/dev/null
+if [ -d "$STEAM_DIR/linuxarm64" ]; then
+    for f in "$STEAM_DIR"/linuxarm64/*; do
+        [ -e "$f" ] && ln -sfn "$f" "$SDK/$(basename "$f")"
+    done
+fi
+if [ ! -e "$SDK/steam-launch-wrapper" ]; then
+    w=$(find "$STEAM_DIR" -maxdepth 3 -name steam-launch-wrapper -type f 2>/dev/null | head -n 1)
+    [ -n "$w" ] && ln -sfn "$w" "$SDK/steam-launch-wrapper"
+fi
+if [ -e "$SDK/steam-launch-wrapper" ]; then
+    echo "$LOG_TAG launch wrapper -> $(readlink -f "$SDK/steam-launch-wrapper")"
+else
+    echo "$LOG_TAG steam-launch-wrapper not found yet"
+fi
+
 if [ -n "$CLIENT" ]; then
-    mkdir -p "$HOME/.steam/sdkarm64"
-    ln -sfn "$CLIENT" "$HOME/.steam/sdkarm64/steamclient.so"
-    echo "$LOG_TAG sdkarm64 -> $CLIENT"
+    # Keep an aarch64 steamclient.so from linuxarm64 when there is one / linuxarm64에 aarch64 steamclient.so가 있으면 그것을 유지
+    if ! { [ -e "$SDK/steamclient.so" ] && is_aarch64_elf "$(readlink -f "$SDK/steamclient.so")"; }; then
+        ln -sfn "$CLIENT" "$SDK/steamclient.so"
+    fi
+    echo "$LOG_TAG sdkarm64/steamclient.so -> $(readlink -f "$SDK/steamclient.so")"
 else
     # First start: the client is not downloaded yet; the next start links it
     # 첫 실행: 아직 클라이언트를 받기 전이라 다음 실행 때 연결함

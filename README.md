@@ -42,7 +42,8 @@
 | `rootfs-overlay/opt/ezsteam/steam-deps.sh` | 설치된 클라이언트 ELF 파일에 ldd → 없는 라이브러리 목록, `install` 모드에서 이름 규칙(libfoo-1.2.so.3 → libfoo-1.2-3/…t64)으로 Debian 패키지를 찾아 설치 |
 | `rootfs-overlay/opt/ezsteam/bin/lsof` | `/usr/bin/lsof` 자리에 설치(dpkg-divert, 클라이언트가 절대 경로로 실행). Steam의 `lsof -i TCP@127.0.0.1:포트` 질의만 steamwebhelper 네트워크 프로세스로 답함(안드로이드가 소켓 주인을 숨김), 나머지는 원본 `lsof.distrib`. 호출 기록 `/tmp/ezs-lsof.log` |
 | `rootfs-overlay/opt/ezsteam/steam-run.sh` | `steamrtarm64/steam -no-cef-sandbox -cef-disable-gpu -chromeosnopreallocate -noverifyfiles` 실행, 종료 코드 42(자체 갱신)면 재시작, 전체 로그 `~/ezs-logs/steam.log` |
-| `rootfs-overlay/opt/ezsteam/ezsteam-prepare.sh` | Steam 시작 전 준비: `~/.steam/sdkarm64/steamclient.so` 연결, EZ Proton 설치 |
+| `rootfs-overlay/opt/ezsteam/speedtest.sh` | [속도 시험]: Valve 업데이트 서버 파일(약 100 MB)로 네트워크만 / 네트워크+파일 받기 속도, 큰 파일 쓰기, 작은 파일 2000개 쓰기 속도 측정(PRoot 영향 확인) |
+| `rootfs-overlay/opt/ezsteam/ezsteam-prepare.sh` | Steam 시작 전 준비: `~/.steam/sdkarm64` 링크 폴더(클라이언트 `linuxarm64/*`, `steam-launch-wrapper`, aarch64 `steamclient.so`), EZ Proton 설치 |
 | `rootfs-overlay/opt/ezsteam/compat/ezproton/` | 경량 호환 도구: Valve ARM64 Proton을 컨테이너 없이 직접 호출 |
 | `native/ezglibc/` | 이전 방식의 `libezglibc.so`(LD_PRELOAD 경로 변환). 실행에는 쓰지 않음. 나중 개선 작업용으로 CI에서 빌드·자체 시험만 유지 |
 | `tools/build-ezglibc-aarch64.sh` | 위 라이브러리 교차 빌드(보관용) |

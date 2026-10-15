@@ -46,7 +46,7 @@ fi
 
 # Key lines of the log, live / 로그의 주요 줄을 실시간으로 보냄
 tail -n 0 -F "$LOG" 2>/dev/null | grep --line-buffered -iE \
-    'error|fail|fatal|denied|missing|not found|update|download|restart|webhelper|login|exit|lsof|assert|websocket' \
+    'error|fail|fatal|denied|missing|not found|update|download|restart|webhelper|login|exit|lsof|assert|websocket|ezproton|proton|compat|launch|wrapper|fex|reaper|appid' \
     | sed -u 's/^/STEAM /' &
 TAILPID=$!
 

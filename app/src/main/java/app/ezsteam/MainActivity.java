@@ -84,6 +84,7 @@ public class MainActivity extends Activity {
         addButton(row4, "Steam 설치", v -> runTask("steam-install", this::doSteamInstall));
         addButton(row4, "Steam 실행 1280x800", v -> openSteam(1280, 800));
         addButton(row4, "Steam 실행 1920x1200", v -> openSteam(1920, 1200));
+        addButton(row4, "속도 시험", v -> runTask("speed", this::doSpeedTest));
 
         // Screenshot area for the drawing test / 그리기 시험 화면 캡처 영역
         shotView = new android.widget.ImageView(this);
@@ -188,6 +189,26 @@ public class MainActivity extends Activity {
         GlibcLauncher.Config c = config();
         c.rootId = true;
         Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/steam-install.sh", null, null, null);
+        pipe(p);
+        log("exit=" + p.waitFor());
+    }
+
+    /**
+     * Network / file write speed inside the rootfs (speedtest.sh), to find why Steam downloads are slow.
+     * Downloads about 200 MB from Valve's update server, only on the button press.
+     * rootfs 안 네트워크·파일 쓰기 속도(speedtest.sh), Steam 다운로드가 느린 원인 확인용.
+     * Valve 업데이트 서버에서 약 200 MB를 받으며 버튼을 누를 때만 동작함
+     */
+    private void doSpeedTest() throws Exception {
+        if (RootfsInstaller.installedVersion(this).isEmpty()) {
+            log("먼저 rootfs 설치");
+            return;
+        }
+        RootfsInstaller.writeResolvConf(this);
+        GlibcLauncher.Config c = config();
+        // Same ids as the Steam client / Steam 클라이언트와 같은 id
+        c.changeId = "1000:1000";
+        Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/speedtest.sh", null, null, null);
         pipe(p);
         log("exit=" + p.waitFor());
     }
