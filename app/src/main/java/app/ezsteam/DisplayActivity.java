@@ -231,6 +231,18 @@ public class DisplayActivity extends Activity {
                 // Fewer Steam web helper processes (option on the main screen, on by default)
                 // Steam 웹 도우미 프로세스 줄이기(메인 화면 옵션, 기본 켬)
                 if (MainActivity.cefSlim(this)) c.env.put("EZS_CEF_FLAGS", MainActivity.CEF_SLIM_FLAGS);
+                // Game frame hand-over (main screen option, see MainActivity.WSI_MODES); replaces the
+                // driver package's MESA_VK_WSI_DEBUG=sw. Steam passes these on to Proton and the game.
+                // 게임 화면 전달 방식(메인 화면 옵션, MainActivity.WSI_MODES 참고). 드라이버 묶음의
+                // MESA_VK_WSI_DEBUG=sw를 대신함. Steam이 Proton과 게임에 그대로 넘김
+                String[] wsi = MainActivity.WSI_MODES[MainActivity.wsiIndex(MainActivity.wsiMode(this))];
+                c.env.put("MESA_VK_WSI_DEBUG", wsi[2]);
+                c.env.put("MESA_VK_WSI_PRESENT_MODE", wsi[3]);
+                if (!wsi[4].isEmpty()) c.env.put("DXVK_CONFIG", wsi[4]);
+                // DXVK overlay drawn into the game frame: shows whether frames are produced at all
+                // 게임 화면 안에 그리는 DXVK 표시줄: 화면이 만들어지고 있는지 바로 보임
+                if (MainActivity.dxvkHud(this)) c.env.put("DXVK_HUD", MainActivity.DXVK_HUD_VALUE);
+                log("게임 화면 " + wsi[1]);
             } else {
                 c.rootId = true;
             }
@@ -430,7 +442,8 @@ public class DisplayActivity extends Activity {
 
     /** Proton log lines shown in the app log / 앱 로그에 보여 줄 Proton 로그 줄 */
     private static final java.util.regex.Pattern PROTON_KEY = java.util.regex.Pattern.compile(
-            "err:|unhandled|wine: |failed|abort|dxvk|vkd3d|vulkan|d3d1|steamapi", java.util.regex.Pattern.CASE_INSENSITIVE);
+            "err:|unhandled|wine: |failed|abort|dxvk|vkd3d|vulkan|d3d1|steamapi|presenter|present mode|config env",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
     /** FEX's per-site misalignment exception lines are counted, not shown one by one
      *  FEX의 위치별 정렬 예외 줄은 하나씩 보여 주지 않고 개수만 셈 */
     private static final String MISALIGN = "Exception: Code: 80000002";

@@ -93,6 +93,32 @@ public class MainActivity extends Activity {
             log("CEF 절감 " + (on ? "켬: " + CEF_SLIM_FLAGS : "끔") + " (다음 Steam 실행부터)");
         });
 
+        // Fifth row: how games hand finished frames to the X server, and the DXVK overlay
+        // (both read when Steam starts, so they apply from the next [Steam 실행])
+        // 다섯 번째 줄: 게임이 완성된 화면을 X 서버에 넘기는 방식, DXVK 표시줄
+        // (둘 다 Steam 시작 때 읽으므로 다음 [Steam 실행]부터 적용됨)
+        LinearLayout row5 = new LinearLayout(this);
+        row5.setOrientation(LinearLayout.HORIZONTAL);
+        root.addView(row5);
+        Button wsi = addButton(row5, wsiLabel(wsiMode(this)), null);
+        wsi.setOnClickListener(v -> {
+            int next = (wsiIndex(wsiMode(this)) + 1) % WSI_MODES.length;
+            String m = WSI_MODES[next][0];
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_WSI, m).apply();
+            wsi.setText(wsiLabel(m));
+            log("게임 화면 " + WSI_MODES[next][1] + ": MESA_VK_WSI_DEBUG=" + WSI_MODES[next][2]
+                    + " MESA_VK_WSI_PRESENT_MODE=" + WSI_MODES[next][3]
+                    + " DXVK_CONFIG=" + (WSI_MODES[next][4].isEmpty() ? "(없음)" : WSI_MODES[next][4])
+                    + " (다음 Steam 실행부터)");
+        });
+        Button hud = addButton(row5, hudLabel(dxvkHud(this)), null);
+        hud.setOnClickListener(v -> {
+            boolean on = !dxvkHud(this);
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_DXVK_HUD, on).apply();
+            hud.setText(hudLabel(on));
+            log("DXVK HUD " + (on ? "켬: DXVK_HUD=" + DXVK_HUD_VALUE : "끔") + " (다음 Steam 실행부터)");
+        });
+
         // Screenshot area for the drawing test / 그리기 시험 화면 캡처 영역
         shotView = new android.widget.ImageView(this);
         shotView.setAdjustViewBounds(true);
@@ -247,6 +273,73 @@ public class MainActivity extends Activity {
 
     private static String cefLabel(boolean on) {
         return "CEF 절감: " + (on ? "켬" : "끔");
+    }
+
+    static final String KEY_WSI = "wsi_mode";
+    static final String KEY_DXVK_HUD = "dxvk_hud";
+    /**
+     * Ways Turnip's X11 software output hands a finished game frame to Xvfb:
+     * {key, label, MESA_VK_WSI_DEBUG, MESA_VK_WSI_PRESENT_MODE, DXVK_CONFIG}.
+     * Source facts (Mesa 26.2.4 wsi_common_x11.c, DXVK presenter):
+     *   - With MIT-SHM the frame goes through the X Present extension and the present id a game
+     *     waits on advances only when Xvfb's Present COMPLETE event is handled.
+     *   - Without MIT-SHM (noshm) the frame is copied with PutImage and the present id never
+     *     advances, so a present wait would never return.
+     *   - DXVK waits for every present id (vkWaitForPresentKHR, no timeout) only in FIFO mode,
+     *     i.e. with vsync; dxgi.syncInterval=0 makes it pick IMMEDIATE/MAILBOX and not wait.
+     *   - Measured: in FIFO with MIT-SHM a game stopped right after creating its swapchain, with
+     *     the game's main thread, dxvk-frame and both WSI threads waiting.
+     * Modes: putimage = no Present events and no present wait at all (default);
+     * shm-novsync = MIT-SHM but no present wait; shm-mailbox / shm-fifo = earlier settings.
+     * The no-vsync modes cap the frame rate at 60 with DXVK's own limiter.
+     * Turnip X11 소프트웨어 출력이 완성된 게임 화면을 Xvfb에 넘기는 방식:
+     * {키, 이름, MESA_VK_WSI_DEBUG, MESA_VK_WSI_PRESENT_MODE, DXVK_CONFIG}.
+     * 소스 근거(Mesa 26.2.4 wsi_common_x11.c, DXVK presenter):
+     *   - MIT-SHM이 있으면 X Present 확장으로 넘기며, 게임이 기다리는 present id는 Xvfb의
+     *     Present COMPLETE 이벤트를 처리해야만 올라감
+     *   - MIT-SHM 없이(noshm) PutImage로 복사하면 present id가 전혀 올라가지 않으므로
+     *     present 대기는 끝나지 않음
+     *   - DXVK는 FIFO(수직 동기) 방식일 때만 present id마다 기다림(vkWaitForPresentKHR, 제한 시간 없음).
+     *     dxgi.syncInterval=0이면 IMMEDIATE/MAILBOX를 골라 기다리지 않음
+     *   - 실측: MIT-SHM + FIFO에서 게임이 스왑체인을 만든 직후 멈췄고, 게임 메인 스레드·dxvk-frame·
+     *     WSI 스레드 둘이 모두 대기 중이었음
+     * 방식: putimage = Present 이벤트도 present 대기도 없음(기본), shm-novsync = MIT-SHM이지만
+     * present 대기 없음, shm-mailbox / shm-fifo = 이전 설정.
+     * 수직 동기를 끄는 방식은 DXVK 자체 제한기로 초당 60장까지만 그림
+     */
+    static final String DXVK_NOVSYNC = "dxgi.syncInterval=0;d3d9.presentInterval=0;dxgi.maxFrameRate=60;d3d9.maxFrameRate=60";
+    static final String[][] WSI_MODES = {
+            {"putimage", "PutImage", "sw,noshm", "immediate", DXVK_NOVSYNC},
+            {"shm-novsync", "SHM 동기 끔", "sw", "immediate", DXVK_NOVSYNC},
+            {"shm-mailbox", "SHM mailbox", "sw", "mailbox", ""},
+            {"shm-fifo", "SHM fifo", "sw", "fifo", ""},
+    };
+    /** DXVK overlay: frame rate, frame time graph, GPU load
+     *  DXVK 표시줄: 초당 화면 수, 화면 시간 그래프, GPU 사용률 */
+    static final String DXVK_HUD_VALUE = "fps,frametimes,gpuload";
+
+    /** Selected frame hand-over mode key / 선택된 화면 전달 방식 키 */
+    static String wsiMode(android.content.Context ctx) {
+        return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_WSI, WSI_MODES[0][0]);
+    }
+
+    /** Row of WSI_MODES for a key, first row when unknown / 키에 해당하는 WSI_MODES 줄, 모르면 첫 줄 */
+    static int wsiIndex(String key) {
+        for (int i = 0; i < WSI_MODES.length; i++) if (WSI_MODES[i][0].equals(key)) return i;
+        return 0;
+    }
+
+    private static String wsiLabel(String key) {
+        return "게임 화면: " + WSI_MODES[wsiIndex(key)][1];
+    }
+
+    /** DXVK overlay on or off (default off) / DXVK 표시줄 켬 또는 끔(기본 끔) */
+    static boolean dxvkHud(android.content.Context ctx) {
+        return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_DXVK_HUD, false);
+    }
+
+    private static String hudLabel(boolean on) {
+        return "DXVK HUD: " + (on ? "켬" : "끔");
     }
 
     private Button addButton(LinearLayout row, String text, View.OnClickListener l) {

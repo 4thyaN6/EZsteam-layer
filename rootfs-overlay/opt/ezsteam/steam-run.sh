@@ -29,7 +29,10 @@ export PATH=/opt/ezsteam/bin:$PATH
 # (안드로이드 proot Steam 참고 구성도 같은 값을 씀. 여기서는 FIFO 스왑체인을 만든 직후 게임이 멈췄음).
 # 미리 값을 정해 두면 그 값을 씀
 export MESA_VK_WSI_PRESENT_MODE="${MESA_VK_WSI_PRESENT_MODE:-mailbox}"
+# The app sets these from its [게임 화면] option (MainActivity.WSI_MODES)
+# 앱이 [게임 화면] 옵션(MainActivity.WSI_MODES)에 따라 정함
 echo "INFO vulkan : MESA_VK_WSI_PRESENT_MODE=$MESA_VK_WSI_PRESENT_MODE MESA_VK_WSI_DEBUG=${MESA_VK_WSI_DEBUG:-(없음)}"
+echo "INFO dxvk : DXVK_CONFIG=${DXVK_CONFIG:-(없음)} DXVK_HUD=${DXVK_HUD:-(없음)}"
 # Folder the client writes crash dumps to / 클라이언트가 크래시 덤프를 쓰는 폴더
 mkdir -p /tmp/dumps
 # Private session D-Bus started before Steam: when the client's updater starts D-Bus itself, the
