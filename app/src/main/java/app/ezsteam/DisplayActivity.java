@@ -68,6 +68,13 @@ public class DisplayActivity extends Activity {
     /** Last key sent to X, shown in the top bar / X로 보낸 마지막 키, 위쪽 막대에 표시 */
     private volatile String lastKey = "-";
     private volatile boolean shaderLogged;
+    /** Child processes now / most seen, free memory (monitor thread) / 현재·최대 자식 프로세스 수, 여유 메모리(감시 스레드) */
+    private volatile int procNow, procMax;
+    private volatile long memFreeMb;
+    private volatile boolean procListLogged;
+    /** Android kills an app's extra processes beyond 32 (all apps together); list ours when close
+     *  안드로이드는 앱 추가 프로세스가 32개(모든 앱 합계)를 넘으면 종료시킴. 가까워지면 목록을 남김 */
+    private static final int PROC_WARN = 28;
     private static final String[] SCALE_NAMES = {"선형", "바이큐빅", "바이큐빅+선명"};
     private Button scaleButton;
 
@@ -129,7 +136,8 @@ public class DisplayActivity extends Activity {
                 log("확대 셰이더 오류(선형으로 대체): " + err);
             }
             runOnUiThread(() -> statsView.setText(String.format(Locale.ROOT,
-                    "%dx%d  화면 %.0ffps  내용변경 %.0f/s  업로드 %.1fms  키 %s  ", fw, fh, fps, changed, ms, lastKey)));
+                    "%dx%d  화면 %.0ffps  내용변경 %.0f/s  업로드 %.1fms  키 %s  자식 %d(최대 %d)  여유 %.1fGB  ",
+                    fw, fh, fps, changed, ms, lastKey, procNow, procMax, memFreeMb / 1024f)));
         });
         // Soft keyboard text arrives here as key events / 소프트 키보드 텍스트는 키 이벤트로 바뀌어 여기로 옴
         view.setKeyListener(this::sendKey);
@@ -138,6 +146,7 @@ public class DisplayActivity extends Activity {
 
         log("app build=" + BuildConfig.GIT_SHA + ", 요청 해상도 " + w + "x" + h);
         new Thread(() -> start(w, h), "ezs-display").start();
+        startMonitor();
     }
 
     private Button addButton(LinearLayout bar, String text, View.OnClickListener l) {
@@ -229,7 +238,8 @@ public class DisplayActivity extends Activity {
                     if (line.startsWith("READY ")) onReady(c, line);
                 }
             }
-            log("exit=" + p.waitFor());
+            log("exit=" + p.waitFor() + " (자식 프로세스 최대 " + procMax + "개, 여유 메모리 "
+                    + memFreeMb + " MB)");
         } catch (Throwable e) {
             log("ERROR " + e);
         }
@@ -257,6 +267,7 @@ public class DisplayActivity extends Activity {
         } catch (IOException e) {
             log("X 입력 연결 실패: " + e);
         }
+        if ("steam".equals(mode)) startSteamLogTail(c.rootfs);
         // Steam mode keeps the log open (first start can take minutes) / steam 모드는 로그를 열어 둠(첫 시작이 몇 분 걸릴 수 있음)
         if (!"steam".equals(mode)) runOnUiThread(() -> logScroll.setVisibility(View.GONE));
     }
@@ -395,6 +406,99 @@ public class DisplayActivity extends Activity {
     protected void onResume() {
         super.onResume();
         view.onResume();
+    }
+
+    /** Lines of the Steam log shown in the app log (case-insensitive)
+     *  앱 로그에 보여 줄 Steam 로그 줄(대소문자 무시) */
+    private static final java.util.regex.Pattern STEAM_KEY = java.util.regex.Pattern.compile(
+            "error|fail|fatal|denied|missing|not found|update|download|restart|webhelper|login|exit|lsof|assert"
+                    + "|websocket|ezproton|proton|compat|launch|wrapper|fex|reaper|appid",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Follow ~/ezs-logs/steam.log from the app (no tail/grep processes in the rootfs, which would
+     * count against Android's process limit) and show its key lines. When the UI WebSocket check
+     * fails, also show the last lsof calls.
+     * 앱에서 ~/ezs-logs/steam.log를 따라 읽고 주요 줄을 보여 줌(rootfs 안 tail/grep 프로세스를 없애
+     * 안드로이드 프로세스 한도를 아낌). UI WebSocket 확인이 실패하면 마지막 lsof 호출도 보여 줌
+     */
+    private void startSteamLogTail(File rootfs) {
+        File logFile = new File(rootfs, "home/steam/ezs-logs/steam.log");
+        File lsofLog = new File(rootfs, "tmp/ezs-lsof.log");
+        Thread t = new Thread(() -> {
+            long pos = 0;
+            boolean wsLogged = false;
+            StringBuilder partial = new StringBuilder();
+            byte[] buf = new byte[16384];
+            while (!finishing) {
+                try (java.io.RandomAccessFile f = new java.io.RandomAccessFile(logFile, "r")) {
+                    // The run script empties the log at start: start over when it shrinks
+                    // 실행 스크립트가 시작 때 로그를 비우므로 줄어들면 처음부터 읽음
+                    if (f.length() < pos) {
+                        pos = 0;
+                        partial.setLength(0);
+                    }
+                    f.seek(pos);
+                    int n;
+                    while ((n = f.read(buf)) > 0) {
+                        pos += n;
+                        partial.append(new String(buf, 0, n, StandardCharsets.UTF_8));
+                        int nl;
+                        while ((nl = partial.indexOf("\n")) >= 0) {
+                            String line = partial.substring(0, nl);
+                            partial.delete(0, nl + 1);
+                            if (STEAM_KEY.matcher(line).find()) log("STEAM " + line);
+                            if (!wsLogged && line.contains("Failed to connect to websocket")) {
+                                wsLogged = true;
+                                log("DIAG ---- lsof 호출 (마지막 10)");
+                                java.util.List<String> ls = java.nio.file.Files.readAllLines(lsofLog.toPath());
+                                for (String l : ls.subList(Math.max(0, ls.size() - 10), ls.size())) log("DIAG " + l);
+                            }
+                        }
+                    }
+                } catch (IOException ignored) {
+                    // Not created yet / 아직 없음
+                }
+                SystemClock.sleep(500);
+            }
+        }, "ezs-steamlog");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /**
+     * Every 2 s: count this app's child processes (PRoot and everything under it) and free memory.
+     * Exit 137 of the whole session points at Android ending our processes (process limit or low
+     * memory); these numbers tell which.
+     * 2초마다 이 앱의 자식 프로세스(PRoot와 그 아래 전부) 수와 여유 메모리를 셈.
+     * 세션 전체가 137로 끝나면 안드로이드가 프로세스를 종료시킨 것(프로세스 한도 또는 메모리 부족)이며,
+     * 이 숫자로 어느 쪽인지 가림
+     */
+    private void startMonitor() {
+        Thread t = new Thread(() -> {
+            android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+            while (!finishing) {
+                java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps =
+                        app.ezsteam.runtime.ChildProcessCounter.descendants(android.os.Process.myPid());
+                procNow = ps.size();
+                if (procNow > procMax) procMax = procNow;
+                am.getMemoryInfo(mi);
+                memFreeMb = mi.availMem >> 20;
+                if (procNow >= PROC_WARN && !procListLogged) {
+                    procListLogged = true;
+                    StringBuilder sb = new StringBuilder("PROC 자식 프로세스 " + procNow + "개 (한도 32):");
+                    for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
+                        sb.append("\nPROC   ").append(pr.pid).append(' ').append(pr.name).append(' ')
+                                .append(pr.rssKb / 1024).append("MB");
+                    }
+                    log(sb.toString());
+                }
+                SystemClock.sleep(2000);
+            }
+        }, "ezs-monitor");
+        t.setDaemon(true);
+        t.start();
     }
 
     @Override
