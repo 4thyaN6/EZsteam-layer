@@ -78,6 +78,14 @@ public class DisplayActivity extends Activity {
     /** Android kills an app's extra processes beyond 32 (all apps together); list ours when close
      *  안드로이드는 앱 추가 프로세스가 32개(모든 앱 합계)를 넘으면 종료시킴. 가까워지면 목록을 남김 */
     private static final int PROC_WARN = 28;
+    /** CPU use over the last monitor interval, 100 = one core fully busy (monitor thread)
+     *  마지막 감시 주기 동안의 CPU 사용률, 100 = 코어 하나를 다 씀(감시 스레드) */
+    private volatile String cpuText = "";
+    private volatile java.util.Map<Integer, Float> cpuPct = new java.util.HashMap<>();
+    /** Game frame hand-over mode shown in the top bar (Steam mode) / 위쪽 막대에 보일 게임 화면 전달 방식(Steam 모드) */
+    private volatile String wsiName = "";
+    /** Session start, for the elapsed time in the top bar / 세션 시작 시각, 위쪽 막대 경과 시간용 */
+    private final long startMs = SystemClock.elapsedRealtime();
     /** Turn on PRoot's crash report (PROOT_CRASH_LOG) / PRoot 크래시 보고(PROOT_CRASH_LOG) 켜기 */
     private static final boolean CRASH_LOG = false;
     private static final String[] SCALE_NAMES = {"선형", "바이큐빅", "바이큐빅+선명"};
@@ -142,9 +150,14 @@ public class DisplayActivity extends Activity {
                 shaderLogged = true;
                 log("확대 셰이더 오류(선형으로 대체): " + err);
             }
+            // Second line: elapsed time, frame hand-over mode and CPU use, to compare runs of equal length
+            // 둘째 줄: 경과 시간, 화면 전달 방식, CPU 사용률. 같은 길이의 실행끼리 비교하기 위함
+            long sec = (SystemClock.elapsedRealtime() - startMs) / 1000;
             runOnUiThread(() -> statsView.setText(String.format(Locale.ROOT,
-                    "%dx%d  화면 %.0ffps  내용변경 %.0f/s  업로드 %.1fms  키 %s  자식 %d(최대 %d)  여유 %.1fGB  ",
-                    fw, fh, fps, changed, ms, lastKey, procNow, procMax, memFreeMb / 1024f)));
+                    "%dx%d  화면 %.0ffps  내용변경 %.0f/s  업로드 %.1fms  키 %s  자식 %d(최대 %d)  여유 %.1fGB\n"
+                            + "경과 %d:%02d  %s%s",
+                    fw, fh, fps, changed, ms, lastKey, procNow, procMax, memFreeMb / 1024f,
+                    sec / 60, sec % 60, wsiName.isEmpty() ? "" : "게임 화면 " + wsiName + "  ", cpuText)));
         });
         // Soft keyboard text arrives here as key events / 소프트 키보드 텍스트는 키 이벤트로 바뀌어 여기로 옴
         view.setKeyListener(this::sendKey);
@@ -243,6 +256,7 @@ public class DisplayActivity extends Activity {
                 // 게임 화면 안에 그리는 DXVK 표시줄: 화면이 만들어지고 있는지 바로 보임
                 if (MainActivity.dxvkHud(this)) c.env.put("DXVK_HUD", MainActivity.DXVK_HUD_VALUE);
                 log("게임 화면 " + wsi[1]);
+                wsiName = wsi[1];
             } else {
                 c.rootId = true;
             }
@@ -558,14 +572,21 @@ public class DisplayActivity extends Activity {
         Thread t = new Thread(() -> {
             android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
             android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+            // CPU ticks per pid at the previous pass / 이전 회차의 pid별 CPU 틱
+            java.util.Map<Integer, Long> lastTicks = new java.util.HashMap<>();
+            long lastNs = 0;
             while (!finishing) {
                 java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps =
                         app.ezsteam.runtime.ChildProcessCounter.descendants(android.os.Process.myPid());
                 procNow = ps.size();
+                updateCpu(ps, lastTicks, lastNs);
+                lastNs = System.nanoTime();
+                java.util.Map<Integer, Float> pct = cpuPct;
                 StringBuilder list = new StringBuilder();
                 for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
-                    list.append(String.format(Locale.ROOT, "%6d %c %5dMB %7.1fs  %s%n",
-                            pr.pid, pr.state, pr.rssKb / 1024, pr.cpuTicks / 100.0, pr.name));
+                    Float c = pct.get(pr.pid);
+                    list.append(String.format(Locale.ROOT, "%6d %c %5dMB %7.1fs %4.0f%%  %s%n",
+                            pr.pid, pr.state, pr.rssKb / 1024, pr.cpuTicks / 100.0, c == null ? 0f : c, pr.name));
                 }
                 procListNow = list.toString();
                 if (procNow > procMax) {
@@ -589,6 +610,61 @@ public class DisplayActivity extends Activity {
         }, "ezs-monitor");
         t.setDaemon(true);
         t.start();
+    }
+
+    /**
+     * CPU use of each child process since the previous pass (tick difference / elapsed time;
+     * 100 = one core fully busy), and the top-bar summary: all children, the game, Xvfb, PRoot.
+     * First pass only records the ticks. Processes gone since then are dropped.
+     * 이전 회차 이후 자식 프로세스별 CPU 사용률(틱 차이 / 경과 시간, 100 = 코어 하나를 다 씀)과
+     * 위쪽 막대 요약: 자식 전체, 게임, Xvfb, PRoot. 첫 회차는 틱만 기록함. 그사이 끝난 프로세스는 뺌
+     */
+    private void updateCpu(java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps,
+                           java.util.Map<Integer, Long> lastTicks, long lastNs) {
+        long now = System.nanoTime();
+        float sec = lastNs == 0 ? 0f : (now - lastNs) / 1e9f;
+        java.util.Map<Integer, Float> pct = new java.util.HashMap<>();
+        java.util.Map<Integer, Long> ticks = new java.util.HashMap<>();
+        float all = 0, xvfb = 0, proot = 0;
+        app.ezsteam.runtime.ChildProcessCounter.Proc game = gameOf(ps);
+        for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
+            ticks.put(pr.pid, pr.cpuTicks);
+            Long before = lastTicks.get(pr.pid);
+            if (sec <= 0 || before == null) continue;
+            // Ticks are 1/100 s, so ticks / s = percent of one core / 틱은 1/100초이므로 틱 / 초 = 코어 하나 기준 %
+            float p = Math.max(0, pr.cpuTicks - before) / sec;
+            pct.put(pr.pid, p);
+            all += p;
+            String comm = exeName(pr);
+            if (comm.equals("Xvfb")) xvfb += p;
+            if (comm.contains("libproot")) proot += p;
+        }
+        lastTicks.clear();
+        lastTicks.putAll(ticks);
+        cpuPct = pct;
+        if (sec <= 0) return;
+        Float g = game == null ? null : pct.get(game.pid);
+        cpuText = String.format(Locale.ROOT, "CPU 전체 %.0f%%  게임 %s  Xvfb %.0f%%  PRoot %.0f%%",
+                all, g == null ? "-" : String.format(Locale.ROOT, "%.0f%%", g), xvfb, proot);
+    }
+
+    /** Process name before " | " (kernel comm) / " | " 앞의 프로세스 이름(커널 comm) */
+    private static String exeName(app.ezsteam.runtime.ChildProcessCounter.Proc pr) {
+        int i = pr.name.indexOf(" | ");
+        return i >= 0 ? pr.name.substring(0, i) : pr.name;
+    }
+
+    /** The game: largest .exe that is not a Wine helper, or null / 게임: Wine 보조가 아닌 가장 큰 .exe, 없으면 null */
+    private static app.ezsteam.runtime.ChildProcessCounter.Proc gameOf(
+            java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps) {
+        app.ezsteam.runtime.ChildProcessCounter.Proc game = null;
+        for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
+            String exe = exeName(pr).toLowerCase(Locale.ROOT);
+            if (exe.endsWith(".exe") && !WINE_HELPERS.contains(exe) && (game == null || pr.rssKb > game.rssKb)) {
+                game = pr;
+            }
+        }
+        return game;
     }
 
     /**
@@ -655,18 +731,16 @@ public class DisplayActivity extends Activity {
     private void showProcesses() {
         java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps =
                 app.ezsteam.runtime.ChildProcessCounter.descendants(android.os.Process.myPid());
+        // CPU% = use over the last 2 s monitor interval (100 = one core) / CPU% = 마지막 2초 감시 주기 사용률(100 = 코어 하나)
+        java.util.Map<Integer, Float> pct = cpuPct;
         StringBuilder sb = new StringBuilder("현재 " + ps.size() + "개 (한도: 모든 앱 합계 32)\n"
-                + "   pid 상태  메모리   CPU시간  이름\n");
-        app.ezsteam.runtime.ChildProcessCounter.Proc game = null;
+                + "   pid 상태  메모리   CPU시간 CPU%  이름\n");
         for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
-            sb.append(String.format(Locale.ROOT, "%6d %c %5dMB %7.1fs  %s%n",
-                    pr.pid, pr.state, pr.rssKb / 1024, pr.cpuTicks / 100.0, pr.name));
-            String exe = pr.name.contains(" | ") ? pr.name.substring(0, pr.name.indexOf(" | ")) : pr.name;
-            if (exe.toLowerCase(Locale.ROOT).endsWith(".exe") && !WINE_HELPERS.contains(exe.toLowerCase(Locale.ROOT))
-                    && (game == null || pr.rssKb > game.rssKb)) {
-                game = pr;
-            }
+            Float c = pct.get(pr.pid);
+            sb.append(String.format(Locale.ROOT, "%6d %c %5dMB %7.1fs %4.0f%%  %s%n",
+                    pr.pid, pr.state, pr.rssKb / 1024, pr.cpuTicks / 100.0, c == null ? 0f : c, pr.name));
         }
+        app.ezsteam.runtime.ChildProcessCounter.Proc game = gameOf(ps);
         if (game != null) {
             sb.append("\n게임 스레드 (").append(game.pid).append(")\n   tid 상태   CPU시간  이름  대기함수\n")
                     .append(app.ezsteam.runtime.ChildProcessCounter.threads(game.pid));

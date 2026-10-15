@@ -94,6 +94,7 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - Steam: [시험 도구 설치] → [Steam 설치] → [Steam 실행 1280x800]. 화면은 Xvfb `:98`, 실행 id는 PRoot `--change-id=1000:1000`(가짜 사용자 steam, Steam은 root 거부, Xvfb의 setuid/setgid도 처리됨). 첫 실행은 클라이언트 자체 갱신(수백 MB)으로 오래 걸림. 갱신 후 라이브러리 부족으로 멈추면 [Steam 설치]를 다시 누름(부트스트랩은 건너뛰고 없는 라이브러리만 설치)
 - 프로세스 절감: [CEF 절감: 켬/끔](메인 네 번째 줄, 기본 켬) → steamwebhelper.sh에 Chromium 플래그(`--no-zygote --in-process-gpu --renderer-process-limit=1`, 오디오 서비스 내장) 삽입. 네트워크 서비스 내장은 UI WebSocket 실패(0x3008)로 제외, EZ Proton은 `tabtip.exe` 끔, Steam 모드에서 display.sh가 steam-run.sh로 exec. 화면 [프로세스]: 현재·최대 목록, [Proton]: Proton 로그 마지막 200줄
 - 게임 화면 전달: [게임 화면: …](메인 다섯 번째 줄) → `PutImage`(기본, `MESA_VK_WSI_DEBUG=sw,noshm` + DXVK 수직 동기 끔·60fps 제한) / `SHM 동기 끔` / `SHM mailbox` / `SHM fifo`. 근거: Mesa X11 sw 경로의 present id는 MIT-SHM + Present COMPLETE 이벤트로만 올라가고, DXVK는 FIFO에서만 present id를 제한 시간 없이 기다림. [DXVK HUD: 켬/끔] → `DXVK_HUD=fps,frametimes,gpuload`
+- 화면 위쪽 둘째 줄: 경과 시간, 게임 화면 방식, CPU 사용률(2초 주기, 100% = 코어 하나): 자식 전체·게임·Xvfb·PRoot. [프로세스] 창에도 CPU% 열
 - 화면 위쪽 막대 `자식 N(최대 M)`: 앱 자식 프로세스 수(안드로이드 한도: 모든 앱 합계 32), 28개 이상이면 로그에 `PROC` 목록. `여유`: 기기 여유 메모리
 - [환경 시험]의 `pthread`, `sys-*` 항목이 FAIL `SIGSYS (seccomp)`이면 PRoot가 해당 호출을 처리하지 못한 것 → rootfs glibc 패치(termux-pacman 방식) 검토
 - (선택) 앱 없이: `tools/device-smoke.sh` 머리 주석 참고
