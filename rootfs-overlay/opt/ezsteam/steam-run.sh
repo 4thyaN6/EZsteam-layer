@@ -55,6 +55,43 @@ else
     echo "WARN dbus : dbus-daemon 없음 ([Steam 설치] 다시)"
 fi
 
+# Sound: ALSA default device -> EZSteam plugin -> app socket (/tmp/ezs-audio.sock) -> Android
+# AudioTrack. Wine (winealsa) and other ALSA programs then find one playback device; recording
+# goes to "null" (silence). The plugin comes with the APK (/opt/ezsteam/lib, CI build of
+# native/ezsaudio). Without it the file is removed and programs keep ALSA's own default.
+# 소리: ALSA 기본 장치 -> EZSteam 플러그인 -> 앱 소켓(/tmp/ezs-audio.sock) -> 안드로이드 AudioTrack.
+# Wine(winealsa)과 다른 ALSA 프로그램이 재생 장치 하나를 찾게 됨. 녹음은 "null"(무음)로 연결.
+# 플러그인은 APK에 들어 있음(/opt/ezsteam/lib, native/ezsaudio의 CI 빌드). 없으면 파일을 지우고
+# ALSA 기본값을 그대로 씀
+EZS_ALSA=/opt/ezsteam/lib/libasound_module_pcm_ezs.so
+if [ -f "$EZS_ALSA" ]; then
+    cat > "$HOME/.asoundrc" <<EOF
+# Written by /opt/ezsteam/steam-run.sh at each Steam start (changes here are replaced)
+# /opt/ezsteam/steam-run.sh가 Steam 시작 때마다 씀(여기 고친 내용은 바뀜)
+pcm_type.ezs {
+    lib "$EZS_ALSA"
+}
+pcm.ezs_out {
+    type plug
+    slave {
+        pcm { type ezs socket "/tmp/ezs-audio.sock" }
+        format S16_LE
+        rate 48000
+        channels 2
+    }
+}
+pcm.!default {
+    type asym
+    playback.pcm "ezs_out"
+    capture.pcm "null"
+}
+EOF
+    echo "OK   audio : ALSA 기본 장치 -> 앱 소리 출력 (/tmp/ezs-audio.sock)"
+else
+    rm -f "$HOME/.asoundrc"
+    echo "WARN audio : $EZS_ALSA 없음 (소리 없음)"
+fi
+
 # Key lines of the log are followed by the app itself (DisplayActivity), not by tail/grep processes
 # here: every extra process counts against Android's limit of 32 for all apps together
 # 로그의 주요 줄은 여기의 tail/grep 프로세스가 아니라 앱(DisplayActivity)이 직접 따라 읽음:

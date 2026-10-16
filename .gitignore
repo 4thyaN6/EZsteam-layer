@@ -12,3 +12,6 @@ app/src/main/assets/rootfs.version
 # Built by tools/build-proot-android.sh (CI artifact "proot") / tools/build-proot-android.sh가 만드는 파일
 runtime/src/main/jniLibs/
 runtime/src/main/assets/proot-source.txt
+# Built by tools/build-alsa-plugin.sh (CI artifact "alsa") / tools/build-alsa-plugin.sh가 만드는 파일
+out-alsa/
+rootfs-overlay/opt/ezsteam/lib/

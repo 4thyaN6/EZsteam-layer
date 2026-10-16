@@ -123,8 +123,24 @@ jobs:
           path: out/
           retention-days: 7
 
+  alsa:
+    # ALSA playback plugin for the rootfs (sound -> app -> Android AudioTrack), glibc aarch64,
+    # built in the same Debian release as the rootfs. Small, so it rides in the APK assets.
+    # rootfs용 ALSA 재생 플러그인(소리 -> 앱 -> 안드로이드 AudioTrack), glibc aarch64,
+    # rootfs와 같은 Debian 릴리스에서 빌드. 작아서 APK assets에 넣음
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: alsa plugin
+        run: docker run --rm -v "$PWD:/src" -w /src debian:trixie sh tools/build-alsa-plugin.sh out-alsa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alsa
+          path: out-alsa/
+          retention-days: 14
+
   apk:
-    needs: [proot, rootfs, turnip]
+    needs: [proot, rootfs, turnip, alsa]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -140,6 +156,18 @@ jobs:
           mkdir -p runtime/src/main/jniLibs/arm64-v8a runtime/src/main/assets
           cp proot-artifact/out/jni/*.so runtime/src/main/jniLibs/arm64-v8a/
           cp proot-artifact/runtime/src/main/assets/proot-source.txt runtime/src/main/assets/
+
+      # ALSA plugin into the rootfs helper files (APK assets "ezsteam/lib", copied to /opt/ezsteam/lib)
+      # ALSA 플러그인을 rootfs 보조 파일에 넣음(APK assets "ezsteam/lib", /opt/ezsteam/lib로 복사됨)
+      - uses: actions/download-artifact@v4
+        with:
+          name: alsa
+          path: alsa-artifact
+      - name: place alsa plugin
+        run: |
+          mkdir -p rootfs-overlay/opt/ezsteam/lib
+          cp alsa-artifact/libasound_module_pcm_ezs.so rootfs-overlay/opt/ezsteam/lib/
+          cat alsa-artifact/alsa-plugin.version
 
       - uses: actions/setup-java@v4
         with:

@@ -54,6 +54,11 @@ export WINEDEBUG="${WINEDEBUG:-+timestamp,+pid,+loaddll,err+all,fixme-all}"
 # 상주 Wine 프로세스 줄이기(안드로이드는 모든 앱 합계 추가 프로세스 32개까지 허용):
 # tabtip.exe(터치 키보드 보조)는 필요 없음. Proton이 자기 설정 뒤에 이 값을 덧붙임
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}tabtip.exe=d"
+# Sound through ALSA (the app's plugin, see steam-run.sh): the PulseAudio driver is turned off so
+# Wine does not try a PulseAudio server that does not exist here first
+# 소리는 ALSA로 냄(앱 플러그인, steam-run.sh 참고): 여기에는 없는 PulseAudio 서버를 Wine이 먼저
+# 찾지 않도록 PulseAudio 드라이버를 끔
+export WINEDLLOVERRIDES="$WINEDLLOVERRIDES;winepulse.drv=d"
 export PROTON_LOG_DIR="${PROTON_LOG_DIR:-$HOME/ezs-logs}"
 mkdir -p "$PROTON_LOG_DIR"
 

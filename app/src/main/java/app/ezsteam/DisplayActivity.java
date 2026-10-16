@@ -81,6 +81,8 @@ public class DisplayActivity extends Activity {
     /** CPU use over the last monitor interval, 100 = one core fully busy (monitor thread)
      *  마지막 감시 주기 동안의 CPU 사용률, 100 = 코어 하나를 다 씀(감시 스레드) */
     private volatile String cpuText = "";
+    /** Sound output of the rootfs programs (Steam mode) / rootfs 프로그램의 소리 출력(Steam 모드) */
+    private volatile app.ezsteam.runtime.AudioServer audio;
     private volatile java.util.Map<Integer, Float> cpuPct = new java.util.HashMap<>();
     /** Game frame hand-over mode shown in the top bar (Steam mode) / 위쪽 막대에 보일 게임 화면 전달 방식(Steam 모드) */
     private volatile String wsiName = "";
@@ -156,9 +158,10 @@ public class DisplayActivity extends Activity {
             long sec = (SystemClock.elapsedRealtime() - startMs) / 1000;
             runOnUiThread(() -> statsView.setText(String.format(Locale.ROOT,
                     "%dx%d  화면 %.0ffps  내용변경 %.0f/s  업로드 %.1fms  키 %s  자식 %d(최대 %d)  여유 %.1fGB\n"
-                            + "경과 %d:%02d  %s%s",
+                            + "경과 %d:%02d  %s%s%s",
                     fw, fh, fps, changed, ms, lastKey, procNow, procMax, memFreeMb / 1024f,
-                    sec / 60, sec % 60, wsiName.isEmpty() ? "" : "게임 화면 " + wsiName + "  ", cpuText)));
+                    sec / 60, sec % 60, wsiName.isEmpty() ? "" : "게임 화면 " + wsiName + "  ", cpuText,
+                    audio == null ? "" : "  소리 " + audio.activeStreams())));
         });
         // Soft keyboard text arrives here as key events / 소프트 키보드 텍스트는 키 이벤트로 바뀌어 여기로 옴
         view.setKeyListener(this::sendKey);
@@ -263,6 +266,17 @@ public class DisplayActivity extends Activity {
             }
             c.display = ":" + DISPLAY;
             log("모드 " + mode);
+            // Sound of the programs in the rootfs (ALSA plugin -> socket -> AudioTrack), started
+            // before them so the first sound already finds the socket
+            // rootfs 프로그램의 소리(ALSA 플러그인 -> 소켓 -> AudioTrack). 첫 소리가 소켓을 찾도록 먼저 시작함
+            if ("steam".equals(mode)) {
+                try {
+                    audio = app.ezsteam.runtime.AudioServer.start(c.rootfs, this::log);
+                    log("AUDIO 대기 " + app.ezsteam.runtime.AudioServer.GUEST_SOCKET);
+                } catch (IOException | RuntimeException e) {
+                    log("AUDIO 시작 실패 (소리 없이 계속): " + e);
+                }
+            }
             Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/display.sh",
                     Arrays.asList(Integer.toString(w), Integer.toString(h), mode), null, null);
             proc = p;
@@ -522,6 +536,17 @@ public class DisplayActivity extends Activity {
             while (!finishing) {
                 for (String line : steam.poll()) {
                     if (STEAM_KEY.matcher(line).find()) log("STEAM " + line);
+                    // A game started with Valve's Proton directly goes through the Steam Linux Runtime
+                    // container (pressure-vessel), which cannot start under PRoot (/proc/self/root
+                    // missing, measured); the game then ends right away. EZ Proton skips the container.
+                    // Valve Proton을 직접 고른 게임은 Steam Linux Runtime 컨테이너(pressure-vessel)를 거치는데,
+                    // PRoot 안에서는 시작하지 못함(/proc/self/root 없음, 실측). 그러면 게임이 바로 끝남.
+                    // EZ Proton은 컨테이너를 거치지 않음
+                    if (line.contains("pressure-vessel-wrap") && line.contains(" E: ")) {
+                        log("STEAM " + line);
+                        log("HINT 이 게임의 호환 도구가 EZ Proton이 아님 → 게임 속성 > 호환성에서 "
+                                + "\"EZ Proton (Valve ARM64, direct)\" 선택 (또는 Steam 설정 > 호환성의 기본 도구)");
+                    }
                     if (!wsLogged && line.contains("Failed to connect to websocket")) {
                         wsLogged = true;
                         log("DIAG ---- lsof 호출 (마지막 10)");
@@ -871,6 +896,8 @@ public class DisplayActivity extends Activity {
     protected void onDestroy() {
         finishing = true;
         view.setFramebuffer(null);
+        app.ezsteam.runtime.AudioServer a = audio;
+        if (a != null) a.close();
         XTestClient x = xtest;
         if (x != null) {
             try {
