@@ -99,8 +99,9 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - 게임 호환 도구는 반드시 EZ Proton: Valve Proton을 직접 고르면 Steam Linux Runtime 컨테이너(pressure-vessel)를 거치는데 PRoot 안에서 `opendir(/proc/self/root)` 실패로 게임이 바로 끝남(실측). 앱 로그에 HINT 줄로 알림
 - 소리: rootfs 안 ALSA 기본 장치 → 자체 플러그인 `native/ezsaudio/pcm_ezs.c`(ioplug, S16_LE 48000Hz 2ch 고정, 앞단 plug가 변환) → UNIX 소켓 `/tmp/ezs-audio.sock` → 앱 `AudioServer`(연결마다 AudioTrack, 저지연 모드). 추가 프로세스 없음. 녹음은 같은 플러그인이 무음을 줌(ALSA null은 /dev/full이 막혀 못 씀). 앱 쪽 실제 지연 50 ms 설정. steam-run.sh가 `~/.asoundrc`를 매번 씀, EZ Proton은 `winepulse.drv=d`로 ALSA 사용. 플러그인은 CI `alsa` 작업(debian:trixie arm64)에서 빌드해 APK assets `ezsteam/lib`로 넣음(rootfs 재다운로드 불필요)
 - 뒤로 가기: 실제 장치(키보드·게임패드·마우스)에서 온 뒤로 가기는 X의 Esc로 보냄. 화면 뒤로 가기·[닫기]는 Steam 모드에서 종료를 먼저 물어봄
-- 키보드 포커스: 창 관리자가 없으므로 앱(XTestClient)이 터치·키 누름 때 포인터 아래 최상위 창에 SetInputFocus + WM_TAKE_FOCUS를 보냄(Wine은 WM_TAKE_FOCUS를 받아야 창을 활성화함). 창이 바뀔 때만 보내고 앱 로그에 `X 포커스 → 창 0x…`. 새 최상위 창이 나타나면(루트 SubstructureNotify의 MapNotify, override-redirect 제외) 그 창에도 바로 보냄(`(새 창)`). 볼륨 키는 안드로이드 미디어 볼륨으로
+- 키보드 포커스: 창 관리자가 없으므로 앱(XTestClient)이 터치·키 누름 때 포인터 아래 최상위 창에 SetInputFocus + WM_TAKE_FOCUS를 보냄(Wine은 WM_TAKE_FOCUS를 받아야 창을 활성화함). 창이 바뀔 때만 보내고 앱 로그에 `X 포커스 → 창 0x…`. 새 최상위 창이 나타나면(루트 SubstructureNotify의 MapNotify, override-redirect 제외) 그 창에 바로, 0.3초·1.5초 뒤에 다시 보냄(`(새 창)`). 터치·마우스 누름 때는 같은 창이어도 항상 다시 보냄. 볼륨 키는 안드로이드 미디어 볼륨으로
 - 실제 마우스: 이동(버튼 없이도)·휠(버튼 4~7)·버튼(1 왼쪽, 2 가운데, 3 오른쪽, 8/9 뒤로/앞으로)을 X로 보냄. 화면 위 안드로이드 화살표는 숨김(X 커서만 보임). [마우스 잠금]: 포인터 캡처로 상대 이동(시점 회전 게임용), 다시 터치하면 해제
+- 화면 배치: 위 = 버튼 줄(화면 폭, 넘치면 옆으로 밀림), 가운데 = 로그(화면이 뜨면 숨김, [로그]로 표시), 아래 왼쪽 = 상태 띠([정보]로 숨김). [숨김]은 [≡] 모서리 버튼만 남김
 - 화면 위쪽 막대 `자식 N(최대 M)`: 앱 자식 프로세스 수(안드로이드 한도: 모든 앱 합계 32), 28개 이상이면 로그에 `PROC` 목록. `여유`: 기기 여유 메모리
 - [환경 시험]의 `pthread`, `sys-*` 항목이 FAIL `SIGSYS (seccomp)`이면 PRoot가 해당 호출을 처리하지 못한 것 → rootfs glibc 패치(termux-pacman 방식) 검토
 - (선택) 앱 없이: `tools/device-smoke.sh` 머리 주석 참고

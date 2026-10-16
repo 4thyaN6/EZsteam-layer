@@ -54,6 +54,12 @@ public final class XTestClient implements Closeable {
     /** Log sink given to connect() / connect()에 받은 로그 출력 */
     private volatile Log log;
     private final ExecutorService tx = Executors.newSingleThreadExecutor(r -> new Thread(r, "ezs-xtest"));
+    /** Delayed focus retries / 늦춘 포커스 재시도 */
+    private final java.util.concurrent.ScheduledExecutorService later = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "ezs-xtest-later");
+        t.setDaemon(true);
+        return t;
+    });
     private volatile boolean closed;
 
     private XTestClient(LocalSocket s, OutputStream out, int opcode, int w, int h, String vendor, int vmaj, int vmin,
@@ -199,6 +205,19 @@ public final class XTestClient implements Closeable {
      * 도착, 게임은 반응 없음). 포인터 아래 창이 바뀔 때만 다시 보냄
      */
     public void focusUnderPointer() {
+        focusUnderPointer(false);
+    }
+
+    /**
+     * force: send even when the window under the pointer is the one focused last. Used for presses:
+     * Wine (or the game) may have moved the activation since, and a window that got WM_TAKE_FOCUS
+     * the moment it appeared stayed inactive (measured: focus sent on map, keys and mouse then dead
+     * because later clicks were skipped as "already focused").
+     * force: 포인터 아래 창이 마지막 포커스 창이어도 보냄. 누를 때 씀: 그사이 Wine(또는 게임)이
+     * 활성 창을 옮겼을 수 있고, 나타나는 순간 WM_TAKE_FOCUS를 받은 창이 비활성으로 남았음
+     * (실측: 창이 뜰 때 포커스를 보냈지만 뒤의 클릭을 "이미 포커스"로 건너뛰어 키·마우스가 안 먹힘)
+     */
+    public void focusUnderPointer(boolean force) {
         if (closed) return;
         // QueryPointer(root): reply byte 12..15 = child of root under the pointer
         // QueryPointer(root): 응답 12~15바이트 = 포인터 아래의 루트 자식 창
@@ -206,9 +225,12 @@ public final class XTestClient implements Closeable {
         q.put((byte) 38).put((byte) 0).putShort((short) 2).putInt(root);
         send(q.array(), reply -> {
             int child = ByteBuffer.wrap(reply).order(ByteOrder.LITTLE_ENDIAN).getInt(12);
-            if (child != 0 && child != focused) {
+            if (child == 0) return;
+            if (child != focused) {
                 focused = child;
-                giveFocus(child);
+                giveFocus(child, "", true);
+            } else if (force) {
+                giveFocus(child, "", false);
             }
         });
     }
@@ -221,13 +243,9 @@ public final class XTestClient implements Closeable {
 
     /** SetInputFocus(window, RevertToParent) + ClientMessage WM_PROTOCOLS/WM_TAKE_FOCUS to it
      *  SetInputFocus(창, RevertToParent) + 그 창에 ClientMessage WM_PROTOCOLS/WM_TAKE_FOCUS */
-    private void giveFocus(int window) {
-        giveFocus(window, "");
-    }
-
-    private void giveFocus(int window, String why) {
+    private void giveFocus(int window, String why, boolean logIt) {
         Log l = log;
-        if (l != null) l.line(String.format(java.util.Locale.ROOT, "X 포커스 → 창 0x%x%s", window, why));
+        if (logIt && l != null) l.line(String.format(java.util.Locale.ROOT, "X 포커스 → 창 0x%x%s", window, why));
         ByteBuffer f = le(12);
         f.put((byte) 42).put((byte) 2).putShort((short) 3).putInt(window).putInt(0);
         send(f.array(), null);
@@ -324,7 +342,16 @@ public final class XTestClient implements Closeable {
                         int win = pb.getInt(8);
                         if (p[12] == 0 && win != 0) {
                             focused = win;
-                            giveFocus(win, " (새 창)");
+                            giveFocus(win, " (새 창)", true);
+                            // Again after the program has finished showing it (Wine may not accept
+                            // activation at the very moment of mapping), unless focus moved on
+                            // 프로그램이 창을 다 띄운 뒤에 다시 보냄(Wine은 매핑 순간에는 활성화를 받지
+                            // 않을 수 있음). 그사이 포커스가 다른 창으로 갔으면 보내지 않음
+                            for (long ms : new long[]{300, 1500}) {
+                                later.schedule(() -> {
+                                    if (focused == win && !closed) giveFocus(win, "", false);
+                                }, ms, java.util.concurrent.TimeUnit.MILLISECONDS);
+                            }
                         }
                     }
                 }
@@ -345,6 +372,7 @@ public final class XTestClient implements Closeable {
     public void close() throws IOException {
         closed = true;
         tx.shutdownNow();
+        later.shutdownNow();
         socket.close();
     }
 

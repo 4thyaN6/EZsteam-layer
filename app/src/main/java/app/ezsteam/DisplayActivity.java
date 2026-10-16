@@ -59,6 +59,12 @@ public class DisplayActivity extends Activity {
 
     private FramebufferView view;
     private TextView statsView, logView;
+    /** Buttons, log and status strip / 버튼·로그·상태 띠 */
+    private LinearLayout overlay;
+    /** [≡] corner button shown while the overlay is hidden / 겹침 표시를 숨긴 동안 보이는 [≡] 모서리 버튼 */
+    private Button showButton;
+    /** Status strip wanted ([정보]) / 상태 띠 표시 여부([정보]) */
+    private boolean statsShown = true;
     private ScrollView logScroll;
     private volatile Process proc;
     private volatile XTestClient xtest;
@@ -116,23 +122,32 @@ public class DisplayActivity extends Activity {
         String m = getIntent().getStringExtra(EXTRA_MODE);
         if ("steam".equals(m)) mode = "steam";
 
-        // Screen view full size, a small bar (stats + buttons) on top, log overlay below it
-        // 화면 뷰는 전체 크기, 위에 작은 막대(통계 + 버튼), 그 아래 로그 겹침 표시
+        // Layout (user request: buttons, log and numbers overlapped and moved; the numbers covered
+        // the DXVK HUD in the top-left corner):
+        //   top    : button row only, full width
+        //   middle : log, under the buttons, hidden once the screen is running ([로그] shows it)
+        //   bottom : status numbers, one small strip ([정보] hides it)
+        //   [숨김] hides everything but a small [≡] corner button for playing
+        // Touches outside the visible parts reach the screen view below.
+        // 배치(사용자 요청: 버튼·로그·숫자가 겹치고 움직였으며, 숫자가 왼쪽 위 DXVK HUD를 가렸음):
+        //   위    : 버튼 줄만, 화면 전체 폭
+        //   가운데 : 로그, 버튼 아래. 화면이 돌기 시작하면 숨김([로그]로 표시)
+        //   아래  : 상태 숫자, 작은 띠 하나([정보]로 숨김)
+        //   [숨김]은 작은 [≡] 모서리 버튼만 남기고 모두 숨김(플레이용)
+        // 보이는 부분 밖의 터치는 아래 화면 뷰로 감
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
         view = new FramebufferView(this);
         root.addView(view, new FrameLayout.LayoutParams(-1, -1));
 
+        overlay = new LinearLayout(this);
+        overlay.setOrientation(LinearLayout.VERTICAL);
+        root.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
+
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
         bar.setBackgroundColor(0x99000000);
-        statsView = new TextView(this);
-        statsView.setTextColor(Color.WHITE);
-        statsView.setTypeface(Typeface.MONOSPACE);
-        statsView.setTextSize(12);
-        statsView.setText(w + "x" + h + " 시작 중");
-        bar.addView(statsView);
         scaleButton = addButton(bar, "확대: " + SCALE_NAMES[FramebufferView.SCALE_SHARP], v -> cycleScale());
         addButton(bar, "키보드", v -> toggleKeyboard());
         mouseLockButton = addButton(bar, "마우스 잠금", v -> toggleMouseLock());
@@ -140,8 +155,18 @@ public class DisplayActivity extends Activity {
         addButton(bar, "Proton", v -> showProtonLog());
         addButton(bar, "로그", v -> logScroll.setVisibility(logScroll.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
         addButton(bar, "로그 저장", v -> saveLogs());
+        addButton(bar, "정보", v -> {
+            statsShown = !statsShown;
+            statsView.setVisibility(statsShown ? View.VISIBLE : View.GONE);
+        });
+        addButton(bar, "숨김", v -> setOverlayShown(false));
         addButton(bar, "닫기", v -> confirmClose());
-        root.addView(bar, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END));
+        // Scrolls sideways when the buttons do not fit (narrow screens) / 버튼이 다 안 들어가면 옆으로 밀림(좁은 화면)
+        android.widget.HorizontalScrollView barScroll = new android.widget.HorizontalScrollView(this);
+        barScroll.setFillViewport(true);
+        barScroll.setHorizontalScrollBarEnabled(false);
+        barScroll.addView(bar, new FrameLayout.LayoutParams(-1, -2));
+        overlay.addView(barScroll, new LinearLayout.LayoutParams(-1, -2));
 
         logScroll = new ScrollView(this);
         logView = new TextView(this);
@@ -150,9 +175,28 @@ public class DisplayActivity extends Activity {
         logView.setTextSize(11);
         logView.setBackgroundColor(0xB0000000);
         logScroll.addView(logView);
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-        lp.height = (int) (220 * getResources().getDisplayMetrics().density);
-        root.addView(logScroll, lp);
+        // Ends above the status strip so the two never overlap / 상태 띠 위에서 끝나 둘이 겹치지 않음
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, 0, 1f);
+        lp.bottomMargin = (int) (32 * getResources().getDisplayMetrics().density);
+        overlay.addView(logScroll, lp);
+
+        statsView = new TextView(this);
+        statsView.setTextColor(Color.WHITE);
+        statsView.setTypeface(Typeface.MONOSPACE);
+        statsView.setTextSize(11);
+        statsView.setBackgroundColor(0x99000000);
+        statsView.setText(w + "x" + h + " 시작 중");
+        root.addView(statsView, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START));
+
+        // Corner button that brings the bar back after [숨김] / [숨김] 뒤에 막대를 되돌리는 모서리 버튼
+        showButton = new Button(this);
+        showButton.setText("≡");
+        showButton.setAllCaps(false);
+        showButton.setFocusable(false);
+        showButton.setAlpha(0.5f);
+        showButton.setOnClickListener(v -> setOverlayShown(true));
+        showButton.setVisibility(View.GONE);
+        root.addView(showButton, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END));
         setContentView(root);
         hideSystemBars();
 
@@ -190,10 +234,25 @@ public class DisplayActivity extends Activity {
         startMonitor();
     }
 
+    /** Show or hide the buttons, log and status strip / 버튼·로그·상태 띠를 보이거나 숨김 */
+    private void setOverlayShown(boolean shown) {
+        overlay.setVisibility(shown ? View.VISIBLE : View.GONE);
+        statsView.setVisibility(shown && statsShown ? View.VISIBLE : View.GONE);
+        showButton.setVisibility(shown ? View.GONE : View.VISIBLE);
+    }
+
     private Button addButton(LinearLayout bar, String text, View.OnClickListener l) {
         Button b = new Button(this);
         b.setText(text);
         b.setAllCaps(false);
+        // Compact: ten buttons in one row on a tablet / 작게: 태블릿 한 줄에 버튼 열 개
+        b.setTextSize(13);
+        b.setMinWidth(0);
+        b.setMinimumWidth(0);
+        b.setMinHeight(0);
+        b.setMinimumHeight(0);
+        int pad = (int) (10 * getResources().getDisplayMetrics().density);
+        b.setPadding(pad, pad / 2, pad, pad / 2);
         b.setOnClickListener(l);
         // Buttons must not take key focus from the screen view / 버튼이 화면 뷰의 키 포커스를 가져가지 않게 함
         b.setFocusable(false);
@@ -339,8 +398,9 @@ public class DisplayActivity extends Activity {
             log("X 입력 연결 실패: " + e);
         }
         if ("steam".equals(mode)) startSteamLogTail(c.rootfs);
-        // Steam mode keeps the log open (first start can take minutes) / steam 모드는 로그를 열어 둠(첫 시작이 몇 분 걸릴 수 있음)
-        if (!"steam".equals(mode)) runOnUiThread(() -> logScroll.setVisibility(View.GONE));
+        // The log is hidden once the screen runs, in both modes ([로그] shows it, [로그 저장] keeps it)
+        // 화면이 돌기 시작하면 두 모드 모두 로그를 숨김([로그]로 표시, [로그 저장]으로 보관)
+        runOnUiThread(() -> logScroll.setVisibility(View.GONE));
     }
 
     // ---- touch: absolute pointer, like a touch screen / 터치: 터치스크린처럼 절대 위치 포인터
@@ -358,7 +418,7 @@ public class DisplayActivity extends Activity {
                 x.motion(p[0], p[1]);
                 // Focus the window under the finger before the click (no window manager here)
                 // 클릭 전에 손가락 아래 창에 포커스를 줌(여기에는 창 관리자가 없음)
-                x.focusUnderPointer();
+                x.focusUnderPointer(true);
                 x.button(1, true);
                 leftDown = true;
                 twoFinger = false;
@@ -553,7 +613,7 @@ public class DisplayActivity extends Activity {
         if (changed != 0) {
             // Focus the window under the pointer before a press (no window manager here)
             // 누르기 전에 포인터 아래 창에 포커스를 줌(여기에는 창 관리자가 없음)
-            if ((now & changed) != 0) x.focusUnderPointer();
+            if ((now & changed) != 0) x.focusUnderPointer(true);
             for (int[] m : MOUSE_MAP) {
                 if ((changed & m[0]) != 0) x.button(m[1], (now & m[0]) != 0);
             }
