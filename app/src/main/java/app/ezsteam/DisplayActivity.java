@@ -542,6 +542,13 @@ public class DisplayActivity extends Activity {
         // 키는 포커스 창으로 감: 먼저 포인터 아래 창에 포커스를 줌(바뀌지 않았으면 가벼움)
         if (down && e.getRepeatCount() == 0) x.focusUnderPointer();
         if (down) lastKey = KeyEvent.keyCodeToString(e.getKeyCode()).replace("KEYCODE_", "") + "→" + code;
+        // Input diagnosis: control keys only go to the app log (no letters or digits, so typed text
+        // such as a password never lands in a saved log)
+        // 입력 진단: 조작 키만 앱 로그에 남김(문자·숫자는 남기지 않아 입력한 글, 예컨대 비밀번호가
+        // 저장된 로그에 들어가지 않음)
+        if (down && e.getRepeatCount() == 0 && isControlKey(e.getKeyCode())) {
+            log("KEY " + KeyEvent.keyCodeToString(e.getKeyCode()).replace("KEYCODE_", "") + " → X " + code);
+        }
         // Soft keyboards send capitals as one event with the Shift meta flag: wrap it in Shift
         // 소프트 키보드는 대문자를 Shift 메타 플래그가 붙은 이벤트 하나로 보내므로 Shift로 감쌈
         boolean wrapShift = XKeys.fromSoftKeyboard(e) && e.isShiftPressed() && code != XKeys.SHIFT_L;
@@ -615,7 +622,12 @@ public class DisplayActivity extends Activity {
             // 누르기 전에 포인터 아래 창에 포커스를 줌(여기에는 창 관리자가 없음)
             if ((now & changed) != 0) x.focusUnderPointer(true);
             for (int[] m : MOUSE_MAP) {
-                if ((changed & m[0]) != 0) x.button(m[1], (now & m[0]) != 0);
+                if ((changed & m[0]) != 0) {
+                    boolean press = (now & m[0]) != 0;
+                    x.button(m[1], press);
+                    // Input diagnosis: presses go to the app log / 입력 진단: 누름을 앱 로그에 남김
+                    if (press) log("MOUSE 버튼 " + m[1] + (captured ? " (잠금)" : ""));
+                }
             }
             mouseButtons = now;
         }
@@ -655,6 +667,19 @@ public class DisplayActivity extends Activity {
         // 캡처 상태는 비동기로 바뀌므로 잠시 뒤 표시함
         view.postDelayed(() -> mouseLockButton.setText(view.hasPointerCapture() ? "마우스 잠금 해제" : "마우스 잠금"), 200);
         log("마우스 잠금 " + (view.hasPointerCapture() ? "해제 요청" : "요청 (해제: 이 버튼을 터치)"));
+    }
+
+    /** Keys worth logging for input diagnosis (no text keys) / 입력 진단용으로 남길 키(글자 키 제외) */
+    private static boolean isControlKey(int k) {
+        switch (k) {
+            case KeyEvent.KEYCODE_ENTER: case KeyEvent.KEYCODE_NUMPAD_ENTER: case KeyEvent.KEYCODE_ESCAPE:
+            case KeyEvent.KEYCODE_SPACE: case KeyEvent.KEYCODE_TAB: case KeyEvent.KEYCODE_DEL:
+            case KeyEvent.KEYCODE_DPAD_UP: case KeyEvent.KEYCODE_DPAD_DOWN:
+            case KeyEvent.KEYCODE_DPAD_LEFT: case KeyEvent.KEYCODE_DPAD_RIGHT:
+                return true;
+            default:
+                return k >= KeyEvent.KEYCODE_F1 && k <= KeyEvent.KEYCODE_F12;
+        }
     }
 
     private void toggleKeyboard() {
