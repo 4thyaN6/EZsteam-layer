@@ -47,6 +47,11 @@
  * 불러옴. soname이 같은 libSDL2-2.0.so.0이고, glibc dlopen은 soname이 같은 이미 불러온 객체를 돌려주므로
  * 이후 Wine의 dlopen("libSDL2-2.0.so.0")은 rootfs 것이 아니라 이 사본을 받음.
  *
+ * Steam client: native/ezspad/ezs_pad_steam.c (SDL3, same shared file), started from the
+ * constructor below when the process is the client itself.
+ * Steam 클라이언트: native/ezspad/ezs_pad_steam.c(SDL3, 같은 공유 파일). 프로세스가 클라이언트
+ * 자신이면 아래 생성자에서 시작함.
+ *
  * Environment / 환경변수: EZS_PAD_FILE (default /tmp/ezs-pad0.mem), EZS_PAD_SDL (SDL2 to load first,
  * default /opt/ezsteam/lib/libSDL2-2.0.so.0 / 먼저 불러올 SDL2), EZS_PAD_ALL=1 (every process,
  * for tests / 시험용으로 모든 프로세스에서)
@@ -122,9 +127,30 @@ static void SDLCALL pad_update(void *userdata)
 
 #define SYM(name) (p_##name = (typeof(p_##name))dlsym(sdl, #name))
 
+/* Steam client part (ezs_pad_steam.c, SDL3) / Steam 클라이언트 부분(ezs_pad_steam.c, SDL3) */
+void ezs_pad_steam_start(void);
+
+/* True when /proc/self/exe is the Steam client itself (named "steam")
+   /proc/self/exe가 Steam 클라이언트 자신("steam")이면 참 */
+static int is_steam_client(void)
+{
+    char exe[512];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (n <= 0) return 0;
+    exe[n] = 0;
+    const char *base = strrchr(exe, '/');
+    return strcmp(base ? base + 1 : exe, "steam") == 0;
+}
+
 __attribute__((constructor))
 static void ezs_pad_init(void)
 {
+    /* The Steam client gets the pad through its own SDL3 (Big Picture, menus)
+       Steam 클라이언트는 자체 SDL3으로 패드를 받음(빅픽처, 메뉴) */
+    if (is_steam_client()) {
+        ezs_pad_steam_start();
+        return;
+    }
     const char *all = getenv("EZS_PAD_ALL");
     if (!(all && *all == '1') && !is_winedevice()) return;
 

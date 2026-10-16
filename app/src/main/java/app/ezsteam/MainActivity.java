@@ -47,9 +47,38 @@ public class MainActivity extends Activity {
         int pad = (int) (12 * getResources().getDisplayMetrics().density);
         root.setPadding(pad, pad, pad, pad);
 
+        // Start panel: what a player needs (Steam start, screen size, start-on-launch). The test and
+        // setup buttons below live in a hidden admin section (user request: start Steam right away,
+        // hide the admin mode)
+        // 시작 패널: 사용자에게 필요한 것(Steam 시작, 화면 크기, 앱 시작 시 바로 실행). 아래 시험·설치
+        // 버튼은 숨긴 관리자 영역에 둠(사용자 요청: Steam을 바로 시작, 관리자 모드는 숨김)
+        android.content.SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        LinearLayout start = new LinearLayout(this);
+        start.setOrientation(LinearLayout.HORIZONTAL);
+        root.addView(start);
+        Button go = addButton(start, "Steam 시작", v -> openSteam(steamSize()[0], steamSize()[1]));
+        go.setTextSize(18);
+        Button size = addButton(start, sizeLabel(), null);
+        size.setOnClickListener(v -> {
+            boolean big = !prefs.getBoolean(KEY_BIG_SCREEN, false);
+            prefs.edit().putBoolean(KEY_BIG_SCREEN, big).apply();
+            size.setText(sizeLabel());
+        });
+        Button auto = addButton(start, autoLabel(prefs.getBoolean(KEY_AUTOSTART, true)), null);
+        auto.setOnClickListener(v -> {
+            boolean on = !prefs.getBoolean(KEY_AUTOSTART, true);
+            prefs.edit().putBoolean(KEY_AUTOSTART, on).apply();
+            auto.setText(autoLabel(on));
+        });
+        adminBox = new LinearLayout(this);
+        adminBox.setOrientation(LinearLayout.VERTICAL);
+        Button admin = addButton(start, "관리자 모드", null);
+        admin.setOnClickListener(v -> setAdminShown(adminBox.getVisibility() != View.VISIBLE));
+        root.addView(adminBox);
+
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        root.addView(row);
+        adminBox.addView(row);
         addButton(row, "rootfs 설치", v -> runTask("install", this::doInstall));
         addButton(row, "환경 시험", v -> runTask("smoke", this::doSmoke));
         addButton(row, "자식 프로세스", v -> runTask("procs", this::doProcsLive));
@@ -59,7 +88,7 @@ public class MainActivity extends Activity {
         // Second row: GPU checks / 두 번째 줄: GPU 확인
         LinearLayout row2 = new LinearLayout(this);
         row2.setOrientation(LinearLayout.HORIZONTAL);
-        root.addView(row2);
+        adminBox.addView(row2);
         addButton(row2, "드라이버 설치", v -> runTask("driver", this::doDriverInstall));
         addButton(row2, "GPU 확인", v -> runTask("gpu", this::doGpuCheck));
         addButton(row2, "시험 도구 설치", v -> runTask("tools", this::doToolsInstall));
@@ -69,7 +98,7 @@ public class MainActivity extends Activity {
         // 세 번째 줄: X 화면 크기별 실시간 화면 시험(기기와 같은 16:10, 마지막은 기기 자체 해상도)
         LinearLayout row3 = new LinearLayout(this);
         row3.setOrientation(LinearLayout.HORIZONTAL);
-        root.addView(row3);
+        adminBox.addView(row3);
         addButton(row3, "화면 1280x800", v -> openDisplay(1280, 800));
         addButton(row3, "화면 1920x1200", v -> openDisplay(1920, 1200));
         addButton(row3, "화면 2560x1600", v -> openDisplay(2560, 1600));
@@ -80,7 +109,7 @@ public class MainActivity extends Activity {
         // 네 번째 줄: Valve Linux ARM64 Steam 클라이언트(기기가 Valve에서 직접 받음)
         LinearLayout row4 = new LinearLayout(this);
         row4.setOrientation(LinearLayout.HORIZONTAL);
-        root.addView(row4);
+        adminBox.addView(row4);
         addButton(row4, "Steam 설치", v -> runTask("steam-install", this::doSteamInstall));
         addButton(row4, "Steam 실행 1280x800", v -> openSteam(1280, 800));
         addButton(row4, "Steam 실행 1920x1200", v -> openSteam(1920, 1200));
@@ -99,7 +128,7 @@ public class MainActivity extends Activity {
         // (둘 다 Steam 시작 때 읽으므로 다음 [Steam 실행]부터 적용됨)
         LinearLayout row5 = new LinearLayout(this);
         row5.setOrientation(LinearLayout.HORIZONTAL);
-        root.addView(row5);
+        adminBox.addView(row5);
         Button wsi = addButton(row5, wsiLabel(wsiMode(this)), null);
         wsi.setOnClickListener(v -> {
             int next = (wsiIndex(wsiMode(this)) + 1) % WSI_MODES.length;
@@ -123,7 +152,7 @@ public class MainActivity extends Activity {
         shotView = new android.widget.ImageView(this);
         shotView.setAdjustViewBounds(true);
         shotView.setVisibility(View.GONE);
-        root.addView(shotView, new LinearLayout.LayoutParams(
+        adminBox.addView(shotView, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, (int) (240 * getResources().getDisplayMetrics().density)));
 
         scroll = new ScrollView(this);
@@ -145,6 +174,56 @@ public class MainActivity extends Activity {
         } else if (RootfsInstaller.needsInstall(this)) {
             log("APK 안 rootfs가 설치본과 다름: [rootfs 설치]로 갱신");
         }
+        String missing = notReady();
+        setAdminShown(prefs.getBoolean(KEY_ADMIN, false) || !missing.isEmpty());
+        if (!missing.isEmpty()) {
+            log("Steam 바로 시작 불가: " + missing + " (관리자 모드에서 준비)");
+        } else if (savedInstanceState == null && prefs.getBoolean(KEY_AUTOSTART, true)) {
+            // Only on a fresh launch: coming back from the Steam screen must not start it again
+            // 새로 실행했을 때만: Steam 화면에서 돌아왔을 때 다시 시작하면 안 됨
+            log("앱 시작 시 바로 Steam ([바로 실행]으로 끔)");
+            openSteam(steamSize()[0], steamSize()[1]);
+        }
+    }
+
+    // ---- start panel / 시작 패널
+
+    static final String KEY_AUTOSTART = "autostart", KEY_BIG_SCREEN = "steam.big", KEY_ADMIN = "admin.shown";
+    /** Holds every setup and test row / 모든 설치·시험 줄을 담음 */
+    private LinearLayout adminBox;
+
+    private void setAdminShown(boolean shown) {
+        adminBox.setVisibility(shown ? View.VISIBLE : View.GONE);
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ADMIN, shown).apply();
+    }
+
+    /** Steam screen size: 1280x800 (default) or 1920x1200 / Steam 화면 크기: 1280x800(기본) 또는 1920x1200 */
+    private int[] steamSize() {
+        return getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_BIG_SCREEN, false)
+                ? new int[]{1920, 1200} : new int[]{1280, 800};
+    }
+
+    private String sizeLabel() {
+        int[] s = steamSize();
+        return "화면 " + s[0] + "x" + s[1];
+    }
+
+    private static String autoLabel(boolean on) {
+        return "바로 실행: " + (on ? "켬" : "끔");
+    }
+
+    /**
+     * What is missing before Steam can start, empty when ready: rootfs, GPU driver, Steam client.
+     * Steam 시작 전에 빠진 것, 준비되면 빈 문자열: rootfs, GPU 드라이버, Steam 클라이언트
+     */
+    private String notReady() {
+        if (RootfsInstaller.installedVersion(this).isEmpty()) return "rootfs 미설치";
+        if (RootfsInstaller.needsInstall(this)) return "rootfs 갱신 필요";
+        if (DriverInstaller.installedVersion(this, "turnip").isEmpty()) return "드라이버 미설치";
+        if (!new File(RootfsInstaller.rootfsDir(this), "home/steam/.local/share/Steam/steamrtarm64/steam").isFile()) {
+            return "Steam 미설치";
+        }
+        return "";
     }
 
     /** When this APK was installed or updated (tells whether "install -r" took effect)

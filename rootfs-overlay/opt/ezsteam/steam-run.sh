@@ -99,6 +99,13 @@ fi
 # 제거한 입력 진단의 파일(이전 빌드). 남아 있으면 저장한 zip에서 현재 로그로 오인됨
 rm -f "$HOME/ezs-logs/steam-input-probe.log" "$HOME/ezs-logs/steam-input-scan.txt"
 
+# Game controller in the Steam client (Big Picture, menus): the same preload library that gives Wine
+# its pad attaches it to the client's own SDL3 when loaded into the client (native/ezspad)
+# Steam 클라이언트(빅픽처, 메뉴)의 게임 컨트롤러: Wine에 패드를 주는 같은 preload 라이브러리가
+# 클라이언트에 들어가면 클라이언트 자체 SDL3에 패드를 붙임(native/ezspad)
+EZS_CLIENT_PRELOAD=
+[ -f /opt/ezsteam/lib/libezs_pad.so ] && EZS_CLIENT_PRELOAD=/opt/ezsteam/lib/libezs_pad.so
+
 # Fonts: the phone's fonts are bound to /usr/local/share/fonts/android by the app (read-only).
 # A per-user fontconfig file puts the CJK families after DejaVu for each generic name, so Latin text
 # keeps DejaVu and Korean/Chinese/Japanese characters fall back to Noto Sans CJK. Written at every
@@ -148,7 +155,8 @@ while :; do
     # (방금 갱신됐을 수 있는) 클라이언트의 없는 라이브러리, 보고만 함
     sh /opt/ezsteam/steam-deps.sh check
     echo "INFO steam : 시작 $n ($(date +%H:%M:%S))"
-    "$BIN" -no-cef-sandbox -cef-disable-gpu -chromeosnopreallocate -noverifyfiles >>"$LOG" 2>&1
+    LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_CLIENT_PRELOAD" \
+        "$BIN" -no-cef-sandbox -cef-disable-gpu -chromeosnopreallocate -noverifyfiles >>"$LOG" 2>&1
     rc=$?
     echo "INFO steam : 종료 rc=$rc ($(date +%H:%M:%S))"
     # 42: restart after a self update (at most 5 times in a row) / 42: 자체 갱신 후 재시작(연속 5회까지)

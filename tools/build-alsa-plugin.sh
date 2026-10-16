@@ -26,6 +26,11 @@
 set -eu
 OUT="${1:-out-alsa}"
 SDL_TAG=release-2.30.9
+# SDL3 headers only, for the Steam client part of the controller library (the client brings its
+# own libSDL3; nothing of SDL3 is built or shipped)
+# 컨트롤러 라이브러리의 Steam 클라이언트 부분용 SDL3 헤더만(클라이언트가 자체 libSDL3을 가짐.
+# SDL3은 빌드·배포하지 않음)
+SDL3_TAG=release-3.2.0
 
 apt-get update -q
 # g++: SDL2's CMakeLists declares "project(SDL2 C CXX)", so CMake stops without a C++ compiler even
@@ -73,8 +78,14 @@ fi
 # only glibc + libdl; the constructor must be present
 # 컨트롤러 라이브러리: SDL2 헤더만 씀. SDL2는 실행 중에 불러오므로(dlopen) glibc + libdl만
 # 필요함. 생성자가 들어 있어야 함
-gcc -shared -fPIC -O2 -Wall -Wextra -I/tmp/sdl-inst/include \
-    -o "$OUT/libezs_pad.so" native/ezspad/ezs_pad.c -ldl
+# Two parts with different SDL headers: ezs_pad.c (Wine, SDL2) and ezs_pad_steam.c (Steam client,
+# SDL3), linked into one library
+# SDL 헤더가 다른 두 부분: ezs_pad.c(Wine, SDL2), ezs_pad_steam.c(Steam 클라이언트, SDL3)를 한
+# 라이브러리로 링크함
+git clone -q --depth 1 --branch "$SDL3_TAG" https://github.com/libsdl-org/SDL /tmp/sdl3-src
+gcc -c -fPIC -O2 -Wall -Wextra -I/tmp/sdl-inst/include -o /tmp/ezs_pad.o native/ezspad/ezs_pad.c
+gcc -c -fPIC -O2 -Wall -Wextra -I/tmp/sdl3-src/include -o /tmp/ezs_pad_steam.o native/ezspad/ezs_pad_steam.c
+gcc -shared -o "$OUT/libezs_pad.so" /tmp/ezs_pad.o /tmp/ezs_pad_steam.o -ldl -lpthread
 strip --strip-unneeded "$OUT/libezs_pad.so"
 objdump -p "$OUT/libezs_pad.so" | grep NEEDED
 if objdump -p "$OUT/libezs_pad.so" | grep NEEDED | grep -q SDL; then
@@ -83,5 +94,5 @@ if objdump -p "$OUT/libezs_pad.so" | grep NEEDED | grep -q SDL; then
 fi
 
 dpkg-query -W -f='libasound2-dev ${Version}\n' libasound2-dev > "$OUT/alsa-plugin.version"
-echo "SDL $SDL_TAG" >> "$OUT/alsa-plugin.version"
+echo "SDL $SDL_TAG, SDL3 headers $SDL3_TAG" >> "$OUT/alsa-plugin.version"
 ls -l "$OUT"

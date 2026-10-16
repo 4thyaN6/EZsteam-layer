@@ -1009,7 +1009,7 @@ public class DisplayActivity extends Activity {
     /** Lines of the Steam log shown in the app log (case-insensitive)
      *  앱 로그에 보여 줄 Steam 로그 줄(대소문자 무시) */
     private static final java.util.regex.Pattern STEAM_KEY = java.util.regex.Pattern.compile(
-            "error|fail|fatal|denied|missing|not found|update|download|restart|webhelper|login|exit|lsof|assert"
+            "error|fail|fatal|denied|missing|not found|update|download|restart|webhelper|login|exit|lsof|assert|ezs-pad"
                     + "|websocket|ezproton|proton|compat|launch|wrapper|fex|reaper|appid",
             java.util.regex.Pattern.CASE_INSENSITIVE);
 
