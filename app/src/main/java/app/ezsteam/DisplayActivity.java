@@ -89,6 +89,10 @@ public class DisplayActivity extends Activity {
     private volatile String cpuText = "";
     /** Sound output of the rootfs programs (Steam mode) / rootfs 프로그램의 소리 출력(Steam 모드) */
     private volatile app.ezsteam.runtime.AudioServer audio;
+    /** Game controller state for the rootfs (Steam mode) / rootfs용 게임 컨트롤러 상태(Steam 모드) */
+    private volatile app.ezsteam.runtime.PadFile pad;
+    /** Controller that last sent input, logged once / 마지막으로 입력한 컨트롤러, 한 번만 기록 */
+    private int padDeviceLogged = -1;
     private volatile java.util.Map<Integer, Float> cpuPct = new java.util.HashMap<>();
     /** Game frame hand-over mode shown in the top bar (Steam mode) / 위쪽 막대에 보일 게임 화면 전달 방식(Steam 모드) */
     private volatile String wsiName = "";
@@ -222,7 +226,11 @@ public class DisplayActivity extends Activity {
         // Physical mouse: hover moves, wheel and button changes (not only while a button is held),
         // and relative movement while locked (pointer capture)
         // 실제 마우스: 이동(버튼을 누르지 않아도), 휠, 버튼 변화, 잠금(포인터 캡처) 중 상대 이동
-        view.setOnGenericMotionListener((v, e) -> e.isFromSource(android.view.InputDevice.SOURCE_MOUSE) && onMouse(e, false));
+        view.setOnGenericMotionListener((v, e) -> {
+            // Controller sticks and triggers go to the virtual pad / 컨트롤러 스틱·트리거는 가상 패드로
+            if (e.isFromSource(android.view.InputDevice.SOURCE_JOYSTICK)) return onPadMotion(e);
+            return e.isFromSource(android.view.InputDevice.SOURCE_MOUSE) && onMouse(e, false);
+        });
         view.setOnCapturedPointerListener((v, e) -> onMouse(e, true));
         // Android's own arrow is hidden over the screen: the X cursor drawn in the frame is the one that counts
         // 화면 위에서는 안드로이드 화살표를 숨김: 화면에 그려지는 X 커서가 실제 위치임
@@ -351,6 +359,16 @@ public class DisplayActivity extends Activity {
                     log("AUDIO 대기 " + app.ezsteam.runtime.AudioServer.GUEST_SOCKET);
                 } catch (IOException | RuntimeException e) {
                     log("AUDIO 시작 실패 (소리 없이 계속): " + e);
+                }
+                // Game controller: the app writes the Android controller state here, the rootfs
+                // library native/ezspad turns it into a virtual Xbox 360 pad inside Wine
+                // 게임 컨트롤러: 앱이 안드로이드 컨트롤러 상태를 여기에 쓰고, rootfs 라이브러리
+                // native/ezspad가 Wine 안의 가상 Xbox 360 패드로 바꿈
+                try {
+                    pad = app.ezsteam.runtime.PadFile.open(c.rootfs);
+                    log("PAD 공유 파일 " + app.ezsteam.runtime.PadFile.GUEST_PATH);
+                } catch (IOException | RuntimeException e) {
+                    log("PAD 공유 파일 실패 (컨트롤러 없이 계속): " + e);
                 }
             }
             Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/display.sh",
@@ -494,10 +512,17 @@ public class DisplayActivity extends Activity {
                 || kc == KeyEvent.KEYCODE_VOLUME_MUTE) {
             return super.dispatchKeyEvent(e);
         }
-        // Back: from a physical device (keyboard Esc fallback, gamepad B, mouse) it is Esc in X;
+        // Controller buttons go to the virtual pad, not to X as keys (they showed as "?96" before:
+        // no X keycode; only the d-pad worked because Android also reports it as arrow keys)
+        // 컨트롤러 버튼은 X 키가 아니라 가상 패드로 보냄(전에는 X 키코드가 없어 "?96"처럼 보였고,
+        // 안드로이드가 화살표 키로도 알려 주는 십자키만 동작했음)
+        if (pad != null && isPadKey(e)) return onPadKey(e);
+        // Back: from a physical device (keyboard Esc fallback, mouse) it is Esc in X (a controller's
+        // back is handled above as its B button);
         // only the on-screen back asks to close. Closing ends Steam and the game, and a physical
         // keyboard closed the screen again and again (user report).
-        // 뒤로 가기: 실제 장치(키보드 Esc 대체, 게임패드 B, 마우스)에서 오면 X의 Esc로 보냄.
+        // 뒤로 가기: 실제 장치(키보드 Esc 대체, 마우스)에서 오면 X의 Esc로 보냄(컨트롤러의 뒤로 가기는
+        // 위에서 B 버튼으로 처리함).
         // 화면의 뒤로 가기만 닫기를 물어봄. 닫으면 Steam과 게임이 끝나는데, 실제 키보드에서 화면이
         // 계속 닫혔음(사용자 보고)
         if (e.getKeyCode() == KeyEvent.KEYCODE_BACK) {
@@ -586,6 +611,119 @@ public class DisplayActivity extends Activity {
                 .setPositiveButton("종료", (d, w) -> finish())
                 .setNegativeButton("취소", null)
                 .show();
+    }
+
+    // ---- game controller / 게임 컨트롤러
+
+    /** Android key code -> SDL controller button / 안드로이드 키 코드 -> SDL 컨트롤러 버튼 */
+    private static int padButton(int keyCode) {
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_BUTTON_A: return app.ezsteam.runtime.PadFile.A;
+            case KeyEvent.KEYCODE_BUTTON_B: case KeyEvent.KEYCODE_BACK: return app.ezsteam.runtime.PadFile.B;
+            case KeyEvent.KEYCODE_BUTTON_X: return app.ezsteam.runtime.PadFile.X;
+            case KeyEvent.KEYCODE_BUTTON_Y: return app.ezsteam.runtime.PadFile.Y;
+            case KeyEvent.KEYCODE_BUTTON_L1: return app.ezsteam.runtime.PadFile.LEFT_SHOULDER;
+            case KeyEvent.KEYCODE_BUTTON_R1: return app.ezsteam.runtime.PadFile.RIGHT_SHOULDER;
+            case KeyEvent.KEYCODE_BUTTON_SELECT: return app.ezsteam.runtime.PadFile.BACK;
+            case KeyEvent.KEYCODE_BUTTON_START: return app.ezsteam.runtime.PadFile.START;
+            case KeyEvent.KEYCODE_BUTTON_MODE: return app.ezsteam.runtime.PadFile.GUIDE;
+            case KeyEvent.KEYCODE_BUTTON_THUMBL: return app.ezsteam.runtime.PadFile.LEFT_STICK;
+            case KeyEvent.KEYCODE_BUTTON_THUMBR: return app.ezsteam.runtime.PadFile.RIGHT_STICK;
+            case KeyEvent.KEYCODE_DPAD_UP: return app.ezsteam.runtime.PadFile.DPAD_UP;
+            case KeyEvent.KEYCODE_DPAD_DOWN: return app.ezsteam.runtime.PadFile.DPAD_DOWN;
+            case KeyEvent.KEYCODE_DPAD_LEFT: return app.ezsteam.runtime.PadFile.DPAD_LEFT;
+            case KeyEvent.KEYCODE_DPAD_RIGHT: return app.ezsteam.runtime.PadFile.DPAD_RIGHT;
+            default: return -1;
+        }
+    }
+
+    /** A key event from a controller (buttons, its d-pad, its back key)
+     *  컨트롤러에서 온 키 이벤트(버튼, 컨트롤러 십자키, 컨트롤러의 뒤로 가기) */
+    private static boolean isPadKey(KeyEvent e) {
+        int k = e.getKeyCode();
+        if (KeyEvent.isGamepadButton(k)) return true;
+        boolean fromPad = e.isFromSource(android.view.InputDevice.SOURCE_GAMEPAD)
+                || e.isFromSource(android.view.InputDevice.SOURCE_JOYSTICK);
+        return fromPad && padButton(k) >= 0;
+    }
+
+    /** Controller button press/release -> virtual pad / 컨트롤러 버튼 누름·뗌 -> 가상 패드 */
+    private boolean onPadKey(KeyEvent e) {
+        app.ezsteam.runtime.PadFile p = pad;
+        if (p == null || e.getAction() == KeyEvent.ACTION_MULTIPLE) return true;
+        boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
+        int k = e.getKeyCode();
+        logPadDevice(e.getDevice());
+        if (k == KeyEvent.KEYCODE_BUTTON_L2 || k == KeyEvent.KEYCODE_BUTTON_R2) {
+            // Digital triggers (pads without trigger axes) / 디지털 트리거(트리거 축이 없는 패드)
+            digitalLeft = k == KeyEvent.KEYCODE_BUTTON_L2 ? down : digitalLeft;
+            digitalRight = k == KeyEvent.KEYCODE_BUTTON_R2 ? down : digitalRight;
+            p.setTriggers(Math.max(axisLeft, digitalLeft ? 1f : 0f), Math.max(axisRight, digitalRight ? 1f : 0f));
+        } else {
+            int b = padButton(k);
+            if (b < 0) {
+                lastKey = "PAD?" + k;
+                return true;
+            }
+            if (p.button(b) == down) return true;
+            p.setButton(b, down);
+        }
+        p.write();
+        if (down && e.getRepeatCount() == 0) {
+            lastKey = "PAD " + KeyEvent.keyCodeToString(k).replace("KEYCODE_", "");
+            log("PAD " + KeyEvent.keyCodeToString(k).replace("KEYCODE_", ""));
+        }
+        return true;
+    }
+
+    // Trigger values from axes and from digital buttons / 축과 디지털 버튼에서 온 트리거 값
+    private float axisLeft, axisRight;
+    private boolean digitalLeft, digitalRight;
+
+    /**
+     * Controller sticks, triggers and hat (d-pad on some pads) -> virtual pad. Right stick: Z/RZ on
+     * most Android pads, RX/RY on some; picked by which axes the device reports.
+     * 컨트롤러 스틱·트리거·햇(일부 패드의 십자키) -> 가상 패드. 오른쪽 스틱은 대부분의 안드로이드 패드에서
+     * Z/RZ, 일부는 RX/RY라 장치가 알려 주는 축으로 고름
+     */
+    private boolean onPadMotion(MotionEvent e) {
+        app.ezsteam.runtime.PadFile p = pad;
+        if (p == null) return false;
+        android.view.InputDevice dev = e.getDevice();
+        logPadDevice(dev);
+        boolean zrz = dev == null || dev.getMotionRange(MotionEvent.AXIS_Z, e.getSource()) != null;
+        p.setAxis(0, padAxis(e, dev, MotionEvent.AXIS_X));
+        p.setAxis(1, padAxis(e, dev, MotionEvent.AXIS_Y));
+        p.setAxis(2, padAxis(e, dev, zrz ? MotionEvent.AXIS_Z : MotionEvent.AXIS_RX));
+        p.setAxis(3, padAxis(e, dev, zrz ? MotionEvent.AXIS_RZ : MotionEvent.AXIS_RY));
+        axisLeft = Math.max(e.getAxisValue(MotionEvent.AXIS_LTRIGGER), e.getAxisValue(MotionEvent.AXIS_BRAKE));
+        axisRight = Math.max(e.getAxisValue(MotionEvent.AXIS_RTRIGGER), e.getAxisValue(MotionEvent.AXIS_GAS));
+        p.setTriggers(Math.max(axisLeft, digitalLeft ? 1f : 0f), Math.max(axisRight, digitalRight ? 1f : 0f));
+        float hx = e.getAxisValue(MotionEvent.AXIS_HAT_X), hy = e.getAxisValue(MotionEvent.AXIS_HAT_Y);
+        if (dev != null && dev.getMotionRange(MotionEvent.AXIS_HAT_X, e.getSource()) != null) {
+            p.setButton(app.ezsteam.runtime.PadFile.DPAD_LEFT, hx < -0.5f);
+            p.setButton(app.ezsteam.runtime.PadFile.DPAD_RIGHT, hx > 0.5f);
+            p.setButton(app.ezsteam.runtime.PadFile.DPAD_UP, hy < -0.5f);
+            p.setButton(app.ezsteam.runtime.PadFile.DPAD_DOWN, hy > 0.5f);
+        }
+        p.write();
+        return true;
+    }
+
+    /** Axis value with the device's flat (dead) zone removed / 장치의 무감 영역을 뺀 축 값 */
+    private static float padAxis(MotionEvent e, android.view.InputDevice dev, int axis) {
+        float v = e.getAxisValue(axis);
+        android.view.InputDevice.MotionRange r = dev == null ? null : dev.getMotionRange(axis, e.getSource());
+        float flat = r == null ? 0.1f : Math.max(r.getFlat(), 0.05f);
+        return Math.abs(v) <= flat ? 0f : v;
+    }
+
+    /** Log a controller the first time it sends input / 컨트롤러가 처음 입력할 때 한 번 기록함 */
+    private void logPadDevice(android.view.InputDevice dev) {
+        if (dev == null || dev.getId() == padDeviceLogged) return;
+        padDeviceLogged = dev.getId();
+        log("PAD 컨트롤러: " + dev.getName() + String.format(Locale.ROOT, " (%04x:%04x)",
+                dev.getVendorId(), dev.getProductId()));
     }
 
     // ---- physical mouse / 실제 마우스
@@ -1151,6 +1289,14 @@ public class DisplayActivity extends Activity {
         view.setFramebuffer(null);
         app.ezsteam.runtime.AudioServer a = audio;
         if (a != null) a.close();
+        app.ezsteam.runtime.PadFile pf = pad;
+        if (pf != null) {
+            try {
+                pf.close();
+            } catch (IOException ignored) {
+                // nothing to do / 할 일 없음
+            }
+        }
         XTestClient x = xtest;
         if (x != null) {
             try {

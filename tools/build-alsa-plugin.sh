@@ -10,12 +10,17 @@
 #
 #   docker run --rm -v "$PWD:/src" -w /src debian:trixie sh tools/build-alsa-plugin.sh out-alsa
 #
-# Output / 결과물: libasound_module_pcm_ezs.so, alsa-plugin.version
+# Also builds the game controller preload library (native/ezspad/ezs_pad.c), same container and
+# same delivery path (small native helpers for the rootfs)
+# 게임 컨트롤러 preload 라이브러리(native/ezspad/ezs_pad.c)도 같은 컨테이너에서 빌드함.
+# 전달 경로도 같음(rootfs용 작은 네이티브 보조 파일)
+#
+# Output / 결과물: libasound_module_pcm_ezs.so, libezs_pad.so, alsa-plugin.version
 set -eu
 OUT="${1:-out-alsa}"
 
 apt-get update -q
-apt-get install -y -q --no-install-recommends gcc libc6-dev libasound2-dev binutils
+apt-get install -y -q --no-install-recommends gcc libc6-dev libasound2-dev libsdl2-dev binutils
 
 mkdir -p "$OUT"
 # -DPIC: alsa-lib's plugin macros need it for a shared object (else snd_dlsym_start is undefined)
@@ -28,5 +33,19 @@ strip --strip-unneeded "$OUT/libasound_module_pcm_ezs.so"
 # 플러그인은 open 함수를 내보내고 glibc + libasound만 필요해야 함
 nm -D "$OUT/libasound_module_pcm_ezs.so" | grep -q ' T _snd_pcm_ezs_open$'
 objdump -p "$OUT/libasound_module_pcm_ezs.so" | grep NEEDED
+# Controller library: SDL2 headers only, SDL2 itself is loaded at run time (dlopen), so it needs
+# only glibc + libdl; the constructor must be present
+# 컨트롤러 라이브러리: SDL2 헤더만 씀. SDL2는 실행 중에 불러오므로(dlopen) glibc + libdl만
+# 필요함. 생성자가 들어 있어야 함
+gcc -shared -fPIC -O2 -Wall -Wextra \
+    -o "$OUT/libezs_pad.so" native/ezspad/ezs_pad.c -ldl
+strip --strip-unneeded "$OUT/libezs_pad.so"
+objdump -p "$OUT/libezs_pad.so" | grep NEEDED
+if objdump -p "$OUT/libezs_pad.so" | grep NEEDED | grep -q SDL; then
+    echo "libezs_pad.so must not link SDL2 directly" >&2
+    exit 1
+fi
+
 dpkg-query -W -f='libasound2-dev ${Version}\n' libasound2-dev > "$OUT/alsa-plugin.version"
+dpkg-query -W -f='libsdl2-dev ${Version}\n' libsdl2-dev >> "$OUT/alsa-plugin.version"
 ls -l "$OUT"

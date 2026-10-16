@@ -124,9 +124,11 @@ jobs:
           retention-days: 7
 
   alsa:
-    # ALSA playback plugin for the rootfs (sound -> app -> Android AudioTrack), glibc aarch64,
+    # ALSA playback plugin and game controller preload library for the rootfs (sound -> app ->
+    # Android AudioTrack; Android controller -> app -> Wine), glibc aarch64,
     # built in the same Debian release as the rootfs. Small, so it rides in the APK assets.
-    # rootfs용 ALSA 재생 플러그인(소리 -> 앱 -> 안드로이드 AudioTrack), glibc aarch64,
+    # rootfs용 ALSA 재생 플러그인과 게임 컨트롤러 preload 라이브러리(소리 -> 앱 -> 안드로이드
+    # AudioTrack, 안드로이드 컨트롤러 -> 앱 -> Wine), glibc aarch64,
     # rootfs와 같은 Debian 릴리스에서 빌드. 작아서 APK assets에 넣음
     runs-on: ubuntu-24.04-arm
     steps:
@@ -167,6 +169,9 @@ jobs:
         run: |
           mkdir -p rootfs-overlay/opt/ezsteam/lib
           cp alsa-artifact/libasound_module_pcm_ezs.so rootfs-overlay/opt/ezsteam/lib/
+          # Game controller preload library (native/ezspad), same build job
+          # 게임 컨트롤러 preload 라이브러리(native/ezspad), 같은 빌드 작업
+          cp alsa-artifact/libezs_pad.so rootfs-overlay/opt/ezsteam/lib/
           cat alsa-artifact/alsa-plugin.version
 
       - uses: actions/setup-java@v4
