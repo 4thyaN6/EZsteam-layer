@@ -192,11 +192,18 @@ public class DisplayActivity extends Activity {
         addButton(bar, "숨김", v -> setOverlayShown(false));
         addButton(bar, "닫기", v -> confirmClose());
         // Scrolls sideways when the buttons do not fit (narrow screens) / 버튼이 다 안 들어가면 옆으로 밀림(좁은 화면)
+        // Only as wide as the buttons, at the right: a full-width row covered the Steam client's
+        // menu (Steam, 보기, 친구 ...) in the top-left and took its touches (TOUCH log: taps above
+        // X y=32 never arrived, user report). The space left of the buttons now reaches the screen
+        // 버튼 폭만큼만, 오른쪽에 둠: 화면 전체 폭 줄이 왼쪽 위 Steam 클라이언트 메뉴(Steam, 보기, 친구 ...)를
+        // 덮어 터치를 가져갔음(TOUCH 로그: X y=32 위쪽 탭이 도착하지 않음, 사용자 보고). 이제 버튼 왼쪽
+        // 빈 곳은 화면으로 감
         android.widget.HorizontalScrollView barScroll = new android.widget.HorizontalScrollView(this);
-        barScroll.setFillViewport(true);
         barScroll.setHorizontalScrollBarEnabled(false);
-        barScroll.addView(bar, new FrameLayout.LayoutParams(-1, -2));
-        overlay.addView(barScroll, new LinearLayout.LayoutParams(-1, -2));
+        barScroll.addView(bar, new FrameLayout.LayoutParams(-2, -2));
+        LinearLayout.LayoutParams barLp = new LinearLayout.LayoutParams(-2, -2);
+        barLp.gravity = Gravity.END;
+        overlay.addView(barScroll, barLp);
 
         logScroll = new ScrollView(this);
         logView = new TextView(this);
