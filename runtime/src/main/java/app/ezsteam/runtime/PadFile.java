@@ -32,10 +32,49 @@ public final class PadFile implements Closeable {
     private final RandomAccessFile raf;
     private final MappedByteBuffer buf;
 
-    // Current state / 현재 상태
-    private final float[] axes = new float[4];
-    private float leftTrigger, rightTrigger;
-    private final boolean[] buttons = new boolean[BUTTONS];
+    /**
+     * One input source's controller state. Two sources feed the same virtual pad: a physical
+     * controller and the on-screen touch pad; write() merges them (buttons: either pressed;
+     * sticks: the one pushed further; triggers: the larger).
+     * 입력원 하나의 컨트롤러 상태. 같은 가상 패드에 두 입력원이 들어감: 실제 컨트롤러와 화면 터치 패드.
+     * write()가 합침(버튼: 어느 쪽이든 누르면 누름, 스틱: 더 많이 민 쪽, 트리거: 큰 값)
+     */
+    public static final class State {
+        final float[] axes = new float[4];
+        float leftTrigger, rightTrigger;
+        final boolean[] buttons = new boolean[BUTTONS];
+
+        /** Stick axis 0 lx, 1 ly, 2 rx, 3 ry in -1..1 (down/right positive)
+         *  스틱 축 0 lx, 1 ly, 2 rx, 3 ry, -1..1(아래·오른쪽이 +) */
+        public void setAxis(int i, float v) {
+            axes[i] = Math.max(-1f, Math.min(1f, v));
+        }
+
+        /** Triggers in 0..1 / 트리거 0..1 */
+        public void setTriggers(float left, float right) {
+            leftTrigger = Math.max(0f, Math.min(1f, left));
+            rightTrigger = Math.max(0f, Math.min(1f, right));
+        }
+
+        public void setButton(int i, boolean down) {
+            buttons[i] = down;
+        }
+
+        public boolean button(int i) {
+            return buttons[i];
+        }
+
+        /** Everything released, sticks centred / 모두 뗌, 스틱 가운데 */
+        public void clear() {
+            java.util.Arrays.fill(axes, 0f);
+            leftTrigger = rightTrigger = 0f;
+            java.util.Arrays.fill(buttons, false);
+        }
+    }
+
+    /** Physical controller (methods below) and touch pad sources / 실제 컨트롤러(아래 메서드)와 터치 패드 입력원 */
+    private final State physical = new State();
+    public final State touch = new State();
 
     private PadFile(RandomAccessFile raf, MappedByteBuffer buf) {
         this.raf = raf;
@@ -57,35 +96,44 @@ public final class PadFile implements Closeable {
         return p;
     }
 
-    /** Stick axis 0 lx, 1 ly, 2 rx, 3 ry in -1..1 (down/right positive)
-     *  스틱 축 0 lx, 1 ly, 2 rx, 3 ry, -1..1(아래·오른쪽이 +) */
+    // Physical controller state / 실제 컨트롤러 상태
     public void setAxis(int i, float v) {
-        axes[i] = Math.max(-1f, Math.min(1f, v));
+        physical.setAxis(i, v);
     }
 
-    /** Triggers in 0..1 / 트리거 0..1 */
     public void setTriggers(float left, float right) {
-        leftTrigger = Math.max(0f, Math.min(1f, left));
-        rightTrigger = Math.max(0f, Math.min(1f, right));
+        physical.setTriggers(left, right);
     }
 
     public void setButton(int i, boolean down) {
-        buttons[i] = down;
+        physical.setButton(i, down);
     }
 
     public boolean button(int i) {
-        return buttons[i];
+        return physical.button(i);
     }
 
     /** Write the whole state to the shared file / 전체 상태를 공유 파일에 씀 */
     public synchronized void write() {
         buf.position(0);
-        for (float a : axes) buf.putShort((short) Math.round(a * 32767));
+        // Each stick from the source that pushes it further / 스틱마다 더 많이 민 입력원 값
+        for (int s = 0; s < 4; s += 2) {
+            State src = mag(physical, s) >= mag(touch, s) ? physical : touch;
+            buf.putShort((short) Math.round(src.axes[s] * 32767));
+            buf.putShort((short) Math.round(src.axes[s + 1] * 32767));
+        }
         // Triggers: -32767 released .. 32767 fully pressed / 트리거: -32767 뗌 .. 32767 끝까지 누름
-        buf.putShort((short) Math.round(leftTrigger * 65534 - 32767));
-        buf.putShort((short) Math.round(rightTrigger * 65534 - 32767));
-        for (boolean b : buttons) buf.put((byte) (b ? 1 : 0));
+        float lt = Math.max(physical.leftTrigger, touch.leftTrigger);
+        float rt = Math.max(physical.rightTrigger, touch.rightTrigger);
+        buf.putShort((short) Math.round(lt * 65534 - 32767));
+        buf.putShort((short) Math.round(rt * 65534 - 32767));
+        for (int i = 0; i < BUTTONS; i++) buf.put((byte) (physical.buttons[i] || touch.buttons[i] ? 1 : 0));
         buf.put((byte) 0);
+    }
+
+    /** Squared push of the stick whose x axis is index s / x축 번호가 s인 스틱을 민 정도의 제곱 */
+    private static float mag(State st, int s) {
+        return st.axes[s] * st.axes[s] + st.axes[s + 1] * st.axes[s + 1];
     }
 
     @Override

@@ -100,6 +100,9 @@ public class DisplayActivity extends Activity {
     private volatile app.ezsteam.runtime.AudioServer audio;
     /** Game controller state for the rootfs (Steam mode) / rootfs용 게임 컨트롤러 상태(Steam 모드) */
     private volatile app.ezsteam.runtime.PadFile pad;
+    /** On-screen touch pad over the game ([패드]) / 게임 위 화면 터치 패드([패드]) */
+    private TouchPadView touchPad;
+    private Button padButton;
     /** Controller that last sent input, logged once / 마지막으로 입력한 컨트롤러, 한 번만 기록 */
     private int padDeviceLogged = -1;
     private volatile java.util.Map<Integer, Float> cpuPct = new java.util.HashMap<>();
@@ -152,6 +155,14 @@ public class DisplayActivity extends Activity {
         root.setBackgroundColor(Color.BLACK);
         view = new FramebufferView(this);
         root.addView(view, new FrameLayout.LayoutParams(-1, -1));
+        // Touch pad between the screen and the button row: while shown it takes every touch, the
+        // buttons above stay usable
+        // 화면과 버튼 줄 사이의 터치 패드: 보이는 동안 모든 터치를 받고, 위의 버튼은 그대로 쓸 수 있음
+        touchPad = new TouchPadView(this);
+        touchPad.setVisibility(View.GONE);
+        android.content.SharedPreferences pp = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE);
+        touchPad.setLook(pp.getFloat(PREF_PAD_SCALE, 1f), pp.getFloat(PREF_PAD_OPACITY, 0.45f));
+        root.addView(touchPad, new FrameLayout.LayoutParams(-1, -1));
 
         overlay = new LinearLayout(this);
         overlay.setOrientation(LinearLayout.VERTICAL);
@@ -163,6 +174,12 @@ public class DisplayActivity extends Activity {
         bar.setBackgroundColor(0x99000000);
         scaleButton = addButton(bar, "확대: " + SCALE_NAMES[FramebufferView.SCALE_SHARP], v -> cycleScale());
         addButton(bar, "키보드", v -> toggleKeyboard());
+        padButton = addButton(bar, "패드", v -> setTouchPadShown(touchPad.getVisibility() != View.VISIBLE));
+        // Long press: size (hand size) and opacity / 길게 누름: 크기(손 크기)와 투명도
+        padButton.setOnLongClickListener(v -> {
+            showPadSettings();
+            return true;
+        });
         mouseLockButton = addButton(bar, "마우스 잠금", v -> toggleMouseLock());
         addButton(bar, "프로세스", v -> showProcesses());
         addButton(bar, "Proton", v -> showProtonLog());
@@ -377,6 +394,8 @@ public class DisplayActivity extends Activity {
                 // native/ezspad가 Wine 안의 가상 Xbox 360 패드로 바꿈
                 try {
                     pad = app.ezsteam.runtime.PadFile.open(c.rootfs);
+                    final app.ezsteam.runtime.PadFile opened = pad;
+                    runOnUiThread(() -> touchPad.setPad(opened));
                     log("PAD 공유 파일 " + app.ezsteam.runtime.PadFile.GUEST_PATH);
                 } catch (IOException | RuntimeException e) {
                     log("PAD 공유 파일 실패 (컨트롤러 없이 계속): " + e);
@@ -621,6 +640,88 @@ public class DisplayActivity extends Activity {
                 .setMessage("화면을 닫으면 Steam과 실행 중인 게임이 모두 종료됩니다.")
                 .setPositiveButton("종료", (d, w) -> finish())
                 .setNegativeButton("취소", null)
+                .show();
+    }
+
+    // ---- on-screen touch pad / 화면 터치 패드
+
+    private static final String PREF_PAD_SCALE = "pad.scale", PREF_PAD_OPACITY = "pad.opacity";
+
+    /** Show or hide the touch pad; hiding releases every touch button
+     *  터치 패드를 보이거나 숨김. 숨기면 터치로 누른 버튼을 모두 뗌 */
+    private void setTouchPadShown(boolean shown) {
+        if (shown && pad == null) {
+            log("PAD 터치 패드: Steam 모드에서만 동작 (가상 패드 없음)");
+        }
+        if (!shown) touchPad.releaseAll();
+        touchPad.setVisibility(shown ? View.VISIBLE : View.GONE);
+        padButton.setText(shown ? "패드 끄기" : "패드");
+    }
+
+    /**
+     * Size and opacity of the touch pad, saved for next time. Size scales every control and its
+     * distance from the edges (50..180 %).
+     * 터치 패드 크기와 투명도, 다음에도 유지함. 크기는 모든 조작부와 가장자리까지의 거리를 함께 바꿈(50..180 %)
+     */
+    private void showPadSettings() {
+        android.content.SharedPreferences pp = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE);
+        float[] cur = {pp.getFloat(PREF_PAD_SCALE, 1f), pp.getFloat(PREF_PAD_OPACITY, 0.45f)};
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int pad16 = (int) (16 * getResources().getDisplayMetrics().density);
+        box.setPadding(pad16, pad16, pad16, 0);
+        TextView sizeText = new TextView(this);
+        android.widget.SeekBar size = new android.widget.SeekBar(this);
+        size.setMax(130);  // 50..180 %
+        size.setProgress(Math.round(cur[0] * 100) - 50);
+        TextView alphaText = new TextView(this);
+        android.widget.SeekBar alpha = new android.widget.SeekBar(this);
+        alpha.setMax(75);  // 15..90 %
+        alpha.setProgress(Math.round(cur[1] * 100) - 15);
+        Runnable update = () -> {
+            cur[0] = (size.getProgress() + 50) / 100f;
+            cur[1] = (alpha.getProgress() + 15) / 100f;
+            sizeText.setText("크기(손 크기) " + (size.getProgress() + 50) + "%");
+            alphaText.setText("진하기 " + (alpha.getProgress() + 15) + "%");
+            touchPad.setLook(cur[0], cur[1]);
+        };
+        android.widget.SeekBar.OnSeekBarChangeListener l = new android.widget.SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(android.widget.SeekBar sb, int v, boolean fromUser) {
+                update.run();
+            }
+
+            @Override
+            public void onStartTrackingTouch(android.widget.SeekBar sb) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(android.widget.SeekBar sb) {
+            }
+        };
+        size.setOnSeekBarChangeListener(l);
+        alpha.setOnSeekBarChangeListener(l);
+        box.addView(sizeText);
+        box.addView(size);
+        box.addView(alphaText);
+        box.addView(alpha);
+        update.run();
+        // Show the pad while adjusting so the change is visible / 조절하는 동안 패드를 보여 변화가 보이게 함
+        boolean wasShown = touchPad.getVisibility() == View.VISIBLE;
+        if (!wasShown) setTouchPadShown(true);
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("터치 패드")
+                .setView(box)
+                .setPositiveButton("저장", (d, w) -> pp.edit()
+                        .putFloat(PREF_PAD_SCALE, cur[0]).putFloat(PREF_PAD_OPACITY, cur[1]).apply())
+                .setNeutralButton("기본값", (d, w) -> {
+                    pp.edit().remove(PREF_PAD_SCALE).remove(PREF_PAD_OPACITY).apply();
+                    touchPad.setLook(1f, 0.45f);
+                })
+                .setNegativeButton("취소", (d, w) -> touchPad.setLook(
+                        pp.getFloat(PREF_PAD_SCALE, 1f), pp.getFloat(PREF_PAD_OPACITY, 0.45f)))
+                .setOnCancelListener(d -> touchPad.setLook(
+                        pp.getFloat(PREF_PAD_SCALE, 1f), pp.getFloat(PREF_PAD_OPACITY, 0.45f)))
                 .show();
     }
 
@@ -885,6 +986,9 @@ public class DisplayActivity extends Activity {
     protected void onPause() {
         super.onPause();
         view.onPause();
+        // Fingers lifted while away are never reported; release the touch pad buttons
+        // 화면을 떠난 동안 뗀 손가락은 알려지지 않으므로 터치 패드 버튼을 모두 뗌
+        if (touchPad != null) touchPad.releaseAll();
     }
 
     @Override

@@ -135,18 +135,6 @@ else
     echo "WARN fonts : $EZS_FONTS 없음 (한국어 표시 안 될 수 있음)"
 fi
 
-# Input diagnosis (changes nothing): how the client looks for controllers, for the coming Steam Input
-# controller. Static scan of the client files in the background, plus a preload library in the client
-# process that records input-related file access (native/ezsprobe). Both write to ~/ezs-logs/
-# 입력 진단(아무것도 바꾸지 않음): 다음에 만들 Steam Input 컨트롤러를 위해 클라이언트가 컨트롤러를 찾는
-# 방법을 봄. 클라이언트 파일 정적 검사(백그라운드) + 클라이언트 프로세스에서 입력 관련 파일 접근을
-# 기록하는 preload 라이브러리(native/ezsprobe). 둘 다 ~/ezs-logs/에 씀
-rm -f "$HOME/ezs-logs/steam-input-probe.log"
-(nice -n 10 python3 /opt/ezsteam/steam-input-scan.py "$STEAM_DIR" "$HOME/ezs-logs/steam-input-scan.txt" \
-    >/dev/null 2>&1 &)
-EZS_PROBE=/opt/ezsteam/lib/libezs_input_probe.so
-EZS_CLIENT_PRELOAD=
-[ -f "$EZS_PROBE" ] && EZS_CLIENT_PRELOAD=$EZS_PROBE
 
 cd "$STEAM_DIR" || exit 0
 n=0
@@ -156,8 +144,7 @@ while :; do
     # (방금 갱신됐을 수 있는) 클라이언트의 없는 라이브러리, 보고만 함
     sh /opt/ezsteam/steam-deps.sh check
     echo "INFO steam : 시작 $n ($(date +%H:%M:%S))"
-    LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_CLIENT_PRELOAD" \
-        "$BIN" -no-cef-sandbox -cef-disable-gpu -chromeosnopreallocate -noverifyfiles >>"$LOG" 2>&1
+    "$BIN" -no-cef-sandbox -cef-disable-gpu -chromeosnopreallocate -noverifyfiles >>"$LOG" 2>&1
     rc=$?
     echo "INFO steam : 종료 rc=$rc ($(date +%H:%M:%S))"
     # 42: restart after a self update (at most 5 times in a row) / 42: 자체 갱신 후 재시작(연속 5회까지)
