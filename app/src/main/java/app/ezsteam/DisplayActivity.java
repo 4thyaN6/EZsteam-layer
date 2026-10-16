@@ -98,6 +98,11 @@ public class DisplayActivity extends Activity {
     private long twoFingerStart;
     private float lastAvgY, scrollAcc;
     private int[] lastPos;
+    // Physical mouse state: buttons held (Android BUTTON_* bits), wheel remainder, lock button
+    // 실제 마우스 상태: 누른 버튼(안드로이드 BUTTON_* 비트), 휠 나머지, 잠금 버튼
+    private int mouseButtons;
+    private float wheelV, wheelH, relRestX, relRestY;
+    private Button mouseLockButton;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -130,6 +135,7 @@ public class DisplayActivity extends Activity {
         bar.addView(statsView);
         scaleButton = addButton(bar, "확대: " + SCALE_NAMES[FramebufferView.SCALE_SHARP], v -> cycleScale());
         addButton(bar, "키보드", v -> toggleKeyboard());
+        mouseLockButton = addButton(bar, "마우스 잠금", v -> toggleMouseLock());
         addButton(bar, "프로세스", v -> showProcesses());
         addButton(bar, "Proton", v -> showProtonLog());
         addButton(bar, "로그", v -> logScroll.setVisibility(logScroll.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
@@ -169,6 +175,14 @@ public class DisplayActivity extends Activity {
         // Soft keyboard text arrives here as key events / 소프트 키보드 텍스트는 키 이벤트로 바뀌어 여기로 옴
         view.setKeyListener(this::sendKey);
         view.setOnTouchListener((v, e) -> onTouch(e));
+        // Physical mouse: hover moves, wheel and button changes (not only while a button is held),
+        // and relative movement while locked (pointer capture)
+        // 실제 마우스: 이동(버튼을 누르지 않아도), 휠, 버튼 변화, 잠금(포인터 캡처) 중 상대 이동
+        view.setOnGenericMotionListener((v, e) -> e.isFromSource(android.view.InputDevice.SOURCE_MOUSE) && onMouse(e, false));
+        view.setOnCapturedPointerListener((v, e) -> onMouse(e, true));
+        // Android's own arrow is hidden over the screen: the X cursor drawn in the frame is the one that counts
+        // 화면 위에서는 안드로이드 화살표를 숨김: 화면에 그려지는 X 커서가 실제 위치임
+        view.setPointerIcon(android.view.PointerIcon.getSystemIcon(this, android.view.PointerIcon.TYPE_NULL));
         view.requestFocus();
 
         log("app build=" + BuildConfig.GIT_SHA + ", 요청 해상도 " + w + "x" + h);
@@ -332,6 +346,9 @@ public class DisplayActivity extends Activity {
     // ---- touch: absolute pointer, like a touch screen / 터치: 터치스크린처럼 절대 위치 포인터
 
     private boolean onTouch(MotionEvent e) {
+        // Mouse presses also come here as touches: handle them as a mouse (button per Android button)
+        // 마우스 누름도 터치로 여기에 옴: 마우스로 처리함(안드로이드 버튼별로 X 버튼)
+        if (e.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) return onMouse(e, false);
         XTestClient x = xtest;
         if (x == null) return true;
         switch (e.getActionMasked()) {
@@ -428,6 +445,8 @@ public class DisplayActivity extends Activity {
             // 화면의 뒤로 가기(내비게이션 바, 제스처)는 가상 장치 id -1에서 옴
             android.view.InputDevice dev = e.getDevice();
             boolean physical = e.getDeviceId() > 0 && (dev == null || !dev.isVirtual());
+            // A mouse's back key is the right/back button, already sent as a button / 마우스의 뒤로 가기는 오른쪽·뒤로 버튼이며 이미 버튼으로 보냄
+            if (physical && dev != null && (dev.getSources() & android.view.InputDevice.SOURCE_MOUSE) == android.view.InputDevice.SOURCE_MOUSE) return true;
             if (physical) {
                 XTestClient x = xtest;
                 if (x != null && e.getRepeatCount() == 0 && e.getAction() != KeyEvent.ACTION_MULTIPLE) {
@@ -491,6 +510,91 @@ public class DisplayActivity extends Activity {
                 .setPositiveButton("종료", (d, w) -> finish())
                 .setNegativeButton("취소", null)
                 .show();
+    }
+
+    // ---- physical mouse / 실제 마우스
+
+    /** Android button bit -> X button number / 안드로이드 버튼 비트 -> X 버튼 번호 */
+    private static final int[][] MOUSE_MAP = {
+            {MotionEvent.BUTTON_PRIMARY, 1}, {MotionEvent.BUTTON_TERTIARY, 2}, {MotionEvent.BUTTON_SECONDARY, 3},
+            {MotionEvent.BUTTON_BACK, 8}, {MotionEvent.BUTTON_FORWARD, 9},
+    };
+
+    /**
+     * One mouse event. Unlocked: the X pointer follows the Android position (absolute), so both
+     * cursors stay together (before, only touches moved the X pointer and a mouse moved Android's
+     * own arrow alone; user report). Locked (pointer capture): relative movement for games that turn
+     * the camera with the mouse. Buttons are sent when they change, the wheel as buttons 4-7.
+     * 마우스 이벤트 하나. 잠금 해제: X 포인터가 안드로이드 위치를 따라감(절대 위치)이라 두 커서가
+     * 함께 움직임(전에는 터치만 X 포인터를 옮겨 마우스는 안드로이드 화살표만 따로 움직였음, 사용자 보고).
+     * 잠금(포인터 캡처): 마우스로 시점을 돌리는 게임용 상대 이동. 버튼은 바뀔 때 보내고, 휠은 버튼 4~7로 보냄
+     */
+    private boolean onMouse(MotionEvent e, boolean captured) {
+        XTestClient x = xtest;
+        if (x == null) return true;
+        if (captured) {
+            // Relative axes carry the movement since the last event (fractions kept)
+            // 상대 축은 지난 이벤트 이후 이동량임(소수점 나머지 유지)
+            relRestX += e.getAxisValue(MotionEvent.AXIS_RELATIVE_X);
+            relRestY += e.getAxisValue(MotionEvent.AXIS_RELATIVE_Y);
+            int dx = (int) relRestX, dy = (int) relRestY;
+            relRestX -= dx;
+            relRestY -= dy;
+            if (dx != 0 || dy != 0) x.motionRelative(dx, dy);
+        } else {
+            int[] p = view.toScreen(e.getX(), e.getY());
+            if (p != null && (lastPos == null || p[0] != lastPos[0] || p[1] != lastPos[1])) {
+                x.motion(p[0], p[1]);
+                lastPos = p;
+            }
+        }
+        int now = e.getButtonState();
+        int changed = now ^ mouseButtons;
+        if (changed != 0) {
+            // Focus the window under the pointer before a press (no window manager here)
+            // 누르기 전에 포인터 아래 창에 포커스를 줌(여기에는 창 관리자가 없음)
+            if ((now & changed) != 0) x.focusUnderPointer();
+            for (int[] m : MOUSE_MAP) {
+                if ((changed & m[0]) != 0) x.button(m[1], (now & m[0]) != 0);
+            }
+            mouseButtons = now;
+        }
+        if (e.getActionMasked() == MotionEvent.ACTION_SCROLL) {
+            wheelV += e.getAxisValue(MotionEvent.AXIS_VSCROLL);
+            wheelH += e.getAxisValue(MotionEvent.AXIS_HSCROLL);
+            while (Math.abs(wheelV) >= 1) {
+                int b = wheelV > 0 ? 4 : 5;
+                x.button(b, true);
+                x.button(b, false);
+                wheelV -= Math.signum(wheelV);
+            }
+            while (Math.abs(wheelH) >= 1) {
+                int b = wheelH > 0 ? 7 : 6;
+                x.button(b, true);
+                x.button(b, false);
+                wheelH -= Math.signum(wheelH);
+            }
+        }
+        return true;
+    }
+
+    /**
+     * [마우스 잠금]: capture the mouse for relative movement (Android hides its arrow and sends raw
+     * motion); press the button again with a touch, or leave the app, to release.
+     * [마우스 잠금]: 상대 이동용으로 마우스를 붙잡음(안드로이드가 화살표를 숨기고 원래 움직임을 보냄).
+     * 버튼을 터치로 다시 누르거나 앱을 벗어나면 풀림
+     */
+    private void toggleMouseLock() {
+        if (view.hasPointerCapture()) {
+            view.releasePointerCapture();
+        } else {
+            view.requestFocus();
+            view.requestPointerCapture();
+        }
+        // The capture state changes asynchronously; show it shortly after
+        // 캡처 상태는 비동기로 바뀌므로 잠시 뒤 표시함
+        view.postDelayed(() -> mouseLockButton.setText(view.hasPointerCapture() ? "마우스 잠금 해제" : "마우스 잠금"), 200);
+        log("마우스 잠금 " + (view.hasPointerCapture() ? "해제 요청" : "요청 (해제: 이 버튼을 터치)"));
     }
 
     private void toggleKeyboard() {
