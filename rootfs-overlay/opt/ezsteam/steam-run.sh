@@ -95,6 +95,59 @@ fi
 # 추가 프로세스는 모두 안드로이드의 전체 앱 합계 32개 한도에 포함됨
 : > /tmp/ezs-lsof.log
 
+# Fonts: the phone's fonts are bound to /usr/local/share/fonts/android by the app (read-only).
+# A per-user fontconfig file puts the CJK families after DejaVu for each generic name, so Latin text
+# keeps DejaVu and Korean/Chinese/Japanese characters fall back to Noto Sans CJK. Written at every
+# start (changes in the file are replaced)
+# 글꼴: 앱이 휴대폰 글꼴을 /usr/local/share/fonts/android에 연결함(읽기 전용). 사용자 fontconfig 파일이
+# 각 기본 이름에서 CJK 글꼴을 DejaVu 뒤에 두어, 라틴 문자는 DejaVu로, 한국어·중국어·일본어 글자는
+# Noto Sans CJK로 대체 표시됨. 시작할 때마다 씀(파일을 고쳐도 바뀜)
+EZS_FONTS=/usr/local/share/fonts/android
+mkdir -p "$HOME/.config/fontconfig"
+cat > "$HOME/.config/fontconfig/fonts.conf" <<'EZSFONTS'
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<!-- Written by /opt/ezsteam/steam-run.sh / /opt/ezsteam/steam-run.sh가 씀 -->
+<fontconfig>
+  <dir>/usr/local/share/fonts/android</dir>
+  <alias>
+    <family>sans-serif</family>
+    <prefer><family>DejaVu Sans</family><family>Noto Sans CJK KR</family><family>Noto Sans CJK JP</family>
+      <family>Noto Sans CJK SC</family><family>Noto Sans CJK TC</family></prefer>
+  </alias>
+  <alias>
+    <family>serif</family>
+    <prefer><family>DejaVu Serif</family><family>Noto Serif CJK KR</family><family>Noto Sans CJK KR</family></prefer>
+  </alias>
+  <alias>
+    <family>monospace</family>
+    <prefer><family>DejaVu Sans Mono</family><family>Noto Sans CJK KR</family></prefer>
+  </alias>
+  <alias>
+    <family>Arial</family>
+    <prefer><family>DejaVu Sans</family><family>Noto Sans CJK KR</family></prefer>
+  </alias>
+</fontconfig>
+EZSFONTS
+if [ -d "$EZS_FONTS" ]; then
+    echo "OK   fonts : 휴대폰 글꼴 $(ls "$EZS_FONTS" | wc -l)개, CJK $(ls "$EZS_FONTS" | grep -ci cjk)개"
+else
+    echo "WARN fonts : $EZS_FONTS 없음 (한국어 표시 안 될 수 있음)"
+fi
+
+# Input diagnosis (changes nothing): how the client looks for controllers, for the coming Steam Input
+# controller. Static scan of the client files in the background, plus a preload library in the client
+# process that records input-related file access (native/ezsprobe). Both write to ~/ezs-logs/
+# 입력 진단(아무것도 바꾸지 않음): 다음에 만들 Steam Input 컨트롤러를 위해 클라이언트가 컨트롤러를 찾는
+# 방법을 봄. 클라이언트 파일 정적 검사(백그라운드) + 클라이언트 프로세스에서 입력 관련 파일 접근을
+# 기록하는 preload 라이브러리(native/ezsprobe). 둘 다 ~/ezs-logs/에 씀
+rm -f "$HOME/ezs-logs/steam-input-probe.log"
+(nice -n 10 python3 /opt/ezsteam/steam-input-scan.py "$STEAM_DIR" "$HOME/ezs-logs/steam-input-scan.txt" \
+    >/dev/null 2>&1 &)
+EZS_PROBE=/opt/ezsteam/lib/libezs_input_probe.so
+EZS_CLIENT_PRELOAD=
+[ -f "$EZS_PROBE" ] && EZS_CLIENT_PRELOAD=$EZS_PROBE
+
 cd "$STEAM_DIR" || exit 0
 n=0
 while :; do
@@ -103,7 +156,8 @@ while :; do
     # (방금 갱신됐을 수 있는) 클라이언트의 없는 라이브러리, 보고만 함
     sh /opt/ezsteam/steam-deps.sh check
     echo "INFO steam : 시작 $n ($(date +%H:%M:%S))"
-    "$BIN" -no-cef-sandbox -cef-disable-gpu -chromeosnopreallocate -noverifyfiles >>"$LOG" 2>&1
+    LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_CLIENT_PRELOAD" \
+        "$BIN" -no-cef-sandbox -cef-disable-gpu -chromeosnopreallocate -noverifyfiles >>"$LOG" 2>&1
     rc=$?
     echo "INFO steam : 종료 rc=$rc ($(date +%H:%M:%S))"
     # 42: restart after a self update (at most 5 times in a row) / 42: 자체 갱신 후 재시작(연속 5회까지)

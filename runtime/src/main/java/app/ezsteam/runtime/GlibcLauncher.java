@@ -118,6 +118,10 @@ public final class GlibcLauncher {
      * PRoot command line up to (not including) the guest program.
      * guest 프로그램 앞까지의 PRoot 명령
      */
+    /** Android font folder and where the guest sees it / 안드로이드 글꼴 폴더와 guest에서 보이는 위치 */
+    public static final String ANDROID_FONTS = "/system/fonts";
+    public static final String GUEST_FONTS = "/usr/local/share/fonts/android";
+
     public static List<String> prootArgs(Config c) {
         List<String> cmd = new ArrayList<>();
         cmd.add(new File(c.nativeLibDir, PROOT).getAbsolutePath());
@@ -131,6 +135,14 @@ public final class GlibcLauncher {
         cmd.add("--bind=/proc");
         cmd.add("--bind=/sys");
         cmd.add("--bind=" + shmDir(c).getAbsolutePath() + ":/dev/shm");
+        // The phone's own fonts (read-only, includes Noto Sans CJK on Android) for Korean/Chinese/Japanese
+        // text in the Steam client; the rootfs has only DejaVu. Nothing is copied or shipped: the
+        // guest reads the system folder in place (same approach as DroidDeck). Fontconfig setup:
+        // steam-run.sh
+        // 휴대폰 자체 글꼴(읽기 전용, 안드로이드는 Noto Sans CJK 포함)로 Steam 클라이언트의 한국어·중국어·
+        // 일본어를 표시함. rootfs에는 DejaVu뿐임. 복사·배포 없음: guest가 시스템 폴더를 그대로 읽음
+        // (DroidDeck과 같은 방식). fontconfig 설정은 steam-run.sh
+        if (new File(ANDROID_FONTS).isDirectory()) cmd.add("--bind=" + ANDROID_FONTS + ":" + GUEST_FONTS);
         for (String[] b : c.binds) cmd.add("--bind=" + b[0] + ":" + b[1]);
         if (c.link2symlink) cmd.add("--link2symlink");
         if (c.sysvipc) cmd.add("--sysvipc");

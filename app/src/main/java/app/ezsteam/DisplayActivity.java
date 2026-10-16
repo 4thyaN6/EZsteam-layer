@@ -53,6 +53,15 @@ public class DisplayActivity extends Activity {
     /** Lines kept in the log overlay (Steam prints many) / 로그 겹침 창에 남기는 줄 수(Steam은 많이 출력함) */
     private static final int LOG_LINES = 300;
     private final java.util.ArrayDeque<String> logLines = new java.util.ArrayDeque<>();
+    /**
+     * Longer copy of the app log for [로그 저장] only (the on-screen log keeps LOG_LINES). Measured:
+     * 300 lines covered only the last minutes (controller presses filled it), so the start of a run
+     * was missing from saved logs.
+     * [로그 저장] 전용의 더 긴 앱 로그 사본(화면 로그는 LOG_LINES 유지). 실측: 300줄은 마지막 몇 분만
+     * 담겨(컨트롤러 입력이 채움) 저장한 로그에 실행 시작 부분이 없었음
+     */
+    private static final int SAVE_LINES = 5000;
+    private final java.util.ArrayDeque<String> saveLines = new java.util.ArrayDeque<>();
     private String mode = "test";
     /** X display number used by display.sh / display.sh가 쓰는 X 디스플레이 번호 */
     private static final int DISPLAY = 98;
@@ -285,6 +294,10 @@ public class DisplayActivity extends Activity {
     private void log(String s) {
         runOnUiThread(() -> {
             logLines.addLast(s);
+            // Time stamp only in the saved copy / 시각은 저장용 사본에만 붙임
+            saveLines.addLast(new java.text.SimpleDateFormat("HH:mm:ss", Locale.ROOT)
+                    .format(new java.util.Date()) + " " + s);
+            while (saveLines.size() > SAVE_LINES) saveLines.removeFirst();
             if (logLines.size() > LOG_LINES) {
                 while (logLines.size() > LOG_LINES) logLines.removeFirst();
                 logView.setText(String.join("\n", logLines) + "\n");
@@ -1198,7 +1211,7 @@ public class DisplayActivity extends Activity {
         android.net.Uri uri = data.getData();
         // Snapshots taken on the UI thread; writing happens in the background
         // UI 스레드에서 현재 내용을 떠 두고, 쓰기는 백그라운드에서 함
-        String appLog = String.join("\n", logLines) + "\n";
+        String appLog = String.join("\n", saveLines) + "\n";
         new Thread(() -> writeLogZip(uri, appLog, processText()), "ezs-log-save").start();
     }
 

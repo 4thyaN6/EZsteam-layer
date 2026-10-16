@@ -22,7 +22,8 @@
 # 함께 빌드되어 udev가 없으면 햅틱 초기화가 실패하고, 그래서 Wine SDL 버스가 시작하지 못함).
 # 소스: 아래 libsdl-org/SDL GitHub 릴리스 태그(zlib 라이선스)
 #
-# Output / 결과물: libasound_module_pcm_ezs.so, libezs_pad.so, libSDL2-2.0.so.0, alsa-plugin.version
+# Output / 결과물: libasound_module_pcm_ezs.so, libezs_pad.so, libSDL2-2.0.so.0,
+#                  libezs_input_probe.so, alsa-plugin.version
 set -eu
 OUT="${1:-out-alsa}"
 SDL_TAG=release-2.30.9
@@ -81,6 +82,12 @@ if objdump -p "$OUT/libezs_pad.so" | grep NEEDED | grep -q SDL; then
     echo "libezs_pad.so must not link SDL2 directly" >&2
     exit 1
 fi
+
+# Input diagnosis library for the Steam client process (native/ezsprobe), glibc + libdl only
+# Steam 클라이언트 프로세스용 입력 진단 라이브러리(native/ezsprobe), glibc + libdl만 필요
+gcc -shared -fPIC -O2 -Wall -Wextra -o "$OUT/libezs_input_probe.so" native/ezsprobe/ezs_input_probe.c -ldl -lpthread
+strip --strip-unneeded "$OUT/libezs_input_probe.so"
+objdump -p "$OUT/libezs_input_probe.so" | grep NEEDED
 
 dpkg-query -W -f='libasound2-dev ${Version}\n' libasound2-dev > "$OUT/alsa-plugin.version"
 echo "SDL $SDL_TAG" >> "$OUT/alsa-plugin.version"
