@@ -48,11 +48,12 @@ export PROTON_LOG="${PROTON_LOG:-1}"
 # writes every exception; FEX raises many misalignment exceptions, so that log slows the game)
 # 그 로그의 Wine 디버그 채널: 오류와 불러온 DLL만(Proton 기본값은 +seh로 모든 예외를 기록하는데,
 # FEX는 정렬 예외를 많이 내므로 그 기록이 게임을 느리게 함)
-# +keyboard (input diagnosis): Wine's X11 keyboard driver logs each key event it receives and the
-# window it goes to; one line per key press, so the log stays small
-# +keyboard(입력 진단): Wine X11 키보드 드라이버가 받은 키 이벤트와 보낼 창을 남김. 키 한 번에 몇 줄이라
-# 로그가 크게 늘지 않음
-export WINEDEBUG="${WINEDEBUG:-+timestamp,+pid,+loaddll,+keyboard,err+all,fixme-all}"
+# +key (input diagnosis): Wine's X11 driver logs each key event it receives (X window, keycode,
+# target hwnd; winex11 keyboard.c TRACE_(key)). "+keyboard" was tried first: it logs keymap setup
+# only (about 25,000 lines, no key events)
+# +key(입력 진단): Wine X11 드라이버가 받은 키 이벤트를 남김(X 창, 키코드, 보낼 hwnd, winex11
+# keyboard.c TRACE_(key)). 먼저 써 본 "+keyboard"는 키 배치 준비만 남김(약 25,000줄, 키 이벤트 없음)
+export WINEDEBUG="${WINEDEBUG:-+timestamp,+pid,+loaddll,+key,err+all,fixme-all}"
 # Fewer resident Wine processes (Android allows 32 extra processes for all apps together):
 # tabtip.exe (touch keyboard helper) is not needed; Proton appends this to its own overrides
 # 상주 Wine 프로세스 줄이기(안드로이드는 모든 앱 합계 추가 프로세스 32개까지 허용):

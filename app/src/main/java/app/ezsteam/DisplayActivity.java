@@ -505,13 +505,22 @@ public class DisplayActivity extends Activity {
             // 화면의 뒤로 가기(내비게이션 바, 제스처)는 가상 장치 id -1에서 옴
             android.view.InputDevice dev = e.getDevice();
             boolean physical = e.getDeviceId() > 0 && (dev == null || !dev.isVirtual());
-            // A mouse's back key is the right/back button, already sent as a button / 마우스의 뒤로 가기는 오른쪽·뒤로 버튼이며 이미 버튼으로 보냄
-            if (physical && dev != null && (dev.getSources() & android.view.InputDevice.SOURCE_MOUSE) == android.view.InputDevice.SOURCE_MOUSE) return true;
+            // A mouse's back key is the right/back button, already sent as a button. Decided by the
+            // event's own source: a keyboard with a touchpad reports mouse among its device sources,
+            // and checking the device swallowed its Esc (measured: Esc never reached the game)
+            // 마우스의 뒤로 가기는 오른쪽·뒤로 버튼이며 이미 버튼으로 보냄. 이벤트 자체의 출처로 판단함:
+            // 터치패드가 달린 키보드는 장치 출처에 마우스가 함께 있어, 장치로 판단하면 Esc가 사라졌음
+            // (실측: Esc가 게임에 가지 않음)
+            if (physical && e.isFromSource(android.view.InputDevice.SOURCE_MOUSE)
+                    && !e.isFromSource(android.view.InputDevice.SOURCE_KEYBOARD)) return true;
             if (physical) {
                 XTestClient x = xtest;
                 if (x != null && e.getRepeatCount() == 0 && e.getAction() != KeyEvent.ACTION_MULTIPLE) {
                     x.key(XKeys.ESCAPE, e.getAction() == KeyEvent.ACTION_DOWN);
-                    if (e.getAction() == KeyEvent.ACTION_DOWN) lastKey = "BACK→Esc";
+                    if (e.getAction() == KeyEvent.ACTION_DOWN) {
+                        lastKey = "BACK→Esc";
+                        log("KEY BACK → X " + XKeys.ESCAPE + " (Esc)");
+                    }
                 }
                 return true;
             }

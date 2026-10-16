@@ -45,6 +45,14 @@ public final class XTestClient implements Closeable {
     private final int opcode;
     /** Root window of screen 0, atoms WM_PROTOCOLS and WM_TAKE_FOCUS / 화면 0의 루트 창, 아톰 WM_PROTOCOLS·WM_TAKE_FOCUS */
     private final int root, atomProtocols, atomTakeFocus;
+    /** Atoms WM_STATE and _EZS_TIME (property used to read the X server time)
+     *  아톰 WM_STATE와 _EZS_TIME(X 서버 시각을 읽는 데 쓰는 속성) */
+    private final int atomWmState, atomTime;
+    /** Top-level windows given WM_STATE by this client / 이 클라이언트가 WM_STATE를 준 최상위 창 */
+    private final java.util.Set<Integer> managed = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** Focus requests waiting for a server timestamp, in request order
+     *  서버 시각을 기다리는 포커스 요청(요청 순서대로) */
+    private final java.util.concurrent.ConcurrentLinkedQueue<Integer> timeWaiters = new java.util.concurrent.ConcurrentLinkedQueue<>();
     /** Sequence number of the last request sent (send thread only) / 마지막으로 보낸 요청 순번(전송 스레드 전용) */
     private int seq;
     /** Reply handlers by 16-bit sequence number / 16비트 순번별 응답 처리기 */
@@ -63,13 +71,15 @@ public final class XTestClient implements Closeable {
     private volatile boolean closed;
 
     private XTestClient(LocalSocket s, OutputStream out, int opcode, int w, int h, String vendor, int vmaj, int vmin,
-                        int root, int atomProtocols, int atomTakeFocus, int seq) {
+                        int root, int atomProtocols, int atomTakeFocus, int atomWmState, int atomTime, int seq) {
         this.socket = s;
         this.out = out;
         this.opcode = opcode;
         this.root = root;
         this.atomProtocols = atomProtocols;
         this.atomTakeFocus = atomTakeFocus;
+        this.atomWmState = atomWmState;
+        this.atomTime = atomTime;
         this.seq = seq;
         this.screenWidth = w;
         this.screenHeight = h;
@@ -145,8 +155,11 @@ public final class XTestClient implements Closeable {
             // 4. InternAtom WM_PROTOCOLS, WM_TAKE_FOCUS(순번 3, 4), 창에 포커스를 줄 때 씀
             int aProt = internAtom(out, in, "WM_PROTOCOLS");
             int aTake = internAtom(out, in, "WM_TAKE_FOCUS");
+            // 4b. WM_STATE, _EZS_TIME (sequences 5, 6) / 4b. WM_STATE, _EZS_TIME(순번 5, 6)
+            int aState = internAtom(out, in, "WM_STATE");
+            int aTime = internAtom(out, in, "_EZS_TIME");
 
-            // 5. Watch top-level windows appearing (SubstructureNotify on the root, sequence 5), so a
+            // 5. Watch top-level windows appearing (SubstructureNotify on the root, sequence 7), so a
             //    newly shown window gets the focus like under a window manager. Measured: a game
             //    window shown while the focus was still on the Steam window stayed black on its
             //    movie and took no keys until it was clicked.
@@ -154,11 +167,13 @@ public final class XTestClient implements Closeable {
             //    보인 창에 포커스를 주기 위함. 실측: 포커스가 Steam 창에 남은 채 뜬 게임 창이 동영상에서
             //    검은 화면으로 멈추고, 클릭하기 전까지 키를 받지 않았음
             ByteBuffer cw = le(16);
-            cw.put((byte) 2).put((byte) 0).putShort((short) 4).putInt(rootWin).putInt(0x800).putInt(0x80000);
+            // + PropertyChange on the root: PropertyNotify of _EZS_TIME carries the server time
+            // + 루트의 PropertyChange: _EZS_TIME의 PropertyNotify가 서버 시각을 실어 옴
+            cw.put((byte) 2).put((byte) 0).putShort((short) 4).putInt(rootWin).putInt(0x800).putInt(0x80000 | 0x400000);
             out.write(cw.array());
             out.flush();
 
-            XTestClient c = new XTestClient(s, out, op, w, h, vendor, vmaj, vmin, rootWin, aProt, aTake, 5);
+            XTestClient c = new XTestClient(s, out, op, w, h, vendor, vmaj, vmin, rootWin, aProt, aTake, aState, aTime, 7);
             c.log = log;
             c.startReader(in, log);
             return c;
@@ -228,9 +243,9 @@ public final class XTestClient implements Closeable {
             if (child == 0) return;
             if (child != focused) {
                 focused = child;
-                giveFocus(child, "", true);
+                requestFocus(child, "", true);
             } else if (force) {
-                giveFocus(child, "", false);
+                requestFocus(child, "", false);
             }
         });
     }
@@ -241,13 +256,55 @@ public final class XTestClient implements Closeable {
         focused = 0;
     }
 
-    /** SetInputFocus(window, RevertToParent) + ClientMessage WM_PROTOCOLS/WM_TAKE_FOCUS to it
-     *  SetInputFocus(창, RevertToParent) + 그 창에 ClientMessage WM_PROTOCOLS/WM_TAKE_FOCUS */
-    private void giveFocus(int window, String why, boolean logIt) {
+    /**
+     * Focus a window with a real server timestamp: first an empty append to _EZS_TIME on the root,
+     * whose PropertyNotify gives the current server time, then giveFocus(window, time).
+     * Wine (winex11 window_should_take_focus) ignores WM_TAKE_FOCUS for a window that is not the
+     * foreground one unless its time is later than the window's last WM_STATE change; CurrentTime
+     * (0) never is.
+     * 실제 서버 시각으로 창에 포커스를 줌: 먼저 루트의 _EZS_TIME에 빈 덧붙이기를 하고, 그 PropertyNotify에
+     * 실린 현재 서버 시각으로 giveFocus(창, 시각)를 함. Wine(winex11 window_should_take_focus)은 전경 창이
+     * 아닌 창의 WM_TAKE_FOCUS를, 시각이 그 창의 마지막 WM_STATE 변경보다 늦을 때만 받음. CurrentTime(0)은
+     * 결코 늦지 않음
+     */
+    private void requestFocus(int window, String why, boolean logIt) {
         Log l = log;
         if (logIt && l != null) l.line(String.format(java.util.Locale.ROOT, "X 포커스 → 창 0x%x%s", window, why));
+        if (atomTime == 0) {
+            giveFocus(window, 0);
+            return;
+        }
+        timeWaiters.add(window);
+        // ChangeProperty(root, _EZS_TIME, STRING, 8, Append, 0 bytes) / 빈 덧붙이기
+        ByteBuffer c = le(24);
+        c.put((byte) 18).put((byte) 2).putShort((short) 6).putInt(root).putInt(atomTime).putInt(31)
+                .put((byte) 8).put((byte) 0).putShort((short) 0).putInt(0);
+        send(c.array(), null);
+    }
+
+    /**
+     * Set WM_STATE on a top-level window the way a window manager does (ICCCM: state, icon window).
+     * Wine waits for this property after mapping or unmapping a managed window and, until it comes,
+     * ignores focus for that window ("during WM_STATE change", winex11 event.c). There is no window
+     * manager here to set it.
+     * 창 관리자처럼 최상위 창에 WM_STATE를 둠(ICCCM: 상태, 아이콘 창). Wine은 관리 창을 매핑·언매핑한 뒤
+     * 이 속성을 기다리며, 오기 전까지 그 창의 포커스를 무시함(winex11 event.c "during WM_STATE change").
+     * 여기에는 그것을 둘 창 관리자가 없음
+     */
+    private void setWmState(int window, int state) {
+        if (atomWmState == 0) return;
+        // ChangeProperty(window, WM_STATE, WM_STATE, 32, Replace, {state, None})
+        ByteBuffer c = le(32);
+        c.put((byte) 18).put((byte) 0).putShort((short) 8).putInt(window).putInt(atomWmState).putInt(atomWmState)
+                .put((byte) 32).put((byte) 0).putShort((short) 0).putInt(2).putInt(state).putInt(0);
+        send(c.array(), null);
+    }
+
+    /** SetInputFocus(window, RevertToParent, time) + ClientMessage WM_PROTOCOLS/WM_TAKE_FOCUS(time)
+     *  SetInputFocus(창, RevertToParent, 시각) + 그 창에 ClientMessage WM_PROTOCOLS/WM_TAKE_FOCUS(시각) */
+    private void giveFocus(int window, int time) {
         ByteBuffer f = le(12);
-        f.put((byte) 42).put((byte) 2).putShort((short) 3).putInt(window).putInt(0);
+        f.put((byte) 42).put((byte) 2).putShort((short) 3).putInt(window).putInt(time);
         send(f.array(), null);
         if (atomProtocols == 0 || atomTakeFocus == 0) return;
         // SendEvent: propagate no, event mask 0 (goes to the window's creator), 32-byte ClientMessage
@@ -255,7 +312,7 @@ public final class XTestClient implements Closeable {
         ByteBuffer e = le(44);
         e.put((byte) 25).put((byte) 0).putShort((short) 11).putInt(window).putInt(0);
         e.put((byte) 33).put((byte) 32).putShort((short) 0).putInt(window).putInt(atomProtocols);
-        e.putInt(atomTakeFocus).putInt(0).putInt(0).putInt(0).putInt(0);
+        e.putInt(atomTakeFocus).putInt(time).putInt(0).putInt(0).putInt(0);
         send(e.array(), null);
     }
 
@@ -326,7 +383,7 @@ public final class XTestClient implements Closeable {
                         // BadWindow (3) on focus requests is normal when a window just closed
                         // 창이 막 닫혔을 때 포커스 요청의 BadWindow(3)는 정상
                         int major = p[10] & 0xff;
-                        boolean benign = (p[1] & 0xff) == 3 && (major == 42 || major == 25);
+                        boolean benign = (p[1] & 0xff) == 3 && (major == 42 || major == 25 || major == 18);
                         if (log != null && !benign) log.line("X error code=" + (p[1] & 0xff) + " major=" + major
                                 + " minor=" + (pb.getShort(8) & 0xffff));
                     } else if (p[0] == 1) {
@@ -337,21 +394,44 @@ public final class XTestClient implements Closeable {
                         skip(in, pb.getInt(4) * 4);
                     } else if ((p[0] & 0x7f) == 19) {
                         // MapNotify on the root: bytes 8..11 the window, byte 12 override-redirect
-                        // (menus, tooltips: no focus) / 루트의 MapNotify: 8~11바이트 창, 12바이트
-                        // override-redirect(메뉴·툴팁: 포커스 안 줌)
+                        // (menus, tooltips: not managed, no focus) / 루트의 MapNotify: 8~11바이트 창,
+                        // 12바이트 override-redirect(메뉴·툴팁: 관리 안 함, 포커스 안 줌)
                         int win = pb.getInt(8);
                         if (p[12] == 0 && win != 0) {
+                            managed.add(win);
+                            setWmState(win, 1);
                             focused = win;
-                            giveFocus(win, " (새 창)", true);
-                            // Again after the program has finished showing it (Wine may not accept
-                            // activation at the very moment of mapping), unless focus moved on
-                            // 프로그램이 창을 다 띄운 뒤에 다시 보냄(Wine은 매핑 순간에는 활성화를 받지
-                            // 않을 수 있음). 그사이 포커스가 다른 창으로 갔으면 보내지 않음
-                            for (long ms : new long[]{300, 1500}) {
-                                later.schedule(() -> {
-                                    if (focused == win && !closed) giveFocus(win, "", false);
-                                }, ms, java.util.concurrent.TimeUnit.MILLISECONDS);
-                            }
+                            // After WM_STATE (Wine accepts focus only once it has seen it), and again
+                            // later in case the program was still showing the window; skipped when the
+                            // focus has moved on meanwhile
+                            // WM_STATE 뒤에 보냄(Wine은 그것을 본 뒤에만 포커스를 받음). 프로그램이 창을
+                            // 아직 띄우는 중일 수 있어 뒤에 한 번 더 보냄. 그사이 포커스가 옮겨 갔으면 건너뜀
+                            final int target = win;
+                            later.schedule(() -> {
+                                if (focused == target && !closed) requestFocus(target, " (새 창)", true);
+                            }, 100, java.util.concurrent.TimeUnit.MILLISECONDS);
+                            later.schedule(() -> {
+                                if (focused == target && !closed) requestFocus(target, "", false);
+                            }, 1000, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        }
+                    } else if ((p[0] & 0x7f) == 18) {
+                        // UnmapNotify (real or synthetic from XWithdrawWindow): WM_STATE Withdrawn
+                        // UnmapNotify(실제 또는 XWithdrawWindow의 합성): WM_STATE Withdrawn
+                        int win = pb.getInt(8);
+                        if (managed.contains(win)) setWmState(win, 0);
+                    } else if ((p[0] & 0x7f) == 17) {
+                        // DestroyNotify: forget the window / DestroyNotify: 창을 잊음
+                        int win = pb.getInt(8);
+                        managed.remove(win);
+                        if (focused == win) focused = 0;
+                    } else if ((p[0] & 0x7f) == 28) {
+                        // PropertyNotify: window 4..7, atom 8..11, time 12..15. Our _EZS_TIME on the
+                        // root answers the oldest waiting focus request with the server time
+                        // PropertyNotify: 창 4~7, 아톰 8~11, 시각 12~15. 루트의 _EZS_TIME은 가장 먼저
+                        // 기다린 포커스 요청에 서버 시각으로 답함
+                        if (pb.getInt(4) == root && pb.getInt(8) == atomTime) {
+                            Integer target = timeWaiters.poll();
+                            if (target != null) giveFocus(target, pb.getInt(12));
                         }
                     }
                 }
