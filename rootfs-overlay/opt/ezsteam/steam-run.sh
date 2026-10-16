@@ -94,6 +94,10 @@ fi
 # 로그의 주요 줄은 여기의 tail/grep 프로세스가 아니라 앱(DisplayActivity)이 직접 따라 읽음:
 # 추가 프로세스는 모두 안드로이드의 전체 앱 합계 32개 한도에 포함됨
 : > /tmp/ezs-lsof.log
+# Files of a removed input diagnosis (earlier builds); left behind they were mistaken for current
+# logs in the saved zip
+# 제거한 입력 진단의 파일(이전 빌드). 남아 있으면 저장한 zip에서 현재 로그로 오인됨
+rm -f "$HOME/ezs-logs/steam-input-probe.log" "$HOME/ezs-logs/steam-input-scan.txt"
 
 # Fonts: the phone's fonts are bound to /usr/local/share/fonts/android by the app (read-only).
 # A per-user fontconfig file puts the CJK families after DejaVu for each generic name, so Latin text

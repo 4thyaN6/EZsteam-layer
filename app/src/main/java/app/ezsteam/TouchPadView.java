@@ -32,9 +32,10 @@ import java.util.Map;
  *   손가락으로 패드 상태를 다시 만듦
  * - Stick double tap (tap, then touch again within 300 ms) holds L3/R3 while the finger stays
  *   스틱 두 번 탭(탭 후 300 ms 안에 다시 닿음)하면 손가락을 떼기 전까지 L3/R3을 누름
- * - While shown, every touch belongs to the pad (touches between controls do nothing); use a
- *   physical mouse or hide the pad for the pointer
- *   보이는 동안 모든 터치는 패드 몫임(조작부 사이 터치는 무시). 포인터는 실제 마우스를 쓰거나 패드를 숨김
+ * - A touch that starts away from every control passes through to the screen below (pointer,
+ *   clicks): with the pad left on, the Steam client screen took no touches at all (user report)
+ *   조작부 밖에서 시작한 터치는 아래 화면으로 넘어감(포인터, 클릭): 패드를 켜 둔 채로는 Steam 클라이언트
+ *   화면이 터치를 전혀 받지 못했음(사용자 보고)
  */
 public final class TouchPadView extends View {
 
@@ -175,6 +176,14 @@ public final class TouchPadView extends View {
                 f.x = e.getX(idx);
                 f.y = e.getY(idx);
                 f.control = hit(f.x, f.y);
+                // First finger away from every control: not ours, Android hands the whole gesture
+                // to the screen view below
+                // 첫 손가락이 조작부 밖: 패드 몫이 아님. 안드로이드가 이 동작 전체를 아래 화면 뷰에 넘김
+                if (action == MotionEvent.ACTION_DOWN && f.control == null) {
+                    fingers.clear();
+                    apply();
+                    return false;
+                }
                 if (f.control != null && f.control.kind == STICK) {
                     int s = f.control.target;
                     long now = SystemClock.uptimeMillis();

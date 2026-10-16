@@ -471,6 +471,8 @@ public class DisplayActivity extends Activity {
                 leftDown = true;
                 twoFinger = false;
                 lastPos = p;
+                // Input diagnosis: where each tap lands in X / 입력 진단: 탭이 X의 어디에 닿았는지
+                log("TOUCH " + p[0] + "," + p[1]);
                 break;
             }
             case MotionEvent.ACTION_POINTER_DOWN:
