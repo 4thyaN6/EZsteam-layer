@@ -33,7 +33,22 @@
  *   uint8 btn[15]                  SDL 컨트롤러 순서: A B X Y Back Guide Start LS RS LB RB 위 아래 왼쪽 오른쪽
  *   uint8 hat                      안 씀(십자키는 btn에 있음)
  *
- * Environment / 환경변수: EZS_PAD_FILE (default /tmp/ezs-pad0.mem), EZS_PAD_ALL=1 (every process,
+ * SDL2 without udev (measured on the device: the virtual pad was attached, yet Wine's
+ * SDL_Init(GAMECONTROLLER | HAPTIC) still failed with "Could not initialize UDEV". The message comes
+ * from SDL's Linux haptic driver, which always calls SDL_UDEV_Init when SDL is built with libudev;
+ * SDL_JOYSTICK_DISABLE_UDEV only covers joysticks). So the APK carries its own SDL2 build without
+ * libudev (tools/build-alsa-plugin.sh), loaded here by full path first. Its soname is the same
+ * libSDL2-2.0.so.0, and glibc's dlopen returns an already loaded object with a matching soname, so
+ * Wine's later dlopen("libSDL2-2.0.so.0") gets this copy, not the rootfs one.
+ * udev 없는 SDL2(기기 실측: 가상 패드는 붙었지만 Wine의 SDL_Init(GAMECONTROLLER | HAPTIC)이 여전히
+ * "Could not initialize UDEV"로 실패. 이 메시지는 SDL 리눅스 햅틱 드라이버에서 나오며, libudev와 함께
+ * 빌드된 SDL은 햅틱 초기화 때 항상 SDL_UDEV_Init을 부름. SDL_JOYSTICK_DISABLE_UDEV는 조이스틱만 해당).
+ * 그래서 APK에 libudev 없이 빌드한 SDL2를 넣고(tools/build-alsa-plugin.sh) 여기서 전체 경로로 먼저
+ * 불러옴. soname이 같은 libSDL2-2.0.so.0이고, glibc dlopen은 soname이 같은 이미 불러온 객체를 돌려주므로
+ * 이후 Wine의 dlopen("libSDL2-2.0.so.0")은 rootfs 것이 아니라 이 사본을 받음.
+ *
+ * Environment / 환경변수: EZS_PAD_FILE (default /tmp/ezs-pad0.mem), EZS_PAD_SDL (SDL2 to load first,
+ * default /opt/ezsteam/lib/libSDL2-2.0.so.0 / 먼저 불러올 SDL2), EZS_PAD_ALL=1 (every process,
  * for tests / 시험용으로 모든 프로세스에서)
  */
 #define _GNU_SOURCE
@@ -48,6 +63,7 @@
 #include <SDL2/SDL.h>
 
 #define PAD_FILE_DEFAULT "/tmp/ezs-pad0.mem"
+#define PAD_SDL_DEFAULT "/opt/ezsteam/lib/libSDL2-2.0.so.0"
 #define NAXES 6
 #define NBUTTONS 15
 
@@ -120,9 +136,19 @@ static void ezs_pad_init(void)
         return;
     }
 
-    /* Same library Wine loads (SONAME_LIBSDL2), kept global so Wine gets this instance
-       Wine이 부르는 것과 같은 라이브러리(SONAME_LIBSDL2). 전역으로 두어 Wine이 이 인스턴스를 씀 */
-    void *sdl = dlopen("libSDL2-2.0.so.0", RTLD_NOW | RTLD_GLOBAL);
+    /* Own udev-free SDL2 first (see top), else the system one; same soname as Wine's
+       SONAME_LIBSDL2, kept global so Wine gets this instance
+       먼저 자체 udev 없는 SDL2(맨 위 참고), 없으면 시스템 것. Wine의 SONAME_LIBSDL2와 soname이 같고,
+       전역으로 두어 Wine이 이 인스턴스를 씀 */
+    const char *own = getenv("EZS_PAD_SDL");
+    if (!own || !*own) own = PAD_SDL_DEFAULT;
+    const char *used = own;
+    void *sdl = dlopen(own, RTLD_NOW | RTLD_GLOBAL);
+    if (!sdl) {
+        LOG("own SDL2 %s not loaded (%s), trying the system one\n", own, dlerror());
+        used = "libSDL2-2.0.so.0";
+        sdl = dlopen(used, RTLD_NOW | RTLD_GLOBAL);
+    }
     if (!sdl) {
         LOG("dlopen libSDL2-2.0.so.0 failed: %s\n", dlerror());
         return;
@@ -146,6 +172,12 @@ static void ezs_pad_init(void)
         LOG("SDL_Init(JOYSTICK) failed: %s\n", p_SDL_GetError());
         return;
     }
+    /* Same subsystems Wine's SDL bus starts (winebus bus_sdl.c); a failure here is what Wine
+       would hit, so it is logged now
+       Wine SDL 버스가 시작하는 것과 같은 하위 시스템(winebus bus_sdl.c). 여기서 실패하면 Wine도
+       같은 실패를 하므로 지금 기록함 */
+    if (p_SDL_Init(SDL_INIT_GAMECONTROLLER | SDL_INIT_HAPTIC) != 0)
+        LOG("SDL_Init(GAMECONTROLLER | HAPTIC) failed: %s (Wine will not see the pad)\n", p_SDL_GetError());
 
     SDL_VirtualJoystickDesc d;
     memset(&d, 0, sizeof(d));
@@ -178,5 +210,5 @@ static void ezs_pad_init(void)
     /* All zero as the starting point; the first update sends whatever differs in the file
        시작점은 모두 0. 첫 갱신 때 파일과 다른 값을 보냄 */
     memset(&last, 0, sizeof(last));
-    LOG("virtual controller ready (index %d, file %s, pid %d)\n", index, path, (int)getpid());
+    LOG("virtual controller ready (index %d, file %s, SDL %s, pid %d)\n", index, path, used, (int)getpid());
 }

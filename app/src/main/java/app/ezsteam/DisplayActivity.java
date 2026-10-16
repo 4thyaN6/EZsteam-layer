@@ -227,8 +227,6 @@ public class DisplayActivity extends Activity {
         // and relative movement while locked (pointer capture)
         // 실제 마우스: 이동(버튼을 누르지 않아도), 휠, 버튼 변화, 잠금(포인터 캡처) 중 상대 이동
         view.setOnGenericMotionListener((v, e) -> {
-            // Controller sticks and triggers go to the virtual pad / 컨트롤러 스틱·트리거는 가상 패드로
-            if (e.isFromSource(android.view.InputDevice.SOURCE_JOYSTICK)) return onPadMotion(e);
             return e.isFromSource(android.view.InputDevice.SOURCE_MOUSE) && onMouse(e, false);
         });
         view.setOnCapturedPointerListener((v, e) -> onMouse(e, true));
@@ -637,14 +635,43 @@ public class DisplayActivity extends Activity {
         }
     }
 
-    /** A key event from a controller (buttons, its d-pad, its back key)
-     *  컨트롤러에서 온 키 이벤트(버튼, 컨트롤러 십자키, 컨트롤러의 뒤로 가기) */
+    /**
+     * A key event from a controller (buttons, its d-pad, its back key). The d-pad and back keys are
+     * also keyboard keys, so they count only when the sending device is a controller: the event
+     * source says gamepad/joystick, or the device has gamepad/joystick sources and no letter keys.
+     * Measured on the device: controller d-pad keys still went to X as arrow keys (KEY DPAD_DOWN
+     * -> X 116) when only the event source was checked.
+     * 컨트롤러에서 온 키 이벤트(버튼, 컨트롤러 십자키, 컨트롤러의 뒤로 가기). 십자키와 뒤로 가기는
+     * 키보드 키이기도 해서 보낸 장치가 컨트롤러일 때만 셈: 이벤트 출처가 게임패드·조이스틱이거나,
+     * 장치 출처에 게임패드·조이스틱이 있고 글자 키가 없음. 기기 실측: 이벤트 출처만 볼 때 컨트롤러
+     * 십자키가 여전히 X 화살표 키로 감(KEY DPAD_DOWN -> X 116)
+     */
     private static boolean isPadKey(KeyEvent e) {
         int k = e.getKeyCode();
         if (KeyEvent.isGamepadButton(k)) return true;
-        boolean fromPad = e.isFromSource(android.view.InputDevice.SOURCE_GAMEPAD)
-                || e.isFromSource(android.view.InputDevice.SOURCE_JOYSTICK);
-        return fromPad && padButton(k) >= 0;
+        if (padButton(k) < 0) return false;
+        if (e.isFromSource(android.view.InputDevice.SOURCE_GAMEPAD)
+                || e.isFromSource(android.view.InputDevice.SOURCE_JOYSTICK)) return true;
+        android.view.InputDevice dev = e.getDevice();
+        if (dev == null || dev.isVirtual()) return false;
+        int src = dev.getSources();
+        boolean padDevice = (src & android.view.InputDevice.SOURCE_GAMEPAD) == android.view.InputDevice.SOURCE_GAMEPAD
+                || (src & android.view.InputDevice.SOURCE_JOYSTICK) == android.view.InputDevice.SOURCE_JOYSTICK;
+        return padDevice && dev.getKeyboardType() != android.view.InputDevice.KEYBOARD_TYPE_ALPHABETIC;
+    }
+
+    /**
+     * Controller sticks/triggers at the window level, before view focus decides the receiver. When no
+     * view took them, Android turned the stick and hat into d-pad key repeats (ViewRootImpl
+     * SyntheticJoystickHandler), seen as long runs of DPAD_DOWN in the log.
+     * 컨트롤러 스틱·트리거를 창 단계에서 받음(뷰 포커스가 받는 곳을 정하기 전). 어느 뷰도 받지 않으면
+     * 안드로이드가 스틱·햇을 십자키 반복 입력으로 바꿈(ViewRootImpl SyntheticJoystickHandler). 로그의
+     * 긴 DPAD_DOWN 연속이 그것으로 보임
+     */
+    @Override
+    public boolean dispatchGenericMotionEvent(MotionEvent e) {
+        if (pad != null && e.isFromSource(android.view.InputDevice.SOURCE_JOYSTICK)) return onPadMotion(e);
+        return super.dispatchGenericMotionEvent(e);
     }
 
     /** Controller button press/release -> virtual pad / 컨트롤러 버튼 누름·뗌 -> 가상 패드 */
