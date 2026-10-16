@@ -140,7 +140,19 @@ public final class XTestClient implements Closeable {
             int aProt = internAtom(out, in, "WM_PROTOCOLS");
             int aTake = internAtom(out, in, "WM_TAKE_FOCUS");
 
-            XTestClient c = new XTestClient(s, out, op, w, h, vendor, vmaj, vmin, rootWin, aProt, aTake, 4);
+            // 5. Watch top-level windows appearing (SubstructureNotify on the root, sequence 5), so a
+            //    newly shown window gets the focus like under a window manager. Measured: a game
+            //    window shown while the focus was still on the Steam window stayed black on its
+            //    movie and took no keys until it was clicked.
+            // 5. 최상위 창이 나타나는 것을 지켜봄(루트에 SubstructureNotify, 순번 5). 창 관리자처럼 새로
+            //    보인 창에 포커스를 주기 위함. 실측: 포커스가 Steam 창에 남은 채 뜬 게임 창이 동영상에서
+            //    검은 화면으로 멈추고, 클릭하기 전까지 키를 받지 않았음
+            ByteBuffer cw = le(16);
+            cw.put((byte) 2).put((byte) 0).putShort((short) 4).putInt(rootWin).putInt(0x800).putInt(0x80000);
+            out.write(cw.array());
+            out.flush();
+
+            XTestClient c = new XTestClient(s, out, op, w, h, vendor, vmaj, vmin, rootWin, aProt, aTake, 5);
             c.log = log;
             c.startReader(in, log);
             return c;
@@ -210,8 +222,12 @@ public final class XTestClient implements Closeable {
     /** SetInputFocus(window, RevertToParent) + ClientMessage WM_PROTOCOLS/WM_TAKE_FOCUS to it
      *  SetInputFocus(창, RevertToParent) + 그 창에 ClientMessage WM_PROTOCOLS/WM_TAKE_FOCUS */
     private void giveFocus(int window) {
+        giveFocus(window, "");
+    }
+
+    private void giveFocus(int window, String why) {
         Log l = log;
-        if (l != null) l.line(String.format(java.util.Locale.ROOT, "X 포커스 → 창 0x%x", window));
+        if (l != null) l.line(String.format(java.util.Locale.ROOT, "X 포커스 → 창 0x%x%s", window, why));
         ByteBuffer f = le(12);
         f.put((byte) 42).put((byte) 2).putShort((short) 3).putInt(window).putInt(0);
         send(f.array(), null);
@@ -301,6 +317,15 @@ public final class XTestClient implements Closeable {
                         if (h != null) h.accept(p);
                     } else if ((p[0] & 0x7f) == 35) {
                         skip(in, pb.getInt(4) * 4);
+                    } else if ((p[0] & 0x7f) == 19) {
+                        // MapNotify on the root: bytes 8..11 the window, byte 12 override-redirect
+                        // (menus, tooltips: no focus) / 루트의 MapNotify: 8~11바이트 창, 12바이트
+                        // override-redirect(메뉴·툴팁: 포커스 안 줌)
+                        int win = pb.getInt(8);
+                        if (p[12] == 0 && win != 0) {
+                            focused = win;
+                            giveFocus(win, " (새 창)");
+                        }
                     }
                 }
             } catch (IOException e) {
