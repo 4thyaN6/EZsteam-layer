@@ -28,7 +28,12 @@ OUT="${1:-out-alsa}"
 SDL_TAG=release-2.30.9
 
 apt-get update -q
-apt-get install -y -q --no-install-recommends gcc libc6-dev libasound2-dev binutils git cmake make ca-certificates
+# g++: SDL2's CMakeLists declares "project(SDL2 C CXX)", so CMake stops without a C++ compiler even
+# though nothing C++ is built here
+# g++: SDL2 CMakeLists가 "project(SDL2 C CXX)"로 선언해서, 여기서 C++을 빌드하지 않아도 C++ 컴파일러가
+# 없으면 CMake가 멈춤
+apt-get install -y -q --no-install-recommends gcc g++ libc6-dev libasound2-dev binutils git cmake make \
+    ca-certificates pkgconf
 
 mkdir -p "$OUT"
 # -DPIC: alsa-lib's plugin macros need it for a shared object (else snd_dlsym_start is undefined)
