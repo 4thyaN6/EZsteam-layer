@@ -17,6 +17,8 @@ public final class XKeys {
 
     /** X keycode of Left Shift (evdev 42 + 8) / 왼쪽 Shift의 X 키코드(evdev 42 + 8) */
     public static final int SHIFT_L = 50;
+    /** X keycode of Escape (scan code 1 + 8) / Escape의 X 키코드(스캔 코드 1 + 8) */
+    public static final int ESCAPE = 9;
 
     private static final SparseIntArray MAP = new SparseIntArray();
 

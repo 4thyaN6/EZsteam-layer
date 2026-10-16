@@ -97,7 +97,8 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - 화면 위쪽 둘째 줄: 경과 시간, 게임 화면 방식, CPU 사용률(2초 주기, 100% = 코어 하나): 자식 전체·게임·Xvfb·PRoot. [프로세스] 창에도 CPU% 열
 - [로그 저장](화면 위쪽): 안드로이드 파일 선택 창으로 zip 하나 저장(권한 불필요, 자동 전송 없음). 앱 로그, 프로세스·게임 스레드 목록, `~/ezs-logs/*`(steam.log, Proton 로그), `/tmp/ezs-lsof.log`. 파일당 끝부분 32MB까지. 계정 이름이 들어 있을 수 있어 공유 전 확인. [Proton]: Proton 로그가 여러 개면 최신 순 목록에서 고름
 - 게임 호환 도구는 반드시 EZ Proton: Valve Proton을 직접 고르면 Steam Linux Runtime 컨테이너(pressure-vessel)를 거치는데 PRoot 안에서 `opendir(/proc/self/root)` 실패로 게임이 바로 끝남(실측). 앱 로그에 HINT 줄로 알림
-- 소리: rootfs 안 ALSA 기본 장치 → 자체 플러그인 `native/ezsaudio/pcm_ezs.c`(ioplug, S16_LE 48000Hz 2ch 고정, 앞단 plug가 변환) → UNIX 소켓 `/tmp/ezs-audio.sock` → 앱 `AudioServer`(연결마다 AudioTrack, 저지연 모드). 추가 프로세스 없음. 녹음은 null(무음). steam-run.sh가 `~/.asoundrc`를 매번 씀, EZ Proton은 `winepulse.drv=d`로 ALSA 사용. 플러그인은 CI `alsa` 작업(debian:trixie arm64)에서 빌드해 APK assets `ezsteam/lib`로 넣음(rootfs 재다운로드 불필요)
+- 소리: rootfs 안 ALSA 기본 장치 → 자체 플러그인 `native/ezsaudio/pcm_ezs.c`(ioplug, S16_LE 48000Hz 2ch 고정, 앞단 plug가 변환) → UNIX 소켓 `/tmp/ezs-audio.sock` → 앱 `AudioServer`(연결마다 AudioTrack, 저지연 모드). 추가 프로세스 없음. 녹음은 같은 플러그인이 무음을 줌(ALSA null은 /dev/full이 막혀 못 씀). 앱 쪽 실제 지연 50 ms 설정. steam-run.sh가 `~/.asoundrc`를 매번 씀, EZ Proton은 `winepulse.drv=d`로 ALSA 사용. 플러그인은 CI `alsa` 작업(debian:trixie arm64)에서 빌드해 APK assets `ezsteam/lib`로 넣음(rootfs 재다운로드 불필요)
+- 뒤로 가기: 실제 장치(키보드·게임패드·마우스)에서 온 뒤로 가기는 X의 Esc로 보냄. 화면 뒤로 가기·[닫기]는 Steam 모드에서 종료를 먼저 물어봄
 - 화면 위쪽 막대 `자식 N(최대 M)`: 앱 자식 프로세스 수(안드로이드 한도: 모든 앱 합계 32), 28개 이상이면 로그에 `PROC` 목록. `여유`: 기기 여유 메모리
 - [환경 시험]의 `pthread`, `sys-*` 항목이 FAIL `SIGSYS (seccomp)`이면 PRoot가 해당 호출을 처리하지 못한 것 → rootfs glibc 패치(termux-pacman 방식) 검토
 - (선택) 앱 없이: `tools/device-smoke.sh` 머리 주석 참고

@@ -29,6 +29,11 @@
  * 실제 카드처럼 ALSA 버퍼 하나만큼만 앞서 쓸 수 있음. 소켓 송신 버퍼를 작게 두어 실시간으로 재생하는
  * 앱의 AudioTrack도 속도를 맞춤. 앱이 듣고 있지 않으면 샘플을 버리고 프로그램은 소리 없이 계속 돎.
  *
+ * Capture: silence at the same clock, without a connection. ALSA's own "null" capture cannot be
+ * used here: it opens /dev/full, which Android denies to apps (measured: Permission denied).
+ * 녹음: 연결 없이 같은 시계로 무음을 줌. ALSA 자체 "null" 녹음은 여기서 못 씀: /dev/full을 여는데
+ * 안드로이드가 앱에 허용하지 않음(실측: Permission denied).
+ *
  * Config / 설정:
  *   pcm_type.ezs { lib "/opt/ezsteam/lib/libasound_module_pcm_ezs.so" }
  *   pcm.x { type ezs socket "/tmp/ezs-audio.sock" }
@@ -70,6 +75,8 @@ typedef struct {
     /* Position when not running / 실행 중이 아닐 때의 위치 */
     uint64_t held;
     int running;
+    /* Capture stream (silence, no connection) / 녹음 스트림(무음, 연결 없음) */
+    int capture;
 } ezs_t;
 
 /* Monotonic clock in ns / 단조 시계(ns) */
@@ -92,6 +99,8 @@ static uint64_t played(ezs_t *e)
     if (!e->running) return e->held;
     uint64_t now = now_ns();
     uint64_t f = (now - e->start_ns) * EZS_RATE / 1000000000ull;
+    /* Capture: the clock alone; the program reads what has "arrived" / 녹음: 시계만 따름. 프로그램이 "도착한" 만큼 읽음 */
+    if (e->capture) return f;
     if (f > e->written) {
         f = e->written;
         e->start_ns = now - f * 1000000000ull / EZS_RATE;
@@ -121,7 +130,7 @@ static void send_all(ezs_t *e, const void *buf, size_t len)
    앱에 연결하고 머리를 보냄. 앱이 없으면 조용히 연결 안 된 상태로 둠 */
 static void try_connect(ezs_t *e)
 {
-    if (e->sock >= 0) return;
+    if (e->sock >= 0 || e->capture) return;
     int s = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (s < 0) return;
     struct sockaddr_un a;
@@ -201,8 +210,9 @@ static snd_pcm_sframes_t ezs_transfer(snd_pcm_ioplug_t *io, const snd_pcm_channe
 {
     ezs_t *e = io->private_data;
     /* Interleaved: one area start for all channels / 인터리브: 모든 채널이 한 영역에서 시작 */
-    const char *buf = (const char *)areas[0].addr + (areas[0].first + areas[0].step * offset) / 8;
-    send_all(e, buf, size * EZS_FRAME_BYTES);
+    char *buf = (char *)areas[0].addr + (areas[0].first + areas[0].step * offset) / 8;
+    if (e->capture) memset(buf, 0, size * EZS_FRAME_BYTES);
+    else send_all(e, buf, size * EZS_FRAME_BYTES);
     e->written += size;
     return (snd_pcm_sframes_t)size;
 }
@@ -211,6 +221,7 @@ static snd_pcm_sframes_t ezs_transfer(snd_pcm_ioplug_t *io, const snd_pcm_channe
 static int ezs_drain(snd_pcm_ioplug_t *io)
 {
     ezs_t *e = io->private_data;
+    if (e->capture) return 0;
     if (!e->running) ezs_start(io);
     while (played(e) < e->written) {
         uint64_t left = (e->written - played(e)) * 1000000000ull / EZS_RATE;
@@ -228,7 +239,7 @@ static int ezs_poll_revents(snd_pcm_ioplug_t *io, struct pollfd *pfd, unsigned i
     uint64_t ticks;
     /* Consume timer ticks (non-blocking) / 타이머 틱을 비움(막히지 않음) */
     while (read(e->timer, &ticks, sizeof(ticks)) == (ssize_t)sizeof(ticks)) {}
-    *revents = (pfd[0].revents & POLLIN) ? POLLOUT : 0;
+    *revents = (pfd[0].revents & POLLIN) ? (e->capture ? POLLIN : POLLOUT) : 0;
     return 0;
 }
 
@@ -292,8 +303,6 @@ SND_PCM_PLUGIN_DEFINE_FUNC(ezs)
         SNDERR("ezs: unknown field %s", id);
         return -EINVAL;
     }
-    /* Playback only (capture is mapped to "null" in the config) / 재생만 지원(녹음은 설정에서 "null"로 연결) */
-    if (stream != SND_PCM_STREAM_PLAYBACK) return -ENOTSUP;
     if (strlen(path) >= sizeof(((struct sockaddr_un *)0)->sun_path)) {
         SNDERR("ezs: socket path too long");
         return -EINVAL;
@@ -302,6 +311,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(ezs)
     ezs_t *e = calloc(1, sizeof(*e));
     if (!e) return -ENOMEM;
     e->sock = -1;
+    e->capture = stream == SND_PCM_STREAM_CAPTURE;
     strcpy(e->path, path);
     e->timer = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
     if (e->timer < 0) {

@@ -131,7 +131,7 @@ public class DisplayActivity extends Activity {
         addButton(bar, "Proton", v -> showProtonLog());
         addButton(bar, "로그", v -> logScroll.setVisibility(logScroll.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
         addButton(bar, "로그 저장", v -> saveLogs());
-        addButton(bar, "닫기", v -> finish());
+        addButton(bar, "닫기", v -> confirmClose());
         root.addView(bar, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END));
 
         logScroll = new ScrollView(this);
@@ -402,8 +402,28 @@ public class DisplayActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
-        // Back closes the screen; everything else goes to X / 뒤로 가기는 화면 닫기, 나머지는 X로 보냄
-        if (e.getKeyCode() == KeyEvent.KEYCODE_BACK) return super.dispatchKeyEvent(e);
+        // Back: from a physical device (keyboard Esc fallback, gamepad B, mouse) it is Esc in X;
+        // only the on-screen back asks to close. Closing ends Steam and the game, and a physical
+        // keyboard closed the screen again and again (user report).
+        // 뒤로 가기: 실제 장치(키보드 Esc 대체, 게임패드 B, 마우스)에서 오면 X의 Esc로 보냄.
+        // 화면의 뒤로 가기만 닫기를 물어봄. 닫으면 Steam과 게임이 끝나는데, 실제 키보드에서 화면이
+        // 계속 닫혔음(사용자 보고)
+        if (e.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+            // On-screen back (navigation bar, gesture) comes from the virtual device id -1
+            // 화면의 뒤로 가기(내비게이션 바, 제스처)는 가상 장치 id -1에서 옴
+            android.view.InputDevice dev = e.getDevice();
+            boolean physical = e.getDeviceId() > 0 && (dev == null || !dev.isVirtual());
+            if (physical) {
+                XTestClient x = xtest;
+                if (x != null && e.getRepeatCount() == 0 && e.getAction() != KeyEvent.ACTION_MULTIPLE) {
+                    x.key(XKeys.ESCAPE, e.getAction() == KeyEvent.ACTION_DOWN);
+                    if (e.getAction() == KeyEvent.ACTION_DOWN) lastKey = "BACK→Esc";
+                }
+                return true;
+            }
+            if (e.getAction() == KeyEvent.ACTION_UP) confirmClose();
+            return true;
+        }
         // Text delivered as one event (some keyboards): split into key events
         // 한 이벤트로 온 텍스트(일부 키보드): 키 이벤트로 나눔
         if (e.getAction() == KeyEvent.ACTION_MULTIPLE && e.getKeyCode() == KeyEvent.KEYCODE_UNKNOWN) {
@@ -436,6 +456,23 @@ public class DisplayActivity extends Activity {
             if (wrapShift) x.key(XKeys.SHIFT_L, false);
         }
         return true;
+    }
+
+    /**
+     * Close the screen; in Steam mode ask first, because closing ends Steam and any running game.
+     * 화면 닫기. Steam 모드에서는 먼저 물어봄: 닫으면 Steam과 실행 중인 게임이 모두 끝남
+     */
+    private void confirmClose() {
+        if (!"steam".equals(mode)) {
+            finish();
+            return;
+        }
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Steam 종료")
+                .setMessage("화면을 닫으면 Steam과 실행 중인 게임이 모두 종료됩니다.")
+                .setPositiveButton("종료", (d, w) -> finish())
+                .setNegativeButton("취소", null)
+                .show();
     }
 
     private void toggleKeyboard() {

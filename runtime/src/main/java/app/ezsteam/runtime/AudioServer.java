@@ -44,13 +44,22 @@ public final class AudioServer implements Closeable {
 
     private final File socketFile;
     private final LocalServerSocket server;
+    /**
+     * The bound socket whose descriptor the server listens on. Kept referenced: when it is
+     * garbage-collected its finalizer closes that descriptor and accept() fails with EBADF
+     * (measured: the first game stream played, the next accept failed).
+     * 서버가 듣는 디스크립터를 가진 바인드된 소켓. 참조를 유지해야 함: 가비지 수집되면 종료자가
+     * 그 디스크립터를 닫아 accept()가 EBADF로 실패함(실측: 첫 게임 스트림 뒤 다음 accept 실패)
+     */
+    private final LocalSocket bound;
     private final Log log;
     private volatile boolean closed;
     /** Connections now playing / 지금 재생 중인 연결 수 */
     private final java.util.concurrent.atomic.AtomicInteger active = new java.util.concurrent.atomic.AtomicInteger();
 
-    private AudioServer(File socketFile, LocalServerSocket server, Log log) {
+    private AudioServer(File socketFile, LocalSocket bound, LocalServerSocket server, Log log) {
         this.socketFile = socketFile;
+        this.bound = bound;
         this.server = server;
         this.log = log;
     }
@@ -67,7 +76,7 @@ public final class AudioServer implements Closeable {
         LocalSocket s = new LocalSocket();
         s.bind(new LocalSocketAddress(f.getAbsolutePath(), LocalSocketAddress.Namespace.FILESYSTEM));
         LocalServerSocket server = new LocalServerSocket(s.getFileDescriptor());
-        AudioServer a = new AudioServer(f, server, log);
+        AudioServer a = new AudioServer(f, s, server, log);
         Thread t = new Thread(a::acceptLoop, "ezs-audio-accept");
         t.setDaemon(true);
         t.start();
@@ -120,8 +129,9 @@ public final class AudioServer implements Closeable {
             frameBytes = 2 * channels;
             int mask = channels == 1 ? AudioFormat.CHANNEL_OUT_MONO : AudioFormat.CHANNEL_OUT_STEREO;
             int min = AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT);
-            // At least 40 ms so short scheduling gaps do not click / 짧은 스케줄 지연에 끊기지 않게 최소 40 ms
-            int size = Math.max(min * 2, rate * frameBytes / 25);
+            // Capacity: the device minimum (measured 120 ms here), at least 40 ms
+            // 용량: 기기 최소값(여기서 실측 120 ms), 최소 40 ms
+            int size = Math.max(min, rate * frameBytes / 25);
             track = new AudioTrack.Builder()
                     .setAudioAttributes(new AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_GAME)
@@ -136,10 +146,15 @@ public final class AudioServer implements Closeable {
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
                     .build();
+            // Latency: use only 50 ms of the capacity (AudioTrack may round it up); measured 240 ms
+            // with the capacity doubled and fully used
+            // 지연: 용량 중 50 ms만 씀(AudioTrack이 올려 잡을 수 있음). 용량을 두 배로 다 쓸 때 실측 240 ms
+            track.setBufferSizeInFrames(rate / 20);
+            float ms = track.getBufferSizeInFrames() * 1000f / rate;
             track.play();
             int now = active.incrementAndGet();
             log.log(String.format(Locale.ROOT, "AUDIO 재생 시작 %dHz %dch (버퍼 %.0f ms, 동시 %d개)",
-                    rate, channels, size * 1000f / (rate * frameBytes), now));
+                    rate, channels, ms, now));
             // Whole frames only go to the track; a split frame waits for its rest
             // 트랙에는 온전한 프레임만 넘김. 잘린 프레임은 나머지를 기다림
             byte[] buf = new byte[8192];
@@ -197,6 +212,7 @@ public final class AudioServer implements Closeable {
         } catch (IOException ignored) {
             // nothing to do / 할 일 없음
         }
+        closeQuietly(bound);
         //noinspection ResultOfMethodCallIgnored
         socketFile.delete();
     }

@@ -57,10 +57,12 @@ fi
 
 # Sound: ALSA default device -> EZSteam plugin -> app socket (/tmp/ezs-audio.sock) -> Android
 # AudioTrack. Wine (winealsa) and other ALSA programs then find one playback device; recording
-# goes to "null" (silence). The plugin comes with the APK (/opt/ezsteam/lib, CI build of
+# gets silence from the same plugin (ALSA's "null" needs /dev/full, which Android denies; measured).
+# The plugin comes with the APK (/opt/ezsteam/lib, CI build of
 # native/ezsaudio). Without it the file is removed and programs keep ALSA's own default.
 # 소리: ALSA 기본 장치 -> EZSteam 플러그인 -> 앱 소켓(/tmp/ezs-audio.sock) -> 안드로이드 AudioTrack.
-# Wine(winealsa)과 다른 ALSA 프로그램이 재생 장치 하나를 찾게 됨. 녹음은 "null"(무음)로 연결.
+# Wine(winealsa)과 다른 ALSA 프로그램이 재생 장치 하나를 찾게 됨. 녹음은 같은 플러그인이 무음을 줌
+# (ALSA "null"은 /dev/full이 필요한데 안드로이드가 막음, 실측).
 # 플러그인은 APK에 들어 있음(/opt/ezsteam/lib, native/ezsaudio의 CI 빌드). 없으면 파일을 지우고
 # ALSA 기본값을 그대로 씀
 EZS_ALSA=/opt/ezsteam/lib/libasound_module_pcm_ezs.so
@@ -71,7 +73,7 @@ if [ -f "$EZS_ALSA" ]; then
 pcm_type.ezs {
     lib "$EZS_ALSA"
 }
-pcm.ezs_out {
+pcm.!default {
     type plug
     slave {
         pcm { type ezs socket "/tmp/ezs-audio.sock" }
@@ -79,11 +81,6 @@ pcm.ezs_out {
         rate 48000
         channels 2
     }
-}
-pcm.!default {
-    type asym
-    playback.pcm "ezs_out"
-    capture.pcm "null"
 }
 EOF
     echo "OK   audio : ALSA 기본 장치 -> 앱 소리 출력 (/tmp/ezs-audio.sock)"
