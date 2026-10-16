@@ -181,9 +181,39 @@ public class MainActivity extends Activity {
         } else if (savedInstanceState == null && prefs.getBoolean(KEY_AUTOSTART, true)) {
             // Only on a fresh launch: coming back from the Steam screen must not start it again
             // 새로 실행했을 때만: Steam 화면에서 돌아왔을 때 다시 시작하면 안 됨
-            log("앱 시작 시 바로 Steam ([바로 실행]으로 끔)");
-            openSteam(steamSize()[0], steamSize()[1]);
+            autoStartPending = true;
         }
+        // Shared storage (Download/.EZlator reports, EZlator Steam library), asked like EZlator does;
+        // the automatic start waits for the answer
+        // 공용 저장소(Download/.EZlator 제보, EZlator Steam 라이브러리) 권한을 EZlator처럼 물어봄.
+        // 자동 시작은 답을 받은 뒤에 함
+        if (!app.ezsteam.runtime.SharedStorage.granted(this)) {
+            requestPermissions(new String[]{android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                    android.Manifest.permission.READ_EXTERNAL_STORAGE}, REQ_STORAGE);
+        } else {
+            maybeAutoStart();
+        }
+    }
+
+    private static final int REQ_STORAGE = 1;
+    /** Automatic Steam start waiting for the permission answer / 권한 답을 기다리는 자동 Steam 시작 */
+    private boolean autoStartPending;
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode != REQ_STORAGE) return;
+        log(app.ezsteam.runtime.SharedStorage.granted(this)
+                ? "저장소 권한 있음: 제보는 Download/.EZlator/Reports, EZlator Steam 라이브러리 공유"
+                : "저장소 권한 없음: 제보는 파일 선택 창으로 저장, Steam 라이브러리 공유 안 함");
+        maybeAutoStart();
+    }
+
+    private void maybeAutoStart() {
+        if (!autoStartPending) return;
+        autoStartPending = false;
+        log("앱 시작 시 바로 Steam ([바로 실행]으로 끔)");
+        openSteam(steamSize()[0], steamSize()[1]);
     }
 
     // ---- start panel / 시작 패널

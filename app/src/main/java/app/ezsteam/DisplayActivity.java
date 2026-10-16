@@ -367,6 +367,18 @@ public class DisplayActivity extends Activity {
                 // Fewer Steam web helper processes (option on the main screen, on by default)
                 // Steam 웹 도우미 프로세스 줄이기(메인 화면 옵션, 기본 켬)
                 if (MainActivity.cefSlim(this)) c.env.put("EZS_CEF_FLAGS", MainActivity.CEF_SLIM_FLAGS);
+                // EZlator's Steam library as an extra library of the Linux Steam client, so a game
+                // already downloaded there is not downloaded again (steam-run.sh registers it)
+                // EZlator Steam 라이브러리를 리눅스 Steam 클라이언트의 추가 라이브러리로 연결해, 그곳에
+                // 이미 받은 게임을 다시 받지 않게 함(steam-run.sh가 등록함)
+                File sharedLib = app.ezsteam.runtime.SharedStorage.steamLibrary(this);
+                if (sharedLib != null) {
+                    c.binds.add(new String[]{sharedLib.getAbsolutePath(), app.ezsteam.runtime.SharedStorage.GUEST_LIBRARY});
+                    c.env.put("EZS_SHARED_LIBRARY", app.ezsteam.runtime.SharedStorage.GUEST_LIBRARY);
+                    log("공유 Steam 라이브러리: " + sharedLib + " -> " + app.ezsteam.runtime.SharedStorage.GUEST_LIBRARY);
+                } else {
+                    log("공유 Steam 라이브러리 없음 (저장소 권한 없음)");
+                }
                 // Game frame hand-over (main screen option, see MainActivity.WSI_MODES); replaces the
                 // driver package's MESA_VK_WSI_DEBUG=sw. Steam passes these on to Proton and the game.
                 // 게임 화면 전달 방식(메인 화면 옵션, MainActivity.WSI_MODES 참고). 드라이버 묶음의
@@ -1300,8 +1312,35 @@ public class DisplayActivity extends Activity {
      * 있으므로 공유 전에 사용자가 확인함
      */
     private void saveLogs() {
-        String name = "ezsteam-logs-" + new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT)
-                .format(new java.util.Date()) + ".zip";
+        String stamp = new java.text.SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.ROOT).format(new java.util.Date());
+        // Testers: straight into Download/.EZlator/Reports, the folder EZlator reports use too
+        // (newest 5 of this layer kept). Without the storage permission: the file picker as before
+        // 테스터용: EZlator 제보와 같은 Download/.EZlator/Reports에 바로 저장(이 레이어 것 최근 5개 유지).
+        // 저장소 권한이 없으면 예전처럼 파일 선택 창
+        if (app.ezsteam.runtime.SharedStorage.granted(this)) {
+            String appLog = String.join("\n", saveLines) + "\n";
+            String procs = processText();
+            new Thread(() -> {
+                try {
+                    File dir = app.ezsteam.runtime.SharedStorage.reports();
+                    app.ezsteam.runtime.SharedStorage.trimReports(dir, 5);
+                    File zip = new File(dir, app.ezsteam.runtime.SharedStorage.REPORT_PREFIX + stamp + ".zip");
+                    try (java.io.OutputStream os = new java.io.FileOutputStream(zip)) {
+                        writeLogZip(os, appLog, procs);
+                    }
+                    log("로그 저장 위치: Download/.EZlator/Reports/" + zip.getName());
+                } catch (IOException | RuntimeException e) {
+                    log("공용 폴더 저장 실패, 파일 선택 창으로 저장: " + e);
+                    runOnUiThread(() -> pickLogFile("ezsteam-logs-" + stamp + ".zip"));
+                }
+            }, "ezs-log-save").start();
+            return;
+        }
+        pickLogFile("ezsteam-logs-" + stamp + ".zip");
+    }
+
+    /** Save through the system file picker / 시스템 파일 선택 창으로 저장 */
+    private void pickLogFile(String name) {
         android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT);
         i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
         i.setType("application/zip");
@@ -1325,16 +1364,26 @@ public class DisplayActivity extends Activity {
         // Snapshots taken on the UI thread; writing happens in the background
         // UI 스레드에서 현재 내용을 떠 두고, 쓰기는 백그라운드에서 함
         String appLog = String.join("\n", saveLines) + "\n";
-        new Thread(() -> writeLogZip(uri, appLog, processText()), "ezs-log-save").start();
+        String procs = processText();
+        new Thread(() -> {
+            try (java.io.OutputStream os = getContentResolver().openOutputStream(uri)) {
+                writeLogZip(os, appLog, procs);
+            } catch (IOException | RuntimeException e) {
+                log("로그 저장 실패: " + e);
+            }
+        }, "ezs-log-save").start();
     }
 
     /**
      * Zip: app log, process list with game threads, every file in ~/ezs-logs (steam.log, Proton logs)
      * and /tmp/ezs-lsof.log. Files larger than LOG_SAVE_MAX keep only their end.
      * zip 내용: 앱 로그, 게임 스레드를 포함한 프로세스 목록, ~/ezs-logs의 모든 파일(steam.log,
-     * Proton 로그), /tmp/ezs-lsof.log. LOG_SAVE_MAX보다 큰 파일은 끝부분만 넣음
+     * Proton 로그), /tmp/ezs-lsof.log. LOG_SAVE_MAX보다 큰 파일은 끝부분만 넣음.
+     * Text is scrubbed (Steam account/persona names, SteamID64, tokens, e-mails: LogScrubber);
+     * images are copied as they are.
+     * 글은 개인 값을 가림(Steam 계정·표시 이름, SteamID64, 토큰, 이메일: LogScrubber). 그림은 그대로 넣음
      */
-    private void writeLogZip(android.net.Uri uri, String appLog, String procs) {
+    private void writeLogZip(java.io.OutputStream os, String appLog, String procs) {
         File rootfs = RootfsInstaller.rootfsDir(this);
         java.util.List<File> files = new java.util.ArrayList<>();
         File[] logs = new File(rootfs, "home/steam/ezs-logs").listFiles(File::isFile);
@@ -1342,32 +1391,45 @@ public class DisplayActivity extends Activity {
         File lsof = new File(rootfs, "tmp/ezs-lsof.log");
         if (lsof.isFile()) files.add(lsof);
         int n = 0;
-        try (java.io.OutputStream os = getContentResolver().openOutputStream(uri);
-             java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(os)) {
+        app.ezsteam.runtime.LogScrubber scrub = app.ezsteam.runtime.LogScrubber.forRootfs(rootfs);
+        try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(os)) {
             zip.putNextEntry(new java.util.zip.ZipEntry("app-log.txt"));
-            zip.write(appLog.getBytes(StandardCharsets.UTF_8));
+            zip.write(scrub.scrub(appLog).getBytes(StandardCharsets.UTF_8));
             zip.closeEntry();
             zip.putNextEntry(new java.util.zip.ZipEntry("processes.txt"));
-            zip.write(procs.getBytes(StandardCharsets.UTF_8));
+            zip.write(scrub.scrub(procs).getBytes(StandardCharsets.UTF_8));
             zip.closeEntry();
             byte[] buf = new byte[1 << 16];
             for (File f : files) {
                 zip.putNextEntry(new java.util.zip.ZipEntry("logs/" + f.getName()));
+                boolean image = f.getName().endsWith(".png");
                 try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(f, "r")) {
                     long len = in.length();
                     if (len > LOG_SAVE_MAX) {
                         in.seek(len - LOG_SAVE_MAX);
                         zip.write(("[앞부분 " + (len - LOG_SAVE_MAX) + "바이트 생략]\n").getBytes(StandardCharsets.UTF_8));
                     }
-                    int r;
-                    while ((r = in.read(buf)) > 0) zip.write(buf, 0, r);
+                    if (image) {
+                        int r;
+                        while ((r = in.read(buf)) > 0) zip.write(buf, 0, r);
+                    } else {
+                        // Line by line through the scrubber / 줄 단위로 가리개를 거침
+                        java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(
+                                java.nio.channels.Channels.newInputStream(in.getChannel()), StandardCharsets.UTF_8));
+                        String line;
+                        while ((line = br.readLine()) != null) {
+                            zip.write(scrub.scrub(line).getBytes(StandardCharsets.UTF_8));
+                            zip.write('\n');
+                        }
+                    }
                 } catch (IOException e) {
                     zip.write(("[읽기 실패: " + e + "]\n").getBytes(StandardCharsets.UTF_8));
                 }
                 zip.closeEntry();
                 n++;
             }
-            log("로그 저장 완료: 로그 파일 " + n + "개 + 앱 로그 + 프로세스 목록 (계정 이름이 들어 있을 수 있으니 공유 전 확인)");
+            zip.finish();
+            log("로그 저장 완료: 로그 파일 " + n + "개 + 앱 로그 + 프로세스 목록 (계정·표시 이름, SteamID, 이메일은 가림)");
         } catch (IOException | RuntimeException e) {
             log("로그 저장 실패: " + e);
         }

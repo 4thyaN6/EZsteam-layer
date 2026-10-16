@@ -102,6 +102,10 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - 시작 화면: [Steam 시작], [화면 1280x800/1920x1200], [바로 실행: 켬/끔](앱을 새로 열 때 바로 Steam, 기본 켬), [관리자 모드](설치·시험 버튼 표시/숨김). rootfs·드라이버·Steam 중 빠진 것이 있으면 관리자 모드를 열고 이유를 로그에 씀
 - 화면 터치 패드([패드], 길게 누르면 크기·진하기): Xbox 배치(스틱 2, 십자키, ABXY, LB/RB, LT/RT, BACK/START/가이드, 스틱 두 번 탭 = L3/R3). 자체 설계(`TouchPadView`). 실제 컨트롤러와 같은 가상 패드로 감(`PadFile` 입력원 2개를 합침: 버튼 OR, 스틱은 더 민 쪽, 트리거는 큰 값). 크기는 조작부 크기와 가장자리 거리를 함께 50~180%. 조작부 밖에서 시작한 터치는 아래 화면(포인터·클릭)으로 넘어감
 - 글꼴: 앱이 휴대폰 `/system/fonts`를 rootfs `/usr/local/share/fonts/android`에 읽기 전용으로 연결(복사·배포 없음, DroidDeck과 같은 방식). steam-run.sh가 `~/.config/fontconfig/fonts.conf`에서 기본 글꼴 이름마다 DejaVu 뒤에 Noto Sans CJK(KR/JP/SC/TC)를 둠 → 한국어·중국어·일본어 대체 표시
+- EZlator와 공용 저장소(시험 빌드, 최종 위치는 EZlator 통합 때 정함): 시작할 때 저장소 권한(READ/WRITE_EXTERNAL_STORAGE, targetSdk 28 기존 방식, EZlator와 같음)을 물어봄. 권한이 있으면
+  - [로그 저장] → `Download/.EZlator/Reports/ezsteam_report_<시각>.zip`(이 레이어 것 최근 5개 유지, EZlator `report_*`는 안 건드림). 글은 `LogScrubber`로 Steam 계정·표시 이름(loginusers.vdf), SteamID64, 토큰, 이메일을 가림(EZlator LogScrubber와 같은 규칙). 권한이 없으면 파일 선택 창
+  - EZlator Steam 라이브러리 `/storage/emulated/0/EZlator/SteamLibrary`를 rootfs `/mnt/ezlator-library`로 연결, steam-run.sh가 `steam-library.py`로 클라이언트 라이브러리 목록(config/·steamapps/libraryfolders.vdf)에 추가(첫 실행 전에는 다음 시작부터). 그 라이브러리 게임의 Proton prefix는 ezproton이 rootfs 안 `steamapps/compatdata/<appid>`로 돌림
+  - 내부 폴더(files/ezs, files/ezs-data)는 EZlator(imagefs, contents, steam 등)와 이름이 겹치지 않아 그대로 둠
 - 뒤로 가기: 실제 장치(키보드·게임패드·마우스)에서 온 뒤로 가기는 X의 Esc로 보냄. 화면 뒤로 가기·[닫기]는 Steam 모드에서 종료를 먼저 물어봄
 - 키보드 포커스: 창 관리자가 없으므로 앱(XTestClient)이 터치·키 누름 때 포인터 아래 최상위 창에 SetInputFocus + WM_TAKE_FOCUS를 보냄(Wine은 WM_TAKE_FOCUS를 받아야 창을 활성화함). 창이 바뀔 때만 보내고 앱 로그에 `X 포커스 → 창 0x…`. 새 최상위 창이 나타나면(루트 SubstructureNotify의 MapNotify, override-redirect 제외) 그 창에 바로, 0.3초·1.5초 뒤에 다시 보냄(`(새 창)`). 터치·마우스 누름 때는 같은 창이어도 항상 다시 보냄. 볼륨 키는 안드로이드 미디어 볼륨으로
 - 최소 창 관리자 역할(XTestClient): 관리 창이 매핑되면 WM_STATE=Normal, 언매핑되면 Withdrawn을 둠(Wine은 이 속성을 받기 전까지 그 창의 포커스를 무시함). WM_TAKE_FOCUS·SetInputFocus에는 루트 `_EZS_TIME` 속성 변경으로 얻은 실제 서버 시각을 씀(Wine은 CurrentTime=0인 WM_TAKE_FOCUS를 비전경 창에 적용하지 않음)

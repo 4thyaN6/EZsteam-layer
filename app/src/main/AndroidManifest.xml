@@ -7,6 +7,15 @@
 
     <!-- INTERNET comes from the :runtime module manifest / INTERNET은 :runtime 모듈에서 합쳐짐 -->
 
+    <!-- Shared storage with EZlator (test builds): reports in Download/.EZlator/Reports and EZlator's
+         Steam library (/storage/emulated/0/EZlator/SteamLibrary). Legacy model with targetSdk 28,
+         the same permissions EZlator asks for; asked on start, the app works without them -->
+    <!-- EZlator와 공용 저장소(시험 빌드): Download/.EZlator/Reports 제보와 EZlator Steam 라이브러리
+         (/storage/emulated/0/EZlator/SteamLibrary). targetSdk 28의 기존 방식, EZlator가 요청하는 것과
+         같은 권한. 시작할 때 물어보며 없어도 앱은 동작함 -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+
     <!-- extractNativeLibs is irrelevant (no JNI libs); glibc files live in the rootfs -->
     <!-- JNI 라이브러리가 없어 해당 없음. glibc 파일은 rootfs 안에 있음 -->
     <application

@@ -99,6 +99,18 @@ fi
 # 제거한 입력 진단의 파일(이전 빌드). 남아 있으면 저장한 zip에서 현재 로그로 오인됨
 rm -f "$HOME/ezs-logs/steam-input-probe.log" "$HOME/ezs-logs/steam-input-scan.txt"
 
+# EZlator's Steam library shared with this client (bound by the app at /mnt/ezlator-library when
+# the storage permission is given; test builds): registered as an extra library folder, so games
+# already downloaded there are found instead of downloaded again. Proton prefixes stay inside the
+# rootfs (see compat/ezproton): shared storage cannot hold the prefix's symbolic links
+# 이 클라이언트와 공유하는 EZlator Steam 라이브러리(저장소 권한이 있으면 앱이 /mnt/ezlator-library에
+# 연결함, 시험 빌드): 추가 라이브러리 폴더로 등록해 그곳에 이미 받은 게임을 다시 받지 않고 찾게 함.
+# Proton prefix는 rootfs 안에 둠(compat/ezproton 참고): 공용 저장소는 prefix의 심볼릭 링크를 담을 수 없음
+if [ -n "${EZS_SHARED_LIBRARY:-}" ] && [ -d "$EZS_SHARED_LIBRARY" ]; then
+    python3 /opt/ezsteam/steam-library.py "$STEAM_DIR" "$EZS_SHARED_LIBRARY" 2>&1 \
+        || echo "WARN library : $EZS_SHARED_LIBRARY 등록 실패"
+fi
+
 # Game controller in the Steam client (Big Picture, menus): the same preload library that gives Wine
 # its pad attaches it to the client's own SDL3 when loaded into the client (native/ezspad)
 # Steam 클라이언트(빅픽처, 메뉴)의 게임 컨트롤러: Wine에 패드를 주는 같은 preload 라이브러리가

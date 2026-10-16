@@ -77,6 +77,19 @@ case ":${LD_PRELOAD:-}:" in
     *":$EZS_PAD_LIB:"*) ;;
     *) [ -f "$EZS_PAD_LIB" ] && export LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_PAD_LIB" ;;
 esac
+# Prefix of a game in the shared EZlator library (shared storage, no symbolic links there): kept
+# inside the rootfs under the client's own compatdata, same appid folder name. Proton takes the
+# prefix location from STEAM_COMPAT_DATA_PATH only
+# 공유 EZlator 라이브러리에 있는 게임의 prefix(공용 저장소라 심볼릭 링크 불가): rootfs 안 클라이언트 자체
+# compatdata의 같은 appid 폴더에 둠. Proton은 prefix 위치를 STEAM_COMPAT_DATA_PATH로만 정함
+case "${STEAM_COMPAT_DATA_PATH:-}" in
+    /mnt/ezlator-library/*)
+        EZS_PREFIX="$STEAM_DIR/steamapps/compatdata/$(basename "$STEAM_COMPAT_DATA_PATH")"
+        mkdir -p "$EZS_PREFIX"
+        echo "ezproton: prefix $STEAM_COMPAT_DATA_PATH -> $EZS_PREFIX (shared library)" >&2
+        export STEAM_COMPAT_DATA_PATH="$EZS_PREFIX"
+        ;;
+esac
 export PROTON_LOG_DIR="${PROTON_LOG_DIR:-$HOME/ezs-logs}"
 mkdir -p "$PROTON_LOG_DIR"
 # Keep earlier Proton logs of the same game: Proton rewrites steam-<appid>.log on every start, and
