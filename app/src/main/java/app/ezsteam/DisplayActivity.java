@@ -103,6 +103,9 @@ public class DisplayActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON | WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        // Volume keys change the media volume, which the game sound uses (AudioServer, USAGE_GAME)
+        // 볼륨 키가 게임 소리가 쓰는 미디어 볼륨을 바꾸게 함(AudioServer, USAGE_GAME)
+        setVolumeControlStream(android.media.AudioManager.STREAM_MUSIC);
         int w = getIntent().getIntExtra(EXTRA_W, 1280);
         int h = getIntent().getIntExtra(EXTRA_H, 720);
         String m = getIntent().getStringExtra(EXTRA_MODE);
@@ -336,6 +339,9 @@ public class DisplayActivity extends Activity {
                 int[] p = view.toScreen(e.getX(), e.getY());
                 if (p == null) return true;
                 x.motion(p[0], p[1]);
+                // Focus the window under the finger before the click (no window manager here)
+                // 클릭 전에 손가락 아래 창에 포커스를 줌(여기에는 창 관리자가 없음)
+                x.focusUnderPointer();
                 x.button(1, true);
                 leftDown = true;
                 twoFinger = false;
@@ -402,6 +408,15 @@ public class DisplayActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
+        // Volume and mute keys stay with Android (they were sent to X and the volume did not change,
+        // user report); the game sound plays through Android's media volume
+        // 볼륨·음소거 키는 안드로이드가 처리함(X로 보내져 볼륨이 바뀌지 않았음, 사용자 보고).
+        // 게임 소리는 안드로이드 미디어 볼륨으로 재생됨
+        int kc = e.getKeyCode();
+        if (kc == KeyEvent.KEYCODE_VOLUME_UP || kc == KeyEvent.KEYCODE_VOLUME_DOWN
+                || kc == KeyEvent.KEYCODE_VOLUME_MUTE) {
+            return super.dispatchKeyEvent(e);
+        }
         // Back: from a physical device (keyboard Esc fallback, gamepad B, mouse) it is Esc in X;
         // only the on-screen back asks to close. Closing ends Steam and the game, and a physical
         // keyboard closed the screen again and again (user report).
@@ -444,6 +459,9 @@ public class DisplayActivity extends Activity {
         if (x == null || code == 0) return false;
         if (e.getAction() == KeyEvent.ACTION_MULTIPLE) return true;
         boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
+        // Keys go to the focused window: focus the one under the pointer first (cheap when unchanged)
+        // 키는 포커스 창으로 감: 먼저 포인터 아래 창에 포커스를 줌(바뀌지 않았으면 가벼움)
+        if (down && e.getRepeatCount() == 0) x.focusUnderPointer();
         if (down) lastKey = KeyEvent.keyCodeToString(e.getKeyCode()).replace("KEYCODE_", "") + "→" + code;
         // Soft keyboards send capitals as one event with the Shift meta flag: wrap it in Shift
         // 소프트 키보드는 대문자를 Shift 메타 플래그가 붙은 이벤트 하나로 보내므로 Shift로 감쌈

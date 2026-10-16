@@ -11,8 +11,11 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 
 /**
  * Minimal X11 client that injects pointer and keyboard input into an X server through the XTEST
@@ -40,13 +43,28 @@ public final class XTestClient implements Closeable {
     private final LocalSocket socket;
     private final OutputStream out;
     private final int opcode;
+    /** Root window of screen 0, atoms WM_PROTOCOLS and WM_TAKE_FOCUS / 화면 0의 루트 창, 아톰 WM_PROTOCOLS·WM_TAKE_FOCUS */
+    private final int root, atomProtocols, atomTakeFocus;
+    /** Sequence number of the last request sent (send thread only) / 마지막으로 보낸 요청 순번(전송 스레드 전용) */
+    private int seq;
+    /** Reply handlers by 16-bit sequence number / 16비트 순번별 응답 처리기 */
+    private final Map<Integer, Consumer<byte[]>> pending = new ConcurrentHashMap<>();
+    /** Top-level window that last got the input focus from here / 여기서 마지막으로 입력 포커스를 준 최상위 창 */
+    private volatile int focused;
+    /** Log sink given to connect() / connect()에 받은 로그 출력 */
+    private volatile Log log;
     private final ExecutorService tx = Executors.newSingleThreadExecutor(r -> new Thread(r, "ezs-xtest"));
     private volatile boolean closed;
 
-    private XTestClient(LocalSocket s, OutputStream out, int opcode, int w, int h, String vendor, int vmaj, int vmin) {
+    private XTestClient(LocalSocket s, OutputStream out, int opcode, int w, int h, String vendor, int vmaj, int vmin,
+                        int root, int atomProtocols, int atomTakeFocus, int seq) {
         this.socket = s;
         this.out = out;
         this.opcode = opcode;
+        this.root = root;
+        this.atomProtocols = atomProtocols;
+        this.atomTakeFocus = atomTakeFocus;
+        this.seq = seq;
         this.screenWidth = w;
         this.screenHeight = h;
         this.vendor = vendor;
@@ -93,6 +111,7 @@ public final class XTestClient implements Closeable {
             // First screen: after vendor (padded to 4) and pixmap formats (8 bytes each)
             // 첫 화면 정보: vendor(4바이트 맞춤)와 픽스맵 형식(각 8바이트) 다음
             int scr = 32 + pad4(vendorLen) + formats * 8;
+            int rootWin = b.getInt(scr);
             int w = b.getShort(scr + 20) & 0xffff;
             int h = b.getShort(scr + 22) & 0xffff;
 
@@ -116,7 +135,13 @@ public final class XTestClient implements Closeable {
             int vmaj = v[1] & 0xff;
             int vmin = ByteBuffer.wrap(v).order(ByteOrder.LITTLE_ENDIAN).getShort(8) & 0xffff;
 
-            XTestClient c = new XTestClient(s, out, op, w, h, vendor, vmaj, vmin);
+            // 4. InternAtom WM_PROTOCOLS, WM_TAKE_FOCUS (sequences 3, 4), for giving windows focus
+            // 4. InternAtom WM_PROTOCOLS, WM_TAKE_FOCUS(순번 3, 4), 창에 포커스를 줄 때 씀
+            int aProt = internAtom(out, in, "WM_PROTOCOLS");
+            int aTake = internAtom(out, in, "WM_TAKE_FOCUS");
+
+            XTestClient c = new XTestClient(s, out, op, w, h, vendor, vmaj, vmin, rootWin, aProt, aTake, 4);
+            c.log = log;
             c.startReader(in, log);
             return c;
         } catch (IOException | RuntimeException e) {
@@ -151,6 +176,87 @@ public final class XTestClient implements Closeable {
     }
 
     /**
+     * Give the keyboard focus to the top-level window under the pointer, the way a window manager
+     * does: SetInputFocus plus a WM_TAKE_FOCUS client message. There is no window manager here, and
+     * Wine makes a window the active (foreground) one only on WM_TAKE_FOCUS; without it keys went
+     * to no window and DirectInput keyboards of games stayed silent (measured: key events reached
+     * X, the game did not react). Sent again only when the window under the pointer changes.
+     * 포인터 아래 최상위 창에 창 관리자처럼 키보드 포커스를 줌: SetInputFocus와 WM_TAKE_FOCUS 클라이언트
+     * 메시지. 여기에는 창 관리자가 없고, Wine은 WM_TAKE_FOCUS를 받아야 창을 활성(전경) 창으로 만듦.
+     * 없으면 키가 어느 창에도 가지 않아 게임의 DirectInput 키보드가 조용했음(실측: 키 이벤트는 X에
+     * 도착, 게임은 반응 없음). 포인터 아래 창이 바뀔 때만 다시 보냄
+     */
+    public void focusUnderPointer() {
+        if (closed) return;
+        // QueryPointer(root): reply byte 12..15 = child of root under the pointer
+        // QueryPointer(root): 응답 12~15바이트 = 포인터 아래의 루트 자식 창
+        ByteBuffer q = le(8);
+        q.put((byte) 38).put((byte) 0).putShort((short) 2).putInt(root);
+        send(q.array(), reply -> {
+            int child = ByteBuffer.wrap(reply).order(ByteOrder.LITTLE_ENDIAN).getInt(12);
+            if (child != 0 && child != focused) {
+                focused = child;
+                giveFocus(child);
+            }
+        });
+    }
+
+    /** Forget the last focused window, so the next focusUnderPointer() sends again
+     *  마지막 포커스 창을 잊음. 다음 focusUnderPointer()가 다시 보냄 */
+    public void resetFocus() {
+        focused = 0;
+    }
+
+    /** SetInputFocus(window, RevertToParent) + ClientMessage WM_PROTOCOLS/WM_TAKE_FOCUS to it
+     *  SetInputFocus(창, RevertToParent) + 그 창에 ClientMessage WM_PROTOCOLS/WM_TAKE_FOCUS */
+    private void giveFocus(int window) {
+        Log l = log;
+        if (l != null) l.line(String.format(java.util.Locale.ROOT, "X 포커스 → 창 0x%x", window));
+        ByteBuffer f = le(12);
+        f.put((byte) 42).put((byte) 2).putShort((short) 3).putInt(window).putInt(0);
+        send(f.array(), null);
+        if (atomProtocols == 0 || atomTakeFocus == 0) return;
+        // SendEvent: propagate no, event mask 0 (goes to the window's creator), 32-byte ClientMessage
+        // SendEvent: 전파 없음, 이벤트 마스크 0(창을 만든 클라이언트에게 감), 32바이트 ClientMessage
+        ByteBuffer e = le(44);
+        e.put((byte) 25).put((byte) 0).putShort((short) 11).putInt(window).putInt(0);
+        e.put((byte) 33).put((byte) 32).putShort((short) 0).putInt(window).putInt(atomProtocols);
+        e.putInt(atomTakeFocus).putInt(0).putInt(0).putInt(0).putInt(0);
+        send(e.array(), null);
+    }
+
+    /**
+     * Queue one request on the send thread; it takes the next sequence number, and a reply handler
+     * (requests with replies only) runs on the reader thread.
+     * 요청 하나를 전송 스레드에 넣음. 다음 순번을 받으며, 응답 처리기(응답이 있는 요청만)는 읽기 스레드에서 돎
+     */
+    private void send(byte[] data, Consumer<byte[]> onReply) {
+        if (closed) return;
+        tx.execute(() -> {
+            try {
+                seq++;
+                if (onReply != null) pending.put(seq & 0xffff, onReply);
+                out.write(data);
+                out.flush();
+            } catch (IOException e) {
+                closed = true;
+            }
+        });
+    }
+
+    /** InternAtom during setup (synchronous); 0 when it fails / 설정 중 InternAtom(동기). 실패하면 0 */
+    private static int internAtom(OutputStream out, DataInputStream in, String name) throws IOException {
+        byte[] n = name.getBytes(StandardCharsets.ISO_8859_1);
+        ByteBuffer r = le(8 + pad4(n.length));
+        r.put((byte) 16).put((byte) 0).putShort((short) ((8 + pad4(n.length)) / 4))
+                .putShort((short) n.length).putShort((short) 0).put(n);
+        out.write(r.array());
+        out.flush();
+        byte[] a = readReply(in);
+        return ByteBuffer.wrap(a).order(ByteOrder.LITTLE_ENDIAN).getInt(8);
+    }
+
+    /**
      * XTEST FakeInput request (36 bytes): event type, detail, time = CurrentTime, root = None,
      * position. Queued to the send thread.
      * XTEST FakeInput 요청(36바이트): 이벤트 종류, detail, 시각 = CurrentTime, root = None,
@@ -164,20 +270,14 @@ public final class XTestClient implements Closeable {
         r.putInt(0).putInt(0).putInt(0).putInt(0);
         r.putShort((short) x).putShort((short) y);
         // remaining 8 bytes stay zero (deviceid 0 = core device) / 나머지 8바이트는 0(deviceid 0 = 코어 장치)
-        byte[] data = r.array();
-        tx.execute(() -> {
-            try {
-                out.write(data);
-                out.flush();
-            } catch (IOException e) {
-                closed = true;
-            }
-        });
+        send(r.array(), null);
     }
 
     /**
-     * Read and drop everything the server sends; report X errors (FakeInput has no reply).
-     * 서버가 보내는 것을 읽어 버리고 X 오류만 알림(FakeInput은 응답이 없음)
+     * Read everything the server sends: replies go to their handler, X errors are reported,
+     * events are dropped (none are selected; generic events carry extra data).
+     * 서버가 보내는 것을 모두 읽음: 응답은 처리기로, X 오류는 알림, 이벤트는 버림(선택한 이벤트 없음,
+     * generic 이벤트는 추가 데이터가 있음)
      */
     private void startReader(DataInputStream in, Log log) {
         Thread t = new Thread(() -> {
@@ -185,11 +285,22 @@ public final class XTestClient implements Closeable {
             try {
                 while (!closed) {
                     in.readFully(p);
+                    ByteBuffer pb = ByteBuffer.wrap(p).order(ByteOrder.LITTLE_ENDIAN);
+                    int sq = pb.getShort(2) & 0xffff;
                     if (p[0] == 0) {
-                        if (log != null) log.line("X error code=" + (p[1] & 0xff) + " major=" + (p[10] & 0xff)
-                                + " minor=" + (ByteBuffer.wrap(p).order(ByteOrder.LITTLE_ENDIAN).getShort(8) & 0xffff));
+                        pending.remove(sq);
+                        // BadWindow (3) on focus requests is normal when a window just closed
+                        // 창이 막 닫혔을 때 포커스 요청의 BadWindow(3)는 정상
+                        int major = p[10] & 0xff;
+                        boolean benign = (p[1] & 0xff) == 3 && (major == 42 || major == 25);
+                        if (log != null && !benign) log.line("X error code=" + (p[1] & 0xff) + " major=" + major
+                                + " minor=" + (pb.getShort(8) & 0xffff));
                     } else if (p[0] == 1) {
-                        skip(in, ByteBuffer.wrap(p).order(ByteOrder.LITTLE_ENDIAN).getInt(4) * 4);
+                        skip(in, pb.getInt(4) * 4);
+                        Consumer<byte[]> h = pending.remove(sq);
+                        if (h != null) h.accept(p);
+                    } else if ((p[0] & 0x7f) == 35) {
+                        skip(in, pb.getInt(4) * 4);
                     }
                 }
             } catch (IOException e) {
