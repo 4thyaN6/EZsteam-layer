@@ -38,6 +38,18 @@ scan() {
 }
 
 missing=$(scan)
+# Libraries the client ships itself somewhere deeper in its folder (e.g. libcef.so and its video
+# libraries) are not missing: the client loads them from there. A tester got FAIL lines for
+# libcef.so / libav*.so.* that apt cannot provide
+# 클라이언트가 자기 폴더의 더 깊은 곳에 직접 가진 라이브러리(예: libcef.so와 영상 라이브러리)는 빠진 것이
+# 아님: 클라이언트가 그곳에서 불러옴. 테스터에게 apt로 줄 수 없는 libcef.so / libav*.so.* FAIL 줄이 나왔음
+own=$(echo "$missing" | while IFS= read -r so; do
+    [ -n "$so" ] && [ -n "$(find "$STEAM_DIR" -name "$so" \( -type f -o -type l \) -print -quit 2>/dev/null)" ] && echo "$so"
+done)
+if [ -n "$own" ]; then
+    echo "INFO deps : 클라이언트가 직접 가진 라이브러리(설치 불필요): $(echo "$own" | tr '\n' ' ')"
+    missing=$(echo "$missing" | grep -vxF "$own")
+fi
 if [ -z "$missing" ]; then
     echo "OK   deps : 없는 라이브러리 없음"
     exit 0
@@ -77,6 +89,7 @@ for so in sys.stdin.read().split():
 done
 
 left=$(scan)
+[ -n "$own" ] && [ -n "$left" ] && left=$(echo "$left" | grep -vxF "$own")
 if [ -z "$left" ]; then
     echo "OK   deps : 모두 해결"
 else

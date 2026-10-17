@@ -58,6 +58,11 @@ public class MainActivity extends Activity {
         root.addView(start);
         Button go = addButton(start, "Steam 시작", v -> openSteam(steamSize()[0], steamSize()[1]));
         go.setTextSize(18);
+        // Everything a new device needs, in order, skipping what is already there (a tester got
+        // "FAIL tools : Xvfb 없음" after installing only rootfs, driver and Steam)
+        // 새 기기에 필요한 것을 순서대로, 이미 있는 것은 건너뜀(테스터가 rootfs·드라이버·Steam만 설치한 뒤
+        // "FAIL tools : Xvfb 없음"을 받았음)
+        addButton(start, "전체 준비", v -> runTask("setup", this::doSetupAll));
         Button size = addButton(start, sizeLabel(), null);
         size.setOnClickListener(v -> {
             boolean big = !prefs.getBoolean(KEY_BIG_SCREEN, false);
@@ -69,6 +74,16 @@ public class MainActivity extends Activity {
             boolean on = !prefs.getBoolean(KEY_AUTOSTART, true);
             prefs.edit().putBoolean(KEY_AUTOSTART, on).apply();
             auto.setText(autoLabel(on));
+        });
+        // Shared EZlator Steam library on/off (startup got slower with it, user report; for
+        // comparing and as a way back)
+        // 공유 EZlator Steam 라이브러리 켬/끔(켠 뒤 시작이 느려졌다는 사용자 보고. 비교용이자 되돌리는 방법)
+        Button shared = addButton(start, sharedLabel(prefs.getBoolean(KEY_SHARED_LIB, true)), null);
+        shared.setOnClickListener(v -> {
+            boolean on = !prefs.getBoolean(KEY_SHARED_LIB, true);
+            prefs.edit().putBoolean(KEY_SHARED_LIB, on).apply();
+            shared.setText(sharedLabel(on));
+            log("공유 Steam 라이브러리 " + (on ? "켬" : "끔") + " (다음 Steam 시작부터)");
         });
         adminBox = new LinearLayout(this);
         adminBox.setOrientation(LinearLayout.VERTICAL);
@@ -177,7 +192,7 @@ public class MainActivity extends Activity {
         String missing = notReady();
         setAdminShown(prefs.getBoolean(KEY_ADMIN, false) || !missing.isEmpty());
         if (!missing.isEmpty()) {
-            log("Steam 바로 시작 불가: " + missing + " (관리자 모드에서 준비)");
+            log("Steam 바로 시작 불가: " + missing + " → [전체 준비]를 누르십시오");
         } else if (savedInstanceState == null && prefs.getBoolean(KEY_AUTOSTART, true)) {
             // Only on a fresh launch: coming back from the Steam screen must not start it again
             // 새로 실행했을 때만: Steam 화면에서 돌아왔을 때 다시 시작하면 안 됨
@@ -218,6 +233,7 @@ public class MainActivity extends Activity {
 
     // ---- start panel / 시작 패널
 
+    static final String KEY_SHARED_LIB = "steam.sharedlib";
     static final String KEY_AUTOSTART = "autostart", KEY_BIG_SCREEN = "steam.big", KEY_ADMIN = "admin.shown";
     /** Holds every setup and test row / 모든 설치·시험 줄을 담음 */
     private LinearLayout adminBox;
@@ -238,8 +254,76 @@ public class MainActivity extends Activity {
         return "화면 " + s[0] + "x" + s[1];
     }
 
+    private static String sharedLabel(boolean on) {
+        return "EZlator 라이브러리: " + (on ? "켬" : "끔");
+    }
+
+    /** Shared EZlator Steam library wanted (DisplayActivity) / 공유 EZlator Steam 라이브러리 사용 여부 */
+    static boolean sharedLibrary(android.content.Context ctx) {
+        return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_SHARED_LIB, true);
+    }
+
     private static String autoLabel(boolean on) {
         return "바로 실행: " + (on ? "켬" : "끔");
+    }
+
+    /** X server and tools from [시험 도구 설치] are in the rootfs / [시험 도구 설치]의 X 서버·도구가 rootfs에 있음 */
+    private boolean toolsInstalled() {
+        return new File(RootfsInstaller.rootfsDir(this), "usr/bin/Xvfb").exists();
+    }
+
+    private boolean steamInstalled() {
+        return new File(RootfsInstaller.rootfsDir(this), "home/steam/.local/share/Steam/steamrtarm64/steam").isFile();
+    }
+
+    /**
+     * One-button setup for a new device: rootfs -> GPU driver -> tools (Xvfb) -> Steam client, each
+     * only when missing, stopping at the first step that does not finish.
+     * 새 기기용 한 번에 준비: rootfs -> GPU 드라이버 -> 도구(Xvfb) -> Steam 클라이언트. 빠진 것만 하고,
+     * 끝나지 않은 단계에서 멈춤
+     */
+    private void doSetupAll() throws Exception {
+        if (RootfsInstaller.installedVersion(this).isEmpty() || RootfsInstaller.needsInstall(this)) {
+            log("[1/4] rootfs 설치");
+            doInstall();
+            if (RootfsInstaller.installedVersion(this).isEmpty()) {
+                log("FAIL 준비 : rootfs 설치가 끝나지 않음 (위 로그 확인)");
+                return;
+            }
+        } else {
+            log("[1/4] rootfs 있음");
+        }
+        if (DriverInstaller.installedVersion(this, TURNIP).isEmpty()) {
+            log("[2/4] 드라이버 설치");
+            doDriverInstall();
+            if (DriverInstaller.installedVersion(this, TURNIP).isEmpty()) {
+                log("FAIL 준비 : 드라이버 설치가 끝나지 않음 (위 로그 확인)");
+                return;
+            }
+        } else {
+            log("[2/4] 드라이버 있음");
+        }
+        if (!toolsInstalled()) {
+            log("[3/4] 시험 도구 설치 (X 서버 등)");
+            doToolsInstall();
+            if (!toolsInstalled()) {
+                log("FAIL 준비 : 시험 도구 설치가 끝나지 않음 (위 로그 확인)");
+                return;
+            }
+        } else {
+            log("[3/4] 시험 도구 있음");
+        }
+        if (!steamInstalled()) {
+            log("[4/4] Steam 설치");
+            doSteamInstall();
+            if (!steamInstalled()) {
+                log("FAIL 준비 : Steam 설치가 끝나지 않음 (위 로그 확인)");
+                return;
+            }
+        } else {
+            log("[4/4] Steam 있음");
+        }
+        log("준비 끝: [Steam 시작]을 누르십시오 (첫 실행은 Steam이 스스로 갱신해 몇 분 걸릴 수 있음)");
     }
 
     /**
@@ -250,6 +334,7 @@ public class MainActivity extends Activity {
         if (RootfsInstaller.installedVersion(this).isEmpty()) return "rootfs 미설치";
         if (RootfsInstaller.needsInstall(this)) return "rootfs 갱신 필요";
         if (DriverInstaller.installedVersion(this, "turnip").isEmpty()) return "드라이버 미설치";
+        if (!toolsInstalled()) return "시험 도구(Xvfb) 미설치";
         if (!new File(RootfsInstaller.rootfsDir(this), "home/steam/.local/share/Steam/steamrtarm64/steam").isFile()) {
             return "Steam 미설치";
         }
@@ -299,8 +384,12 @@ public class MainActivity extends Activity {
             log("다른 작업 진행 중");
             return;
         }
-        if (!new File(RootfsInstaller.rootfsDir(this), "home/steam/.local/share/Steam/steamrtarm64/steam").isFile()) {
-            log("Steam 클라이언트 없음: [시험 도구 설치] → [Steam 설치] 먼저");
+        // Everything checked before the screen opens (a tester got a black screen with only
+        // "FAIL tools : Xvfb 없음")
+        // 화면을 열기 전에 모두 확인함(테스터가 "FAIL tools : Xvfb 없음"만 뜬 검은 화면을 받았음)
+        String missing = notReady();
+        if (!missing.isEmpty()) {
+            log("Steam 시작 불가: " + missing + " → [전체 준비]를 누르십시오");
             return;
         }
         log("== steam " + w + "x" + h);

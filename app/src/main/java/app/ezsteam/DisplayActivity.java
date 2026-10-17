@@ -371,13 +371,13 @@ public class DisplayActivity extends Activity {
                 // already downloaded there is not downloaded again (steam-run.sh registers it)
                 // EZlator Steam 라이브러리를 리눅스 Steam 클라이언트의 추가 라이브러리로 연결해, 그곳에
                 // 이미 받은 게임을 다시 받지 않게 함(steam-run.sh가 등록함)
-                File sharedLib = app.ezsteam.runtime.SharedStorage.steamLibrary(this);
+                File sharedLib = MainActivity.sharedLibrary(this) ? app.ezsteam.runtime.SharedStorage.steamLibrary(this) : null;
                 if (sharedLib != null) {
                     c.binds.add(new String[]{sharedLib.getAbsolutePath(), app.ezsteam.runtime.SharedStorage.GUEST_LIBRARY});
                     c.env.put("EZS_SHARED_LIBRARY", app.ezsteam.runtime.SharedStorage.GUEST_LIBRARY);
                     log("공유 Steam 라이브러리: " + sharedLib + " -> " + app.ezsteam.runtime.SharedStorage.GUEST_LIBRARY);
                 } else {
-                    log("공유 Steam 라이브러리 없음 (저장소 권한 없음)");
+                    log("공유 Steam 라이브러리 없음 (" + (MainActivity.sharedLibrary(this) ? "저장소 권한 없음" : "시작 화면에서 끔") + ")");
                 }
                 // Game frame hand-over (main screen option, see MainActivity.WSI_MODES); replaces the
                 // driver package's MESA_VK_WSI_DEBUG=sw. Steam passes these on to Proton and the game.
