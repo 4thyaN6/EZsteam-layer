@@ -175,6 +175,9 @@ jobs:
           # SDL2 without udev for that library (loaded first by full path, see native/ezspad/ezs_pad.c)
           # 그 라이브러리용 udev 없는 SDL2(전체 경로로 먼저 불러옴, native/ezspad/ezs_pad.c 참고)
           cp alsa-artifact/libSDL2-2.0.so.0 rootfs-overlay/opt/ezsteam/lib/
+          # flock fallback for the shared Steam library (native/ezscompat)
+          # 공유 Steam 라이브러리용 flock 대체(native/ezscompat)
+          cp alsa-artifact/libezs_compat.so rootfs-overlay/opt/ezsteam/lib/
           cat alsa-artifact/alsa-plugin.version
 
       - uses: actions/setup-java@v4

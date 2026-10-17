@@ -117,6 +117,13 @@ fi
 # 클라이언트에 들어가면 클라이언트 자체 SDL3에 패드를 붙임(native/ezspad)
 EZS_CLIENT_PRELOAD=
 [ -f /opt/ezsteam/lib/libezs_pad.so ] && EZS_CLIENT_PRELOAD=/opt/ezsteam/lib/libezs_pad.so
+# flock on the shared library (Android shared storage answers ENOSYS) reported as granted
+# (native/ezscompat); the client and everything it starts inherit it
+# 공유 라이브러리의 flock(안드로이드 공용 저장소는 ENOSYS를 돌려줌)을 성공으로 알림(native/ezscompat).
+# 클라이언트와 클라이언트가 띄우는 모든 것이 물려받음
+if [ -f /opt/ezsteam/lib/libezs_compat.so ]; then
+    EZS_CLIENT_PRELOAD="${EZS_CLIENT_PRELOAD:+$EZS_CLIENT_PRELOAD:}/opt/ezsteam/lib/libezs_compat.so"
+fi
 
 # Fonts: the phone's fonts are bound to /usr/local/share/fonts/android by the app (read-only).
 # A per-user fontconfig file puts the CJK families after DejaVu for each generic name, so Latin text
