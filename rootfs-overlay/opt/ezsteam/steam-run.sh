@@ -173,9 +173,31 @@ while :; do
     # Missing libraries of the (possibly just updated) client, report only
     # (방금 갱신됐을 수 있는) 클라이언트의 없는 라이브러리, 보고만 함
     sh /opt/ezsteam/steam-deps.sh check
+    # File check of the client: skipped (-noverifyfiles, faster start) only while the client UI
+    # library loads. A fresh install from the current bootstrap stopped at once with "dlmopen
+    # steamui.so failed: libavcodec.so.62" right after "Verification skipped" (tester device): the
+    # bootstrap lacks parts that the client's own check fetches. Then the check runs instead
+    # 클라이언트 파일 검사: 클라이언트 UI 라이브러리가 불러와지는 동안만 건너뜀(-noverifyfiles, 시작이 빠름).
+    # 지금의 부트스트랩으로 새로 설치하면 "Verification skipped" 직후 "dlmopen steamui.so failed:
+    # libavcodec.so.62"로 바로 멈췄음(테스터 기기): 부트스트랩에 없는 부분을 클라이언트 자체 검사가 받아옴.
+    # 그 경우에는 검사를 함
+    VERIFY=-noverifyfiles
+    UI=$STEAM_DIR/steamrtarm64/steamui.so
+    if [ -f "$UI" ]; then
+        libdirs=$(find "$STEAM_DIR/steamrtarm64" "$STEAM_DIR/linuxarm64" -name '*.so*' -type f 2>/dev/null \
+            | xargs -r -n1 dirname | sort -u | paste -sd: -)
+        ui_missing=$(LD_LIBRARY_PATH="$libdirs" ldd "$UI" 2>/dev/null | awk '/not found/ {print $1}' | tr '\n' ' ')
+        if [ -n "$ui_missing" ]; then
+            VERIFY=
+            echo "INFO steam : steamui.so에 없는 라이브러리($ui_missing) → 파일 검사·받기를 켜고 시작"
+        fi
+    fi
+    # Where the client's own video libraries are, if any (diagnosis) / 클라이언트 자체 영상 라이브러리 위치(진단)
+    av=$(find "$STEAM_DIR" -name 'libavcodec.so*' 2>/dev/null | head -n 1)
+    echo "INFO ffmpeg : ${av:-클라이언트 폴더에 libavcodec 없음}"
     echo "INFO steam : 시작 $n ($(date +%H:%M:%S))"
     LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_CLIENT_PRELOAD" \
-        "$BIN" -no-cef-sandbox -cef-disable-gpu -chromeosnopreallocate -noverifyfiles >>"$LOG" 2>&1
+        "$BIN" -no-cef-sandbox -cef-disable-gpu -chromeosnopreallocate $VERIFY >>"$LOG" 2>&1
     rc=$?
     echo "INFO steam : 종료 rc=$rc ($(date +%H:%M:%S))"
     # 42: restart after a self update (at most 5 times in a row) / 42: 자체 갱신 후 재시작(연속 5회까지)

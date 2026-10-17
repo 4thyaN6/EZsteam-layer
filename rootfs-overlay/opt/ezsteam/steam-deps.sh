@@ -79,6 +79,18 @@ for so in sys.stdin.read().split():
     for c in $cands; do
         if apt-cache show "$c" >/dev/null 2>&1; then pkg=$c; break; fi
     done
+    # CEF and its video libraries (FFmpeg 8 names, not in Debian trixie) come with the client's
+    # own packages, not from apt (tester device: libcef.so, libavcodec.so.62 ... missing right after
+    # the bootstrap); the client's file check fetches them (steam-run.sh)
+    # CEF와 그 영상 라이브러리(FFmpeg 8 이름, Debian trixie에 없음)는 apt가 아니라 클라이언트 자체 패키지로
+    # 옴(테스터 기기: 부트스트랩 직후 libcef.so, libavcodec.so.62 등이 없음). 클라이언트 파일 검사가 받아옴
+    # (steam-run.sh)
+    case "$so" in
+        libcef.so*|libavcodec.so*|libavformat.so*|libavutil.so*|libavfilter.so*|libswscale.so*|libswresample.so*)
+            echo "INFO deps : $so 는 Steam 클라이언트가 직접 받음 (첫 실행 때 파일 검사)"
+            continue
+            ;;
+    esac
     if [ -z "$pkg" ]; then
         echo "FAIL deps : $so 패키지 이름을 찾지 못함 (후보: ${cands:-없음})"
     elif $APT install -y --no-install-recommends "$pkg" >/dev/null 2>&1; then
