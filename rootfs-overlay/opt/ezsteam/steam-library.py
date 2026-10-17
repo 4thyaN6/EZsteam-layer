@@ -63,6 +63,58 @@ def dump(d, depth=0):
     return "".join(out)
 
 
+SIZE_LINE = re.compile(r'("SizeOnDisk"\s+")0(")')
+
+
+def tree_size(path):
+    """Bytes of all regular files under path (symbolic links not followed) / path 아래 일반 파일 바이트 합"""
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for n in files:
+            try:
+                st = os.lstat(os.path.join(root, n))
+            except OSError:
+                continue
+            if not os.path.islink(os.path.join(root, n)):
+                total += st.st_size
+    return total
+
+
+def fill_sizes(lib):
+    """
+    Write the real size into appmanifests that say SizeOnDisk "0" (EZlator writes 0: its
+    SteamGameInstaller.writeAppManifest; the client then showed every game as 0 B, user report).
+    Only that one value is changed, once per game (later starts find a non-zero size).
+    SizeOnDisk가 "0"인 appmanifest에 실제 크기를 씀(EZlator는 0을 씀: SteamGameInstaller.
+    writeAppManifest. 그래서 클라이언트가 모든 게임을 0 B로 보여 줬음, 사용자 보고). 그 값 하나만 바꾸며
+    게임마다 한 번만 함(다음 시작부터는 0이 아님)
+    """
+    apps_dir = os.path.join(lib, "steamapps")
+    for name in sorted(os.listdir(apps_dir)) if os.path.isdir(apps_dir) else []:
+        if not re.fullmatch(r"appmanifest_\d+\.acf", name):
+            continue
+        path = os.path.join(apps_dir, name)
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError:
+            continue
+        if not SIZE_LINE.search(text):
+            continue
+        state = parse(text).get("AppState", {})
+        game = os.path.join(apps_dir, "common", state.get("installdir", ""))
+        if not state.get("installdir") or not os.path.isdir(game):
+            continue
+        size = tree_size(game)
+        if size <= 0:
+            continue
+        tmp = path + ".ezs-tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(SIZE_LINE.sub(lambda m: m.group(1) + str(size) + m.group(2), text, count=1))
+        os.replace(tmp, path)
+        print("OK   library : %s 크기 %.2f GB 기록 (SizeOnDisk 0)" % (state.get("name", name), size / 1e9))
+
+
 def installed_apps(lib):
     """appid -> SizeOnDisk from the library's appmanifest files / 라이브러리 appmanifest의 appid -> 크기"""
     apps = {}
@@ -97,6 +149,7 @@ def marker(lib):
 def main():
     steam, lib = sys.argv[1], sys.argv[2].rstrip("/")
     cid = marker(lib)
+    fill_sizes(lib)
     apps = installed_apps(lib)
     lists = [os.path.join(steam, "config", "libraryfolders.vdf"),
              os.path.join(steam, "steamapps", "libraryfolders.vdf")]
@@ -108,8 +161,16 @@ def main():
         with open(path, encoding="utf-8", errors="replace") as f:
             data = parse(f.read())
         folders = data.setdefault("libraryfolders", {})
-        if any(isinstance(v, dict) and v.get("path", "").rstrip("/") == lib for v in folders.values()):
-            print("OK   library : %s 이미 등록 (%s)" % (lib, os.path.relpath(path, steam)))
+        mine = [v for v in folders.values() if isinstance(v, dict) and v.get("path", "").rstrip("/") == lib]
+        if mine:
+            # Already listed: refresh its game sizes / 이미 있음: 게임 크기만 새로 씀
+            if mine[0].get("apps") != apps:
+                mine[0]["apps"] = apps
+                tmp = path + ".ezs-tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write(dump(data))
+                os.replace(tmp, path)
+            print("OK   library : %s 이미 등록, 게임 %d개 (%s)" % (lib, len(apps), os.path.relpath(path, steam)))
             continue
         nums = [int(k) for k in folders if k.isdigit()]
         folders[str(max(nums) + 1 if nums else 0)] = {
