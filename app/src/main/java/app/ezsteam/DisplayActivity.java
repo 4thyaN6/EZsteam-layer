@@ -419,7 +419,10 @@ public class DisplayActivity extends Activity {
                 if (CRASH_LOG) c.env.put("PROOT_CRASH_LOG", "1");
                 // Fewer Steam web helper processes (option on the main screen, on by default)
                 // Steam 웹 도우미 프로세스 줄이기(메인 화면 옵션, 기본 켬)
-                if (MainActivity.cefSlim(this)) c.env.put("EZS_CEF_FLAGS", MainActivity.CEF_SLIM_FLAGS);
+                if (MainActivity.cefSlim(this)) {
+                    c.env.put("EZS_CEF_FLAGS", MainActivity.CEF_SLIM_FLAGS);
+                    c.env.put("EZS_CEF_DISABLE", MainActivity.CEF_SLIM_DISABLE);
+                }
                 if (MainActivity.cefSingle(this)) {
                     c.env.put("EZS_STEAM_EXTRA", MainActivity.CEF_SINGLE_ARG);
                     log("CEF 단일 프로세스(시험) 켬: " + MainActivity.CEF_SINGLE_ARG);
@@ -1679,6 +1682,28 @@ public class DisplayActivity extends Activity {
         // 모든 IP 주소는 <v4>/<v6>로 바꿈(종류만 남김)
         File conn = new File(rootfs, "home/steam/.local/share/Steam/logs/connection_log.txt");
         if (conn.isFile()) files.add(conn);
+        // Unity games' own logs (Player.log in each prefix, newest 3): a game that stays on a black
+        // screen leaves its reason there, not in the Proton log (2026-10-18)
+        // Unity 게임 자체 로그(prefix마다 있는 Player.log, 최근 3개): 검은 화면에서 멈춘 게임은 이유를
+        // Proton 로그가 아니라 여기에 남김(2026-10-18)
+        java.util.Map<File, String> alias = new java.util.HashMap<>();
+        java.util.List<File> unity = new java.util.ArrayList<>();
+        File[] pfxs = new File(rootfs, "home/steam/.local/share/Steam/steamapps/compatdata").listFiles(File::isDirectory);
+        for (File pfx : pfxs == null ? new File[0] : pfxs) {
+            File[] vendors = new File(pfx, "pfx/drive_c/users/steamuser/AppData/LocalLow").listFiles(File::isDirectory);
+            for (File v : vendors == null ? new File[0] : vendors) {
+                File[] games = v.listFiles(File::isDirectory);
+                for (File g : games == null ? new File[0] : games) {
+                    File log = new File(g, "Player.log");
+                    if (log.isFile()) {
+                        unity.add(log);
+                        alias.put(log, "unity-" + pfx.getName() + "-Player.log");
+                    }
+                }
+            }
+        }
+        unity.sort((a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+        files.addAll(unity.subList(0, Math.min(3, unity.size())));
         int n = 0;
         app.ezsteam.runtime.LogScrubber scrub = app.ezsteam.runtime.LogScrubber.forRootfs(rootfs);
         try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(os)) {
@@ -1696,7 +1721,7 @@ public class DisplayActivity extends Activity {
             zip.closeEntry();
             byte[] buf = new byte[1 << 16];
             for (File f : files) {
-                zip.putNextEntry(new java.util.zip.ZipEntry("logs/" + f.getName()));
+                zip.putNextEntry(new java.util.zip.ZipEntry("logs/" + alias.getOrDefault(f, f.getName())));
                 boolean image = f.getName().endsWith(".png");
                 boolean maskIp = f.getName().equals("connection_log.txt");
                 try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(f, "r")) {
