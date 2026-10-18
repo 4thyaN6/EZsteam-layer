@@ -481,6 +481,11 @@ public class DisplayActivity extends Activity {
                 c.rootfs = session.rootfs;
                 c.nativeLibDir = session.nativeLibDir;
                 c.dataDir = session.dataDir;
+                // Fake root, as [Steam 설치] uses: without it apt/dpkg ran as the app's own id and
+                // every install failed (2026-10-18)
+                // [Steam 설치]와 같은 가짜 root: 없으면 apt/dpkg가 앱 자체 id로 돌아 설치가 모두 실패했음
+                // (2026-10-18)
+                c.rootId = true;
                 log("DEPS 필요한 라이브러리 설치 시작 (apt, 네트워크 사용)");
                 Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/steam-deps.sh",
                         Arrays.asList("install"), null, null);

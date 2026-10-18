@@ -128,10 +128,12 @@ for so in sys.stdin.read().split():
                 ;;
         esac
         echo "FAIL deps : $so 패키지 이름을 찾지 못함 (후보: ${cands:-없음})"
-    elif $APT install -y --no-install-recommends "$pkg" >/dev/null 2>&1; then
+    elif out=$($APT install -y --no-install-recommends "$pkg" 2>&1); then
         echo "OK   deps : $so <- $pkg"
     else
-        echo "FAIL deps : $so <- $pkg 설치 실패"
+        # Last apt lines, so the reason is in the report / 이유가 제보에 남도록 apt 마지막 줄
+        echo "FAIL deps : $so <- $pkg 설치 실패 (id $(id -u))"
+        echo "$out" | tail -n 3 | sed 's/^/FAIL deps :   /'
     fi
 done
 
