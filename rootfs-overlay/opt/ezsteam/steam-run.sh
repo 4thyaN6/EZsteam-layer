@@ -194,17 +194,29 @@ while :; do
     # 그 경우에는 검사를 함
     VERIFY=-noverifyfiles
     UI=$STEAM_DIR/steamrtarm64/steamui.so
-    if [ -f "$UI" ]; then
-        libdirs=$(find "$STEAM_DIR/steamrtarm64" "$STEAM_DIR/linuxarm64" -name '*.so*' -type f 2>/dev/null \
+    # The check is skipped while steamui.so is the same file (size and time) that passed last
+    # time: it took about 12 s of every start under PRoot (app log, 2026-10-18)
+    # steamui.so가 지난번 통과한 파일(크기·시각)과 같으면 검사를 건너뜀: PRoot에서 시작마다 약 12초가
+    # 걸렸음(앱 로그, 2026-10-18)
+    UI_OK=$HOME/.steam/.ezs-steamui-ok
+    ui_id=$(stat -c '%s %Y' "$UI" 2>/dev/null)
+    if [ -f "$UI" ] && [ "$ui_id" != "$(cat "$UI_OK" 2>/dev/null)" ]; then
+        libdirs=$(find "$STEAM_DIR/steamrtarm64" "$STEAM_DIR/linuxarm64" -maxdepth 4 -name '*.so*' -type f 2>/dev/null \
             | xargs -r -n1 dirname | sort -u | paste -sd: -)
         ui_missing=$(LD_LIBRARY_PATH="$libdirs" ldd "$UI" 2>/dev/null | awk '/not found/ {print $1}' | tr '\n' ' ')
         if [ -n "$ui_missing" ]; then
             VERIFY=
+            rm -f "$UI_OK"
             echo "INFO steam : steamui.so에 없는 라이브러리($ui_missing) → 파일 검사·받기를 켜고 시작"
+        else
+            mkdir -p "$HOME/.steam" && echo "$ui_id" > "$UI_OK"
         fi
     fi
-    # Where the client's own video libraries are, if any (diagnosis) / 클라이언트 자체 영상 라이브러리 위치(진단)
-    av=$(find "$STEAM_DIR" -name 'libavcodec.so*' 2>/dev/null | head -n 1)
+    # Where the client's own video libraries are, if any (diagnosis). Only the client's program
+    # folders: the whole Steam folder holds every installed game and took seconds to walk
+    # 클라이언트 자체 영상 라이브러리 위치(진단). 클라이언트 프로그램 폴더만 봄: Steam 폴더 전체에는 설치된
+    # 게임이 모두 있어 훑는 데 몇 초가 걸렸음
+    av=$(find "$STEAM_DIR/steamrtarm64" "$STEAM_DIR/linuxarm64" -maxdepth 4 -name 'libavcodec.so*' -print -quit 2>/dev/null)
     echo "INFO ffmpeg : ${av:-클라이언트 폴더에 libavcodec 없음}"
     echo "INFO steam : 시작 $n ($(date +%H:%M:%S))"
     LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_CLIENT_PRELOAD" \

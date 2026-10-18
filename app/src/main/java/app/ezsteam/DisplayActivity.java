@@ -1310,6 +1310,27 @@ public class DisplayActivity extends Activity {
         }
     }
 
+    /** IPv4 / IPv6 addresses in a log line / 로그 줄의 IPv4 / IPv6 주소 */
+    private static final java.util.regex.Pattern IPV4_ADDR = java.util.regex.Pattern.compile(
+            "(?<![0-9.])(?:[0-9]{1,3}\\.){3}[0-9]{1,3}(?![0-9.])");
+    private static final java.util.regex.Pattern IPV6_ADDR = java.util.regex.Pattern.compile(
+            "(?<![0-9A-Za-z:])(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}(?![0-9A-Za-z:])");
+
+    /** Line with every address replaced by its kind (<v4>, <v6>) / 모든 주소를 종류(<v4>, <v6>)로 바꾼 줄 */
+    static String maskAddresses(String line) {
+        String out = IPV4_ADDR.matcher(line).replaceAll("<v4>");
+        java.util.regex.Matcher m = IPV6_ADDR.matcher(out);
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            // At least 3 colons, so times like 05:35:09 stay / 콜론 3개 이상만. 05:35:09 같은 시각은 남김
+            String g = m.group();
+            m.appendReplacement(sb, g.chars().filter(c -> c == ':').count() >= 3 && !g.matches("[0-9:]+")
+                    ? "<v6>" : java.util.regex.Matcher.quoteReplacement(g));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
     /** Process name before " | " (kernel comm) / " | " 앞의 프로세스 이름(커널 comm) */
     private static String exeName(app.ezsteam.runtime.ChildProcessCounter.Proc pr) {
         int i = pr.name.indexOf(" | ");
@@ -1490,6 +1511,12 @@ public class DisplayActivity extends Activity {
         // 클라이언트 자체 다운로드 로그(어느 라이브러리, 어느 depot, 왜 다시 받는지)
         File content = new File(rootfs, "home/steam/.local/share/Steam/logs/content_log.txt");
         if (content.isFile()) files.add(content);
+        // The client's own connection log (when and how it reached Steam's servers: slow sign-in,
+        // "no connection" at start); every IP address is replaced by <v4>/<v6> (only the kind stays)
+        // 클라이언트 자체 접속 로그(언제 어떻게 Steam 서버에 닿았는지: 느린 로그인, 시작 때 "연결 없음").
+        // 모든 IP 주소는 <v4>/<v6>로 바꿈(종류만 남김)
+        File conn = new File(rootfs, "home/steam/.local/share/Steam/logs/connection_log.txt");
+        if (conn.isFile()) files.add(conn);
         int n = 0;
         app.ezsteam.runtime.LogScrubber scrub = app.ezsteam.runtime.LogScrubber.forRootfs(rootfs);
         try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(os)) {
@@ -1509,6 +1536,7 @@ public class DisplayActivity extends Activity {
             for (File f : files) {
                 zip.putNextEntry(new java.util.zip.ZipEntry("logs/" + f.getName()));
                 boolean image = f.getName().endsWith(".png");
+                boolean maskIp = f.getName().equals("connection_log.txt");
                 try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(f, "r")) {
                     long len = in.length();
                     if (len > LOG_SAVE_MAX) {
@@ -1524,6 +1552,7 @@ public class DisplayActivity extends Activity {
                                 java.nio.channels.Channels.newInputStream(in.getChannel()), StandardCharsets.UTF_8));
                         String line;
                         while ((line = br.readLine()) != null) {
+                            if (maskIp) line = maskAddresses(line);
                             zip.write(scrub.scrub(line).getBytes(StandardCharsets.UTF_8));
                             zip.write('\n');
                         }
