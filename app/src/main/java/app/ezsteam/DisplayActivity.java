@@ -1682,6 +1682,13 @@ public class DisplayActivity extends Activity {
         // 모든 IP 주소는 <v4>/<v6>로 바꿈(종류만 남김)
         File conn = new File(rootfs, "home/steam/.local/share/Steam/logs/connection_log.txt");
         if (conn.isFile()) files.add(conn);
+        // The Steam web helper wrapper as patched by ezsteam-prepare.sh (the feature merge did not
+        // reach the browser switches, 2026-10-18); a short Valve script, sent only in a report
+        // the user saves
+        // ezsteam-prepare.sh가 고친 Steam 웹 도우미 감쌈 스크립트(기능 합치기가 브라우저 스위치에 반영되지
+        // 않았음, 2026-10-18). 짧은 Valve 스크립트이며 사용자가 저장하는 제보에만 들어감
+        File wh = new File(rootfs, "home/steam/.local/share/Steam/steamrtarm64/steamwebhelper.sh");
+        if (wh.isFile()) files.add(wh);
         // Unity games' own logs (Player.log in each prefix, newest 3): a game that stays on a black
         // screen leaves its reason there, not in the Proton log (2026-10-18)
         // Unity 게임 자체 로그(prefix마다 있는 Player.log, 최근 3개): 검은 화면에서 멈춘 게임은 이유를
