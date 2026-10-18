@@ -1,8 +1,8 @@
 diff --git a/src/syscall/syscall.c b/src/syscall/syscall.c
-index f4c2f50..c685cb0 100644
+index f4c2f50..d218eff 100644
 --- a/src/syscall/syscall.c
 +++ b/src/syscall/syscall.c
-@@ -32,6 +32,110 @@
+@@ -32,6 +32,113 @@
  #include "tracee/reg.h"
  #include "tracee/mem.h"
  #include "cli/note.h"
@@ -88,6 +88,9 @@ index f4c2f50..c685cb0 100644
 +		line[len - 1] = '\0';
 +	fprintf(stderr, "%s\n", line);
 +	memset(sysstat_count, 0, sizeof(sysstat_count));
++	/* Program names start over too, so short-lived programs at start-up do not fill the table
++	 * 프로그램 이름도 새로 시작함. 시작 때 잠깐 도는 프로그램들이 표를 채우지 않게 함 */
++	sysstat_nexe = 0;
 +}
 +
 +/* Count one syscall stop / 시스템 호출 정지 하나를 셈 */
@@ -113,7 +116,7 @@ index f4c2f50..c685cb0 100644
  
  /**
   * Copy in @path a C string (PATH_MAX bytes max.) from the @tracee's
-@@ -151,6 +255,8 @@ void translate_syscall(Tracee *tracee)
+@@ -151,6 +258,8 @@ void translate_syscall(Tracee *tracee)
  	int suppressed_syscall_status = 0;
  
  	if (is_enter_stage) {

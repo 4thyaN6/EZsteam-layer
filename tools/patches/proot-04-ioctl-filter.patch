@@ -1,0 +1,134 @@
+diff --git a/src/syscall/seccomp.c b/src/syscall/seccomp.c
+index 30f7258..a2cd1c0 100644
+--- a/src/syscall/seccomp.c
++++ b/src/syscall/seccomp.c
+@@ -38,6 +38,12 @@
+ #include <stddef.h>        /* offsetof(3), */
+ #include <stdint.h>        /* uint*_t, UINT*_MAX, */
+ #include <assert.h>        /* assert(3), */
++#include <stdlib.h>        /* getenv(3), */
++#include <stdbool.h>       /* bool, */
++#include <termios.h>       /* TCSETS, TCGETS2, ... */
++#include <sys/ioctl.h>     /* ioctl request numbers, */
++#include <linux/ioctl.h>   /* _IOW, */
++#include <linux/sockios.h> /* SIOCGIFINDEX, */
+ 
+ #include "syscall/seccomp.h"
+ #include "tracee/tracee.h"
+@@ -127,6 +133,72 @@ static int add_trace_syscall(struct sock_fprog *program, word_t syscall, int fla
+  * sanity check.  This function returns -errno if an error occurred,
+  * otherwise 0.
+  */
++/**
++ * ioctl requests PRoot rewrites (enter.c: SIOCGIFINDEX and the terminal TC*2/TCSAFLUSH forms;
++ * exit.c: FICLONE). Only these are sent to PRoot; every other ioctl (GPU, sound, input, sockets)
++ * runs without a stop. Why: idle Steam made about 1700 ioctl calls a second, each stopping PRoot
++ * twice (enter and exit), which none of them needed (PROOT_STAT, 2026-10-18).
++ * PRoot가 고쳐 쓰는 ioctl 요청(enter.c: SIOCGIFINDEX와 터미널 TC*2/TCSAFLUSH 형태, exit.c: FICLONE).
++ * 이것만 PRoot로 보내고 나머지 ioctl(GPU, 소리, 입력, 소켓)은 멈춤 없이 실행함. 이유: 대기 중 Steam이
++ * 초당 약 1700번 ioctl을 불렀고, 각각 PRoot를 두 번(진입·종료) 멈췄는데 아무것도 PRoot가 필요 없었음
++ * (PROOT_STAT, 2026-10-18)
++ */
++static const uint32_t traced_ioctls[] = {
++	SIOCGIFINDEX,
++	_IOW(0x94, 9, int) /* FICLONE */,
++#ifdef __ANDROID__
++	TCSETS + 2 /* + TCSAFLUSH */,
++	TCGETS2,
++	TCSETS2,
++	TCSETSW2,
++	TCSETSF2,
++#endif
++};
++#define NB_TRACED_IOCTLS (sizeof(traced_ioctls) / sizeof(traced_ioctls[0]))
++/* Statements of the ioctl block / ioctl 덩어리 문장 수 */
++#define LENGTH_TRACE_IOCTL (NB_TRACED_IOCTLS + 4)
++
++/* PROOT_FULL_IOCTL set: trace every ioctl as before / PROOT_FULL_IOCTL이 있으면 예전처럼 모든 ioctl을 추적 */
++static bool ioctl_by_request(Sysnum sysnum)
++{
++	return sysnum == PR_ioctl && getenv("PROOT_FULL_IOCTL") == NULL;
++}
++
++/* Statements one traced syscall takes / 추적하는 시스템 호출 하나가 차지하는 문장 수 */
++static size_t trace_length(Sysnum sysnum)
++{
++	return ioctl_by_request(sysnum) ? LENGTH_TRACE_IOCTL : 2;
++}
++
++/**
++ * ioctl: trace only the requests above (low 32 bits of the second argument, the request number
++ * is an unsigned int); any other request is allowed right away.
++ * ioctl: 위 요청만 추적함(두 번째 인자의 하위 32비트, 요청 번호는 unsigned int). 다른 요청은 바로 허용함
++ */
++static int add_trace_ioctl(struct sock_fprog *program, word_t syscall, int flag)
++{
++	struct sock_filter statements[LENGTH_TRACE_IOCTL];
++	const size_t cmd_offset = offsetof(struct seccomp_data, args[1]);
++	size_t m = NB_TRACED_IOCTLS;
++	size_t i;
++
++	if (syscall > UINT32_MAX)
++		return -ERANGE;
++
++	/* Not ioctl: skip the whole block (the accumulator still holds the syscall number)
++	 * ioctl이 아니면 덩어리 전체를 건너뜀(누산기에는 여전히 시스템 호출 번호가 있음) */
++	statements[0] = (struct sock_filter) BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, syscall, 0, LENGTH_TRACE_IOCTL - 1);
++	statements[1] = (struct sock_filter) BPF_STMT(BPF_LD + BPF_W + BPF_ABS, cmd_offset);
++	for (i = 0; i < m; i++)
++		statements[2 + i] = (struct sock_filter) BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, traced_ioctls[i], m - i, 0);
++	statements[2 + m] = (struct sock_filter) BPF_STMT(BPF_RET + BPF_K, SECCOMP_RET_ALLOW);
++	statements[3 + m] = (struct sock_filter) BPF_STMT(BPF_RET + BPF_K, SECCOMP_RET_TRACE + flag);
++
++	DEBUG_FILTER("FILTER:     trace if syscall == %ld and request is one of %zu\n", syscall, m);
++
++	return add_statements(program, LENGTH_TRACE_IOCTL, statements);
++}
++
+ static int end_arch_section(struct sock_fprog *program, size_t nb_traced_syscalls)
+ {
+ 	int status;
+@@ -144,7 +216,7 @@ static int end_arch_section(struct sock_fprog *program, size_t nb_traced_syscall
+ 
+ 	/* Sanity check, see start_arch_section().  */
+ 	if (   talloc_array_length(program->filter) - program->len
+-	    != LENGTH_END_SECTION + nb_traced_syscalls * LENGTH_TRACE_SYSCALL)
++	    != LENGTH_END_SECTION + nb_traced_syscalls)
+ 		return -ERANGE;
+ 
+ 	return 0;
+@@ -160,8 +232,9 @@ static int start_arch_section(struct sock_fprog *program, uint32_t arch, size_t
+ {
+ 	const size_t arch_offset    = offsetof(struct seccomp_data, arch);
+ 	const size_t syscall_offset = offsetof(struct seccomp_data, nr);
+-	const size_t section_length = LENGTH_END_SECTION +
+-					nb_traced_syscalls * LENGTH_TRACE_SYSCALL;
++	/* nb_traced_syscalls counts filter statements (ioctl takes more than 2)
++	 * nb_traced_syscalls는 필터 문장 수를 셈(ioctl은 2개보다 많음) */
++	const size_t section_length = LENGTH_END_SECTION + nb_traced_syscalls;
+ 	int status;
+ 
+ 	/* Sanity checks.  */
+@@ -275,7 +348,7 @@ static int set_seccomp_filters(const FilteredSysnum *sysnums)
+ 			for (k = 0; sysnums[k].value != PR_void; k++) {
+ 				syscall = detranslate_sysnum(seccomp_archs[i].abis[j], sysnums[k].value);
+ 				if (syscall != SYSCALL_AVOIDER)
+-					nb_traced_syscalls++;
++					nb_traced_syscalls += trace_length(sysnums[k].value);
+ 			}
+ 		}
+ 
+@@ -291,8 +364,11 @@ static int set_seccomp_filters(const FilteredSysnum *sysnums)
+ 				if (syscall == SYSCALL_AVOIDER)
+ 					continue;
+ 
+-				/* Filter: trace if handled syscall */
+-				status = add_trace_syscall(&program, syscall, sysnums[k].flags);
++				/* Filter: trace if handled syscall (ioctl: only some requests) */
++				if (ioctl_by_request(sysnums[k].value))
++					status = add_trace_ioctl(&program, syscall, sysnums[k].flags);
++				else
++					status = add_trace_syscall(&program, syscall, sysnums[k].flags);
+ 				if (status < 0)
+ 					goto end;
+ 			}
