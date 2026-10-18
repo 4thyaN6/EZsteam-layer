@@ -197,6 +197,11 @@ static void path_add(int fd, uint64_t bytes)
 
 static void report(uint64_t t);
 static int build_lookups(char *out, size_t size);
+/* Same-answer cache use, inotify results (see the cache section below) / 같은 답 재사용 횟수, inotify 결과(아래 캐시 부분 참고) */
+static uint64_t hit_udev, hit_dev, hit_uevent, uevent_ok;
+static int uevent_errno;          /* errno of the refused socket, 0 = none / 거부된 소켓의 errno, 0 = 없음 */
+static uint64_t ino_init_ok, ino_init_fail, ino_add_ok, ino_add_fail;
+static int ino_init_errno, ino_add_errno;
 static uint64_t ifaddrs_calls;
 /* socket() calls by family and protocol (netlink: protocol number) / 계열·프로토콜별 socket() 호출 수(netlink는 프로토콜 번호) */
 #define SOCK_KINDS 8
@@ -328,6 +333,25 @@ static void report(uint64_t span)
     if (build_lookups(look, sizeof(look))) fprintf(stderr, "%s\n", look);
     uint64_t ifa = __atomic_exchange_n(&ifaddrs_calls, 0, __ATOMIC_RELAXED);
     if (ifa) fprintf(stderr, "ezs-io: getifaddrs %llu회\n", (unsigned long long)ifa);
+    // Same-answer cache use and inotify results / 같은 답 재사용 횟수와 inotify 결과
+    {
+        uint64_t hu = __atomic_exchange_n(&hit_udev, 0, __ATOMIC_RELAXED);
+        uint64_t hd = __atomic_exchange_n(&hit_dev, 0, __ATOMIC_RELAXED);
+        uint64_t he = __atomic_exchange_n(&hit_uevent, 0, __ATOMIC_RELAXED);
+        uint64_t uo = __atomic_exchange_n(&uevent_ok, 0, __ATOMIC_RELAXED);
+        uint64_t io = __atomic_exchange_n(&ino_init_ok, 0, __ATOMIC_RELAXED);
+        uint64_t ifl = __atomic_exchange_n(&ino_init_fail, 0, __ATOMIC_RELAXED);
+        uint64_t ao = __atomic_exchange_n(&ino_add_ok, 0, __ATOMIC_RELAXED);
+        uint64_t af = __atomic_exchange_n(&ino_add_fail, 0, __ATOMIC_RELAXED);
+        if (hu || hd || he || uo)
+            fprintf(stderr, "ezs-io: 같은 답 재사용: udev 확인 %llu, /dev 상태 %llu, uevent 소켓 %llu(거부 errno %d), uevent 소켓 성공 %llu\n",
+                    (unsigned long long)hu, (unsigned long long)hd, (unsigned long long)he,
+                    __atomic_load_n(&uevent_errno, __ATOMIC_RELAXED), (unsigned long long)uo);
+        if (io || ifl || ao || af)
+            fprintf(stderr, "ezs-io: inotify init 성공 %llu 실패 %llu(errno %d), add_watch 성공 %llu 실패 %llu(errno %d)\n",
+                    (unsigned long long)io, (unsigned long long)ifl, ino_init_errno,
+                    (unsigned long long)ao, (unsigned long long)af, ino_add_errno);
+    }
     // socket() by family (1 unix, 2 inet, 10 inet6, 16 netlink with its protocol: 0 route,
     // 15 kobject uevent = udev monitor) / 계열별 socket()(1 unix, 2 inet, 10 inet6, 16 netlink와
     // 그 프로토콜: 0 route, 15 kobject uevent = udev 감시)
@@ -662,31 +686,118 @@ static int build_lookups(char *out, size_t size)
     return shown;
 }
 
+/*
+ * Same-answer caches (on by default, EZS_LOOKUP_CACHE=0 turns them off). The client repeats a
+ * device check about 55 times a second while idle (2026-10-18): access("/run/udev/control"),
+ * stat("/dev") and a netlink uevent socket. Under PRoot each of these stops the tracer. Answers
+ * that cannot change here are given again without a system call:
+ * - /run/udev/control: no udev daemon runs in this rootfs, so "missing" (ENOENT) stays true
+ * - netlink uevent socket: once the system refuses it, the same error is returned again
+ * - stat of /dev: the last successful result is reused for 1 s (device appearance is noticed
+ *   at most 1 s later)
+ * 같은 답 재사용(기본 켬, EZS_LOOKUP_CACHE=0이면 끔). 클라이언트는 대기 중 장치 확인을 초당 약 55번
+ * 반복함(2026-10-18): access("/run/udev/control"), stat("/dev"), netlink uevent 소켓. PRoot 아래에서는
+ * 이것이 매번 추적기를 멈춤. 여기서 바뀔 수 없는 답은 시스템 호출 없이 다시 줌:
+ * - /run/udev/control: 이 rootfs에는 udev 데몬이 없으므로 "없음"(ENOENT)이 계속 맞음
+ * - netlink uevent 소켓: 시스템이 한 번 거부하면 같은 오류를 다시 돌려줌
+ * - /dev의 stat: 마지막 성공 결과를 1초 동안 다시 씀(장치가 생긴 것은 최대 1초 늦게 알게 됨)
+ */
+static int cache_on(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("EZS_LOOKUP_CACHE");
+        v = !(e && strcmp(e, "0") == 0);
+    }
+    return v;
+}
+
+static int udev_missing;          /* 1: ENOENT seen / ENOENT를 봤음 */
+static pthread_mutex_t dlock = PTHREAD_MUTEX_INITIALIZER;
+static struct stat dev_st;
+static uint64_t dev_st_ns;
+static struct statx dev_stx;
+static uint64_t dev_stx_ns;
+static unsigned int dev_stx_mask;
+static int dev_stx_flags;
+#define DEV_TTL_NS 1000000000ull
+
+/* inotify results (whether file watching works here) / inotify 결과(여기서 파일 감시가 되는지) */
+
+static int is_udev_ctl(const char *p) { return p && strcmp(p, "/run/udev/control") == 0; }
+static int is_dev(const char *p) { return p && (strcmp(p, "/dev") == 0 || strcmp(p, "/dev/") == 0); }
+
+/* access family with the udev answer cache / udev 답 재사용이 있는 access 계열 */
+#define ACCESS_CACHED(call)                                                    \
+    do {                                                                       \
+        if (cache_on() && is_udev_ctl(path)) {                                 \
+            if (__atomic_load_n(&udev_missing, __ATOMIC_RELAXED)) {           \
+                if (on()) __atomic_add_fetch(&hit_udev, 1, __ATOMIC_RELAXED); \
+                errno = ENOENT;                                                \
+                return -1;                                                     \
+            }                                                                  \
+            int r_ = call;                                                     \
+            if (r_ < 0 && errno == ENOENT)                                     \
+                __atomic_store_n(&udev_missing, 1, __ATOMIC_RELAXED);          \
+            return r_;                                                         \
+        }                                                                      \
+        return call;                                                           \
+    } while (0)
+
+/* stat of /dev through the 1 s cache; other paths go straight on (b is a struct stat, same as
+ * struct stat64 on aarch64) / /dev의 stat은 1초 캐시를 거침. 다른 경로는 그대로 넘김(b는 struct
+ * stat, aarch64에서는 struct stat64와 같음) */
+static int dev_stat(int dir, const char *path, struct stat *b, int flags)
+{
+    REAL(fstatat, int (*)(int, const char *, struct stat *, int));
+    if (!cache_on() || !is_dev(path)) return real_fstatat(dir, path, b, flags);
+    uint64_t now = now_ns();
+    pthread_mutex_lock(&dlock);
+    if (dev_st_ns && now - dev_st_ns < DEV_TTL_NS) {
+        *b = dev_st;
+        pthread_mutex_unlock(&dlock);
+        if (on()) __atomic_add_fetch(&hit_dev, 1, __ATOMIC_RELAXED);
+        return 0;
+    }
+    pthread_mutex_unlock(&dlock);
+    int r = real_fstatat(dir, path, b, flags);
+    if (r == 0) {
+        int save = errno;
+        pthread_mutex_lock(&dlock);
+        dev_st = *b;
+        dev_st_ns = now;
+        pthread_mutex_unlock(&dlock);
+        errno = save;
+    }
+    return r;
+}
+
 int access(const char *path, int mode)
 {
     REAL(access, int (*)(const char *, int));
     lookup(path, 0);
-    return real_access(path, mode);
+    ACCESS_CACHED(real_access(path, mode));
 }
 
 int faccessat(int dir, const char *path, int mode, int flags)
 {
     REAL(faccessat, int (*)(int, const char *, int, int));
     lookup(path, 0);
-    return real_faccessat(dir, path, mode, flags);
+    ACCESS_CACHED(real_faccessat(dir, path, mode, flags));
 }
 
 int eaccess(const char *path, int mode)
 {
     REAL(eaccess, int (*)(const char *, int));
     lookup(path, 0);
-    return real_eaccess(path, mode);
+    ACCESS_CACHED(real_eaccess(path, mode));
 }
 
 int stat(const char *path, struct stat *b)
 {
     REAL(stat, int (*)(const char *, struct stat *));
     lookup(path, 1);
+    if (is_dev(path)) return dev_stat(AT_FDCWD, path, b, 0);
     return real_stat(path, b);
 }
 
@@ -694,6 +805,7 @@ int lstat(const char *path, struct stat *b)
 {
     REAL(lstat, int (*)(const char *, struct stat *));
     lookup(path, 1);
+    if (is_dev(path)) return dev_stat(AT_FDCWD, path, b, AT_SYMLINK_NOFOLLOW);
     return real_lstat(path, b);
 }
 
@@ -701,6 +813,7 @@ int fstatat(int dir, const char *path, struct stat *b, int flags)
 {
     REAL(fstatat, int (*)(int, const char *, struct stat *, int));
     lookup(path, 1);
+    if (is_dev(path)) return dev_stat(dir, path, b, flags);
     return real_fstatat(dir, path, b, flags);
 }
 
@@ -708,6 +821,7 @@ int stat64(const char *path, struct stat64 *b)
 {
     REAL(stat64, int (*)(const char *, struct stat64 *));
     lookup(path, 1);
+    if (is_dev(path)) return dev_stat(AT_FDCWD, path, (struct stat *)b, 0);
     return real_stat64(path, b);
 }
 
@@ -715,6 +829,7 @@ int lstat64(const char *path, struct stat64 *b)
 {
     REAL(lstat64, int (*)(const char *, struct stat64 *));
     lookup(path, 1);
+    if (is_dev(path)) return dev_stat(AT_FDCWD, path, (struct stat *)b, AT_SYMLINK_NOFOLLOW);
     return real_lstat64(path, b);
 }
 
@@ -722,6 +837,7 @@ int fstatat64(int dir, const char *path, struct stat64 *b, int flags)
 {
     REAL(fstatat64, int (*)(int, const char *, struct stat64 *, int));
     lookup(path, 1);
+    if (is_dev(path)) return dev_stat(dir, path, (struct stat *)b, flags);
     return real_fstatat64(dir, path, b, flags);
 }
 
@@ -729,6 +845,31 @@ int statx(int dir, const char *path, int flags, unsigned int mask, struct statx 
 {
     REAL(statx, int (*)(int, const char *, int, unsigned int, struct statx *));
     lookup(path, 1);
+    if (cache_on() && is_dev(path)) {
+        // Same 1 s cache for statx, reused only for the same mask and flags
+        // statx도 같은 1초 캐시, 같은 mask·flags일 때만 다시 씀
+        uint64_t now = now_ns();
+        pthread_mutex_lock(&dlock);
+        if (dev_stx_ns && now - dev_stx_ns < DEV_TTL_NS && dev_stx_mask == mask && dev_stx_flags == flags) {
+            *b = dev_stx;
+            pthread_mutex_unlock(&dlock);
+            if (on()) __atomic_add_fetch(&hit_dev, 1, __ATOMIC_RELAXED);
+            return 0;
+        }
+        pthread_mutex_unlock(&dlock);
+        int r = real_statx(dir, path, flags, mask, b);
+        if (r == 0) {
+            int save = errno;
+            pthread_mutex_lock(&dlock);
+            dev_stx = *b;
+            dev_stx_ns = now;
+            dev_stx_mask = mask;
+            dev_stx_flags = flags;
+            pthread_mutex_unlock(&dlock);
+            errno = save;
+        }
+        return r;
+    }
     return real_statx(dir, path, flags, mask, b);
 }
 
@@ -741,9 +882,8 @@ int statx(int dir, const char *path, int flags, unsigned int mask, struct statx 
  */
 static int compat_stat(int dir, const char *path, struct stat *b, int flags)
 {
-    REAL(fstatat, int (*)(int, const char *, struct stat *, int));
     lookup(path, 1);
-    return real_fstatat(dir, path, b, flags);
+    return dev_stat(dir, path, b, flags);
 }
 
 int __xstat(int ver, const char *path, struct stat *b) { (void)ver; return compat_stat(AT_FDCWD, path, b, 0); }
@@ -781,5 +921,63 @@ int socket(int domain, int type, int proto)
             }
         }
     }
+    // Netlink uevent (udev monitor) socket: a refusal is answered again without a system call
+    // netlink uevent(udev 감시) 소켓: 거부되면 시스템 호출 없이 같은 답을 다시 줌
+    if (domain == 16 /* AF_NETLINK */ && proto == 15 /* NETLINK_KOBJECT_UEVENT */ && cache_on()) {
+        int e = __atomic_load_n(&uevent_errno, __ATOMIC_RELAXED);
+        if (e) {
+            if (on()) __atomic_add_fetch(&hit_uevent, 1, __ATOMIC_RELAXED);
+            errno = e;
+            return -1;
+        }
+        int r = real_socket(domain, type, proto);
+        if (r < 0 && (errno == EACCES || errno == EPERM || errno == EAFNOSUPPORT || errno == EPROTONOSUPPORT))
+            __atomic_store_n(&uevent_errno, errno, __ATOMIC_RELAXED);
+        else if (r >= 0 && on())
+            __atomic_add_fetch(&uevent_ok, 1, __ATOMIC_RELAXED);
+        return r;
+    }
     return real_socket(domain, type, proto);
+}
+
+/* ---- inotify: does file watching work here (counted only) / inotify: 여기서 파일 감시가 되는지(세기만 함) ---- */
+
+static void ino_result(int r, uint64_t *ok, uint64_t *fail, int *err)
+{
+    if (!on()) return;
+    if (r >= 0) __atomic_add_fetch(ok, 1, __ATOMIC_RELAXED);
+    else {
+        __atomic_add_fetch(fail, 1, __ATOMIC_RELAXED);
+        __atomic_store_n(err, errno, __ATOMIC_RELAXED);
+    }
+}
+
+int inotify_init(void)
+{
+    REAL(inotify_init, int (*)(void));
+    int r = real_inotify_init();
+    int save = errno;
+    ino_result(r, &ino_init_ok, &ino_init_fail, &ino_init_errno);
+    errno = save;
+    return r;
+}
+
+int inotify_init1(int flags)
+{
+    REAL(inotify_init1, int (*)(int));
+    int r = real_inotify_init1(flags);
+    int save = errno;
+    ino_result(r, &ino_init_ok, &ino_init_fail, &ino_init_errno);
+    errno = save;
+    return r;
+}
+
+int inotify_add_watch(int fd, const char *path, uint32_t mask)
+{
+    REAL(inotify_add_watch, int (*)(int, const char *, uint32_t));
+    int r = real_inotify_add_watch(fd, path, mask);
+    int save = errno;
+    ino_result(r, &ino_add_ok, &ino_add_fail, &ino_add_errno);
+    errno = save;
+    return r;
 }

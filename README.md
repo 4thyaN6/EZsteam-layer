@@ -104,6 +104,7 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - 관리자 모드 [IO 통계](기본 끔): `EZS_IOSTAT=1`, `PROOT_SYSSTAT=60`. 1분마다 `ezs-io:` 요약, `ezs-io: other 쓰기 상위:`(쓰기 호출이 많은 경로 5개), `PROOT_STAT`(PRoot가 멈춰 처리한 시스템 호출 수와 프로그램·호출별 상위 12개, tools/patches/proot-03), `ezs-io: 이름 조회 N회, 경로 M개, 상위:`(클라이언트가 이름으로 가장 많이 찾는 경로 8개, 숫자는 `#`로 묶음, 1024칸 표), `ezs-io: getifaddrs N회`, `ezs-io: socket 계열/프로토콜 N회`
 - PRoot ioctl 필터(tools/patches/proot-04): 대기 중 Steam이 초당 약 1700번 ioctl을 불렀고 각각 PRoot를 진입·종료 두 번 멈췄음(PROOT_STAT 측정). PRoot가 고쳐 쓰는 요청(SIOCGIFINDEX, FICLONE, 터미널 TC*2)만 추적하고 나머지는 멈춤 없이 실행함. `PROOT_FULL_IOCTL=1`이면 예전처럼 전부 추적
 - Steam 화면 GPU ANGLE Vulkan: 웹 도우미가 libEGL/libGLESv2(ANGLE), libvulkan, libvulkan_freedreno(Turnip)를 불러온 것 확인(측정)
+- 같은 답 재사용(libezs_compat.so, 기본 켬, `EZS_LOOKUP_CACHE=0`이면 끔): 대기 중 클라이언트가 초당 약 55번 장치 확인을 반복함(측정). `/run/udev/control` 없음(ENOENT)은 계속 같은 답, netlink uevent 소켓은 거부되면 같은 오류, `/dev`의 stat·statx는 1초 동안 마지막 결과를 다시 씀. [IO 통계]에서 `ezs-io: 같은 답 재사용:`, `ezs-io: inotify` 줄로 확인
 - 커널 추적 표식: Steam 클라이언트가 `/sys/kernel/tracing/trace_marker`에 초당 약 1000번 쓰고 모두 실패했음(라이브러리 화면, 측정). libezs_compat.so가 그 열기를 데스크톱과 같은 EACCES로 거부함(`EZS_TRACE_MARKER=1`이면 그대로 둠)
 - Steam 화면 GPU 확인: 그리는 웹 도우미 프로세스의 메모리 맵에서 그래픽 라이브러리(libEGL, libGLESv2, libvulkan, freedreno, SwiftShader)를 30초마다 보고 바뀌면 앱 로그 `CEF 그래픽 라이브러리:`
 - 화면 확대 방식: 선형 → 바이큐빅 → 바이큐빅+선명 → FSR 1(EASU + RCAS, AMD FidelityFX FSR 1.0 알고리즘을 GLSL ES로 직접 옮김, MIT). FSR 셰이더나 화면 밖 버퍼가 실패하면 바이큐빅+선명으로 그리고 앱 로그에 남김
