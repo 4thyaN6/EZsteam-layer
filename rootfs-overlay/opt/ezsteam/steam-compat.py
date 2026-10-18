@@ -22,6 +22,7 @@
 #   항목은 그대로 둠. 클라이언트 첫 실행 전에는(config.vdf가 없음) 아무것도 하지 않음.
 import importlib.util
 import os
+import re
 import sys
 
 TOOL = "ezproton"
@@ -91,9 +92,62 @@ def libraries(steam, v):
             print("INFO library : [%s] 설치 기록 없는 게임 폴더 %d개: %s" % (key, len(orphans), ", ".join(orphans)))
 
 
+# IPv4 and IPv6 addresses in log text (masked before printing) / 로그 글의 IPv4·IPv6 주소(출력 전 가림)
+IPV4 = re.compile(r"(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9.])")
+IPV6 = re.compile(r"\[?(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{0,4}\]?")
+
+
+def network(steam):
+    """
+    Diagnosis of the download server choice, before the client starts (slow downloads: the
+    client got a European cell or only outside CDNs, content_log.txt 2026-10-18):
+    - download region / cell values in config/config.vdf (names containing "cell" or "region")
+    - how the last session reached Steam's servers: IPv4 vs IPv6 address count in
+      logs/connection_log.txt, and its lines naming a cell (every address masked as <ip>)
+    - which address family getaddrinfo() gives first in the rootfs now (gai.conf effect)
+    다운로드 서버 선택 진단, 클라이언트 시작 전(느린 다운로드: 클라이언트가 유럽 지역이나 외부 CDN만
+    받았음, content_log.txt 2026-10-18):
+    - config/config.vdf의 다운로드 지역·셀 값(이름에 "cell"이나 "region"이 든 것)
+    - 지난 세션이 Steam 서버에 닿은 방식: logs/connection_log.txt의 IPv4·IPv6 주소 수와 셀이 적힌 줄
+      (모든 주소는 <ip>로 가림)
+    - 지금 rootfs에서 getaddrinfo()가 먼저 내놓는 주소 종류(gai.conf 효과)
+    """
+    path = os.path.join(steam, "config", "config.vdf")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            found = re.findall(r'"([^"]*(?:[Cc]ell|[Rr]egion)[^"]*)"\s+"([^"]*)"', f.read())
+        print("INFO network : config.vdf 지역 값 " + (", ".join("%s=%s" % kv for kv in found) if found else "없음(자동)"))
+    except OSError:
+        pass
+    path = os.path.join(steam, "logs", "connection_log.txt")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()[-400:]
+        v4 = sum(len(IPV4.findall(l)) for l in lines)
+        v6 = sum(len([m for m in IPV6.findall(l) if m.count(":") >= 3]) for l in lines)
+        print("INFO network : 지난 접속 기록 주소 IPv4 %d개, IPv6 %d개 (connection_log 끝 400줄)" % (v4, v6))
+        cells = [l.strip() for l in lines if re.search(r"cell", l, re.I)][-3:]
+        for l in cells:
+            l = IPV4.sub("<ip>", l)
+            l = re.sub(r"\[?(?:[0-9a-fA-F]{1,4}:){3,7}[0-9a-fA-F]{0,4}\]?", "<ip>", l)
+            print("INFO network : " + l[:200])
+    except OSError:
+        pass
+    try:
+        import socket
+        fam = [a[0] for a in socket.getaddrinfo("cache1-seo1.steamcontent.com", 443, type=socket.SOCK_STREAM)]
+        if fam:
+            print("INFO network : 이름 찾기 첫 주소 %s (IPv4 %d개, IPv6 %d개)" % (
+                "IPv4" if fam[0] == socket.AF_INET else "IPv6",
+                fam.count(socket.AF_INET), fam.count(socket.AF_INET6)))
+    except OSError as e:
+        print("INFO network : 이름 찾기 실패 (%s)" % e)
+
+
 def main():
     steam = sys.argv[1]
     libraries(steam, vdf())
+    network(steam)
     path = os.path.join(steam, "config", "config.vdf")
     if not os.path.isfile(path):
         print("INFO compat : config.vdf 없음 (첫 실행 전), 다음 시작부터 EZ Proton 기본값")
