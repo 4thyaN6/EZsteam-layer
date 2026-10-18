@@ -376,6 +376,15 @@ public class DisplayActivity extends Activity {
                 // Fewer Steam web helper processes (option on the main screen, on by default)
                 // Steam 웹 도우미 프로세스 줄이기(메인 화면 옵션, 기본 켬)
                 if (MainActivity.cefSlim(this)) c.env.put("EZS_CEF_FLAGS", MainActivity.CEF_SLIM_FLAGS);
+                // IPv4 before IPv6 for the rootfs (Steam download server list, RootfsInstaller.writeGaiConf)
+                // rootfs에서 IPv4를 IPv6보다 먼저 씀(Steam 다운로드 서버 목록, RootfsInstaller.writeGaiConf)
+                try {
+                    log(RootfsInstaller.writeGaiConf(this)
+                            ? "네트워크: IPv4 우선 (rootfs /etc/gai.conf)"
+                            : "네트워크: /etc/gai.conf를 직접 고친 상태라 그대로 둠");
+                } catch (IOException e) {
+                    log("네트워크: gai.conf 쓰기 실패 " + e);
+                }
                 // EZlator's Steam library as an extra library of the Linux Steam client, so a game
                 // already downloaded there is not downloaded again (steam-run.sh registers it)
                 // EZlator Steam 라이브러리를 리눅스 Steam 클라이언트의 추가 라이브러리로 연결해, 그곳에

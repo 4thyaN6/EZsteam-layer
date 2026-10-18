@@ -179,6 +179,55 @@ public final class RootfsInstaller {
         return list.toString().trim();
     }
 
+    /** First line of the gai.conf this app writes / 이 앱이 쓰는 gai.conf의 첫 줄 */
+    private static final String GAI_MARK = "# ezsteam: IPv4 first";
+
+    /**
+     * Write <rootfs>/etc/gai.conf so getaddrinfo() in the rootfs lists IPv4 addresses before IPv6
+     * (precedence of ::ffff:0:0/96 raised to 100, the line glibc's own gai.conf
+     * documents for this). IPv6 still works when a name has no IPv4 address.
+     * A gai.conf not written by this app is left alone. Returns true when the file is ours.
+     * <rootfs>/etc/gai.conf를 써서 rootfs 안 getaddrinfo()가 IPv4 주소를 IPv6보다 먼저 내놓게 함
+     * (::ffff:0:0/96 우선순위를 100으로 올림, glibc 자체 gai.conf에 이 용도로 적힌 줄).
+     * IPv4 주소가 없는 이름은 계속 IPv6로 접속함. 이 앱이 쓰지 않은 gai.conf는 건드리지 않음.
+     * 파일이 이 앱 것이면 true
+     *
+     * Why: until 2026-10-16 the Steam client connected over IPv4 and got 16 download servers with
+     * Valve's Seoul caches (cache*-seo1, 444 Mbps); from 2026-10-17 12:25 UTC every connection
+     * was IPv6 and the client got a European cell (CellID 15) or only 4 outside CDNs, about
+     * 3 Mbps (content_log.txt). The server list follows the client's address (inference).
+     * 이유: 2026-10-16까지 Steam 클라이언트는 IPv4로 접속했고 Valve 서울 캐시(cache*-seo1)가 든 다운로드
+     * 서버 16곳을 받았음(444 Mbps). 2026-10-17 12:25 UTC부터는 모든 접속이 IPv6였고 유럽 지역(CellID
+     * 15) 또는 외부 CDN 4곳만 받아 약 3 Mbps였음(content_log.txt). 서버 목록은 클라이언트 주소를
+     * 따름(추론)
+     */
+    public static boolean writeGaiConf(Context ctx) throws IOException {
+        File f = new File(rootfsDir(ctx), "etc/gai.conf");
+        if (f.isFile() && f.length() > 0) {
+            String old = new String(java.nio.file.Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
+            if (!old.startsWith(GAI_MARK)) {
+                // Debian's own file is all comments; anything else was set by hand: keep it
+                // 데비안 기본 파일은 전부 주석임. 그 밖의 내용은 직접 고친 것이므로 그대로 둠
+                for (String line : old.split("\n")) {
+                    String t = line.trim();
+                    if (!t.isEmpty() && !t.startsWith("#")) return false;
+                }
+            }
+        }
+        String text = GAI_MARK + " (written by the app at every Steam start)\n"
+                // File text is ASCII only / 파일 내용은 ASCII만 씀
+                + "# glibc default table, only IPv4-mapped addresses (::ffff:0:0/96) raised from 10 to 100\n"
+                + "precedence ::1/128 50\n"
+                + "precedence ::/0 40\n"
+                + "precedence 2002::/16 30\n"
+                + "precedence ::/96 20\n"
+                + "precedence ::ffff:0:0/96 100\n";
+        try (FileOutputStream os = new FileOutputStream(f)) {
+            os.write(text.getBytes(StandardCharsets.US_ASCII));
+        }
+        return true;
+    }
+
     /** Asset folder holding the rootfs helper scripts / rootfs 보조 스크립트가 든 asset 폴더 */
     public static final String SCRIPTS_ASSET = "ezsteam";
 
