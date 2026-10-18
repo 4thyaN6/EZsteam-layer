@@ -91,22 +91,52 @@ if [ -f "$WH" ]; then
 import sys
 p = sys.argv[1]
 s = open(p).read()
-if "${EZS_CEF_FLAGS" in s:
+new = '/steamwebhelper ${EZS_CEF_FLAGS:-} "$@"'
+if new not in s:
+    old = '/steamwebhelper "$@"'
+    n = s.count(old)
+    if n != 1:
+        print(f"ezsteam-prepare: webhelper launch line not found ({n}), flags not applied")
+        for line in s.splitlines():
+            if "steamwebhelper" in line and "exec" in line:
+                print("ezsteam-prepare:   " + line.strip()[:160])
+        sys.exit(0)
+    s = s.replace(old, new)
+    print("ezsteam-prepare: webhelper flags hook added")
+else:
     print("ezsteam-prepare: webhelper flags hook present")
-    sys.exit(0)
-old = '/steamwebhelper "$@"'
-n = s.count(old)
-if n != 1:
-    print(f"ezsteam-prepare: webhelper launch line not found ({n}), flags not applied")
-    for line in s.splitlines():
-        if "steamwebhelper" in line and "exec" in line:
-            print("ezsteam-prepare:   " + line.strip()[:160])
-    sys.exit(0)
-open(p, "w").write(s.replace(old, '/steamwebhelper ${EZS_CEF_FLAGS:-} "$@"'))
-print("ezsteam-prepare: webhelper flags hook added")
+# Disabled features merged into Steam's own --disable-features: Chromium keeps only the last
+# --disable-features switch, and Steam's comes after ours (measured: our list was dropped and
+# the storage service stayed a separate process, 2026-10-18). The lines go right before the
+# command that starts the helper (continued lines included).
+# 끌 기능을 Steam 자체 --disable-features에 합침: Chromium은 마지막 --disable-features만 쓰고
+# Steam 값이 우리 값 뒤에 옴(실측: 우리 목록이 빠져 저장소 서비스가 별도 프로세스로 남았음,
+# 2026-10-18). 도우미를 시작하는 명령(이어진 줄 포함) 바로 앞에 넣음
+MARK = "# ezs-cef-merge"
+if MARK not in s:
+    lines = s.split("\n")
+    i = next(k for k, l in enumerate(lines) if new in l)
+    while i > 0 and lines[i - 1].rstrip().endswith("\\"):
+        i -= 1
+    snippet = [
+        MARK,
+        'if [ -n "${EZS_CEF_DISABLE:-}" ]; then',
+        '    _ezs_n=$#; _ezs_hit=',
+        '    for _ezs_a in "$@"; do',
+        '        case "$_ezs_a" in --disable-features=*) _ezs_a="$_ezs_a,$EZS_CEF_DISABLE"; _ezs_hit=1 ;; esac',
+        '        set -- "$@" "$_ezs_a"',
+        '    done',
+        '    shift "$_ezs_n"',
+        '    [ -n "$_ezs_hit" ] || set -- "$@" "--disable-features=$EZS_CEF_DISABLE"',
+        'fi',
+    ]
+    lines[i:i] = snippet
+    s = "\n".join(lines)
+    print("ezsteam-prepare: webhelper feature merge added")
+open(p, "w").write(s)
 PYEOF
 fi
-echo "$LOG_TAG cef flags: ${EZS_CEF_FLAGS:-(없음)}"
+echo "$LOG_TAG cef flags: ${EZS_CEF_FLAGS:-(없음)} / disable: ${EZS_CEF_DISABLE:-(없음)}"
 
 # Compatibility tool (always refreshed so updates of this layer take effect)
 # 호환 도구(이 레이어 갱신이 반영되도록 매번 덮어씀)

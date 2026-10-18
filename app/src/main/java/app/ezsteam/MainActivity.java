@@ -475,7 +475,17 @@ public class MainActivity extends Activity {
      * 31개가 되어 안드로이드가 세션을 끝냈음(exit 137, 2026-10-18)
      */
     static final String CEF_SLIM_FLAGS = "--no-sandbox --no-zygote --in-process-gpu --renderer-process-limit=1"
-            + " --disable-features=AudioServiceOutOfProcess,StorageServiceOutOfProcess";
+            + " --disable-site-isolation-trials";
+    /**
+     * Features to switch off, merged by the web helper wrapper into Steam's own --disable-features
+     * (Chromium uses only the last such switch; ezsteam-prepare.sh). --disable-site-isolation-trials
+     * above lets pages share a renderer: with only the process limit there were 3 renderers
+     * (app log 2026-10-18).
+     * 끌 기능 목록. 웹 도우미 감쌈 스크립트가 Steam 자체 --disable-features에 합침(Chromium은 그런 스위치
+     * 중 마지막 것만 씀, ezsteam-prepare.sh). 위의 --disable-site-isolation-trials는 페이지들이 렌더러를
+     * 같이 쓰게 함: 프로세스 한도만으로는 렌더러가 3개였음(앱 로그 2026-10-18)
+     */
+    static final String CEF_SLIM_DISABLE = "AudioServiceOutOfProcess,StorageServiceOutOfProcess";
 
     /**
      * Steam's own option to run its web helper as one process (Valve developer wiki, Steam command
