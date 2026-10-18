@@ -55,6 +55,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <ifaddrs.h>
+#include <dirent.h>
 #include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
@@ -198,7 +199,9 @@ static void path_add(int fd, uint64_t bytes)
 static void report(uint64_t t);
 static int build_lookups(char *out, size_t size);
 /* Same-answer cache use, inotify results (see the cache section below) / 같은 답 재사용 횟수, inotify 결과(아래 캐시 부분 참고) */
-static uint64_t hit_udev, hit_dev, hit_uevent, uevent_ok;
+static uint64_t hit_udev, hit_dev, hit_uevent, uevent_ok, hit_ui;
+static char ino_fail_path[160];
+static int ui_n;              /* Steam UI cache entries / Steam 화면 파일 캐시 항목 수 */
 static int uevent_errno;          /* errno of the refused socket, 0 = none / 거부된 소켓의 errno, 0 = 없음 */
 static uint64_t ino_init_ok, ino_init_fail, ino_add_ok, ino_add_fail;
 static int ino_init_errno, ino_add_errno;
@@ -339,18 +342,21 @@ static void report(uint64_t span)
         uint64_t hd = __atomic_exchange_n(&hit_dev, 0, __ATOMIC_RELAXED);
         uint64_t he = __atomic_exchange_n(&hit_uevent, 0, __ATOMIC_RELAXED);
         uint64_t uo = __atomic_exchange_n(&uevent_ok, 0, __ATOMIC_RELAXED);
+        uint64_t hui = __atomic_exchange_n(&hit_ui, 0, __ATOMIC_RELAXED);
         uint64_t io = __atomic_exchange_n(&ino_init_ok, 0, __ATOMIC_RELAXED);
         uint64_t ifl = __atomic_exchange_n(&ino_init_fail, 0, __ATOMIC_RELAXED);
         uint64_t ao = __atomic_exchange_n(&ino_add_ok, 0, __ATOMIC_RELAXED);
         uint64_t af = __atomic_exchange_n(&ino_add_fail, 0, __ATOMIC_RELAXED);
-        if (hu || hd || he || uo)
-            fprintf(stderr, "ezs-io: 같은 답 재사용: udev 확인 %llu, /dev 상태 %llu, uevent 소켓 %llu(거부 errno %d), uevent 소켓 성공 %llu\n",
+        if (hu || hd || he || uo || hui)
+            fprintf(stderr, "ezs-io: 같은 답 재사용: udev 확인 %llu, /dev 상태 %llu, uevent 소켓 %llu(거부 errno %d), uevent 소켓 성공 %llu, Steam 화면 파일 %llu(경로 %d개)\n",
                     (unsigned long long)hu, (unsigned long long)hd, (unsigned long long)he,
-                    __atomic_load_n(&uevent_errno, __ATOMIC_RELAXED), (unsigned long long)uo);
+                    __atomic_load_n(&uevent_errno, __ATOMIC_RELAXED), (unsigned long long)uo,
+                    (unsigned long long)hui, ui_n);
         if (io || ifl || ao || af)
-            fprintf(stderr, "ezs-io: inotify init 성공 %llu 실패 %llu(errno %d), add_watch 성공 %llu 실패 %llu(errno %d)\n",
+            fprintf(stderr, "ezs-io: inotify init 성공 %llu 실패 %llu(errno %d), add_watch 성공 %llu 실패 %llu(errno %d, 마지막 실패 경로 %s)\n",
                     (unsigned long long)io, (unsigned long long)ifl, ino_init_errno,
-                    (unsigned long long)ao, (unsigned long long)af, ino_add_errno);
+                    (unsigned long long)ao, (unsigned long long)af, ino_add_errno,
+                    ino_fail_path[0] ? ino_fail_path : "-");
     }
     // socket() by family (1 unix, 2 inet, 10 inet6, 16 netlink with its protocol: 0 route,
     // 15 kobject uevent = udev monitor) / 계열별 socket()(1 unix, 2 inet, 10 inet6, 16 netlink와
@@ -466,6 +472,7 @@ FILE *fopen(const char *path, const char *mode)
 {
     REAL(fopen, FILE *(*)(const char *, const char *));
     if (trace_marker(path)) return NULL;
+    lookup(path, 2);
     return real_fopen(path, mode);
 }
 
@@ -473,6 +480,7 @@ FILE *fopen64(const char *path, const char *mode)
 {
     REAL(fopen64, FILE *(*)(const char *, const char *));
     if (trace_marker(path)) return NULL;
+    lookup(path, 2);
     return real_fopen64(path, mode);
 }
 
@@ -727,9 +735,53 @@ static int dev_stx_flags;
 static int is_udev_ctl(const char *p) { return p && strcmp(p, "/run/udev/control") == 0; }
 static int is_dev(const char *p) { return p && (strcmp(p, "/dev") == 0 || strcmp(p, "/dev/") == 0); }
 
+/*
+ * Steam UI files (Steam/steamui/...): the client checks about 330 of them (scripts, controller
+ * images) with access + stat every 2 s or so while idle (2026-10-18). They change only with a
+ * client update, which restarts the client, so results are reused for 10 s (success and
+ * "missing" only; other errors always go to the system).
+ * Steam 화면 파일(Steam/steamui/...): 클라이언트가 대기 중 약 330개(스크립트, 컨트롤러 그림)를 약 2초마다
+ * access + stat으로 확인함(2026-10-18). 클라이언트 갱신 때만 바뀌며 갱신하면 클라이언트가 다시 시작하므로
+ * 결과를 10초 동안 다시 씀(성공과 "없음"만. 다른 오류는 항상 시스템으로 보냄)
+ */
+#define UI_SLOTS 1024
+#define UI_TTL_NS 10000000000ull
+struct ui_t { char p[200]; int amode, a_r, a_err; uint64_t a_ns; int s_flags, s_r, s_err; uint64_t s_ns; struct stat st; };
+static struct ui_t *ui_tab;
+static pthread_mutex_t uilock = PTHREAD_MUTEX_INITIALIZER;
+
+static int is_ui(const char *p) { return p && p[0] == '/' && strlen(p) < 200 && strstr(p, "/Steam/steamui/") != NULL; }
+
+/* Entry for a path, created if there is room; caller holds uilock / 경로의 항목(자리가 있으면 만듦). 호출한 쪽이 uilock을 잡고 있음 */
+static struct ui_t *ui_entry(const char *path)
+{
+    if (!ui_tab) {
+        ui_tab = calloc(UI_SLOTS, sizeof(struct ui_t));
+        if (!ui_tab) return NULL;
+    }
+    uint32_t h = 2166136261u;
+    for (const char *c = path; *c; c++) h = (h ^ (unsigned char)*c) * 16777619u;
+    for (int probe = 0; probe < UI_SLOTS; probe++) {
+        struct ui_t *e = &ui_tab[(h + (uint32_t)probe) & (UI_SLOTS - 1)];
+        if (!e->p[0]) {
+            if (ui_n >= UI_SLOTS * 7 / 8) return NULL;
+            strcpy(e->p, path);
+            e->a_ns = e->s_ns = 0;
+            ui_n++;
+            return e;
+        }
+        if (strcmp(e->p, path) == 0) return e;
+    }
+    return NULL;
+}
+
+/* access of a Steam UI file through the cache / Steam 화면 파일의 access를 캐시로 처리 */
+#define UI_ACCESS(call)                                                            do {                                                                               uint64_t now_ = now_ns();                                                      pthread_mutex_lock(&uilock);                                                   struct ui_t *e_ = ui_entry(path);                                              if (e_ && e_->a_ns && now_ - e_->a_ns < UI_TTL_NS && e_->amode == mode) {             int r_ = e_->a_r, er_ = e_->a_err;                                             pthread_mutex_unlock(&uilock);                                                 if (on()) __atomic_add_fetch(&hit_ui, 1, __ATOMIC_RELAXED);                    if (r_ < 0) errno = er_;                                                       return r_;                                                                 }                                                                              pthread_mutex_unlock(&uilock);                                                 int r_ = call;                                                                 int er_ = errno;                                                               if (r_ == 0 || er_ == ENOENT) {                                                    pthread_mutex_lock(&uilock);                                                   e_ = ui_entry(path);                                                           if (e_) { e_->amode = mode; e_->a_r = r_; e_->a_err = er_; e_->a_ns = now_; }             pthread_mutex_unlock(&uilock);                                             }                                                                              errno = er_;                                                                   return r_;                                                                 } while (0)
+
 /* access family with the udev answer cache / udev 답 재사용이 있는 access 계열 */
 #define ACCESS_CACHED(call)                                                    \
     do {                                                                       \
+        if (cache_on() && is_ui(path)) UI_ACCESS(call);                        \
         if (cache_on() && is_udev_ctl(path)) {                                 \
             if (__atomic_load_n(&udev_missing, __ATOMIC_RELAXED)) {           \
                 if (on()) __atomic_add_fetch(&hit_udev, 1, __ATOMIC_RELAXED); \
@@ -750,6 +802,37 @@ static int is_dev(const char *p) { return p && (strcmp(p, "/dev") == 0 || strcmp
 static int dev_stat(int dir, const char *path, struct stat *b, int flags)
 {
     REAL(fstatat, int (*)(int, const char *, struct stat *, int));
+    if (cache_on() && is_ui(path)) {
+        // Steam UI file: 10 s cache, same flags only / Steam 화면 파일: 10초 캐시, 같은 flags일 때만
+        uint64_t now = now_ns();
+        pthread_mutex_lock(&uilock);
+        struct ui_t *e = ui_entry(path);
+        if (e && e->s_ns && now - e->s_ns < UI_TTL_NS && e->s_flags == flags) {
+            int r = e->s_r, er = e->s_err;
+            if (r == 0) *b = e->st;
+            pthread_mutex_unlock(&uilock);
+            if (on()) __atomic_add_fetch(&hit_ui, 1, __ATOMIC_RELAXED);
+            if (r < 0) errno = er;
+            return r;
+        }
+        pthread_mutex_unlock(&uilock);
+        int r = real_fstatat(dir, path, b, flags);
+        int er = errno;
+        if (r == 0 || er == ENOENT) {
+            pthread_mutex_lock(&uilock);
+            e = ui_entry(path);
+            if (e) {
+                e->s_flags = flags;
+                e->s_r = r;
+                e->s_err = er;
+                e->s_ns = now;
+                if (r == 0) e->st = *b;
+            }
+            pthread_mutex_unlock(&uilock);
+        }
+        errno = er;
+        return r;
+    }
     if (!cache_on() || !is_dev(path)) return real_fstatat(dir, path, b, flags);
     uint64_t now = now_ns();
     pthread_mutex_lock(&dlock);
@@ -797,7 +880,7 @@ int stat(const char *path, struct stat *b)
 {
     REAL(stat, int (*)(const char *, struct stat *));
     lookup(path, 1);
-    if (is_dev(path)) return dev_stat(AT_FDCWD, path, b, 0);
+    if (is_dev(path) || is_ui(path)) return dev_stat(AT_FDCWD, path, b, 0);
     return real_stat(path, b);
 }
 
@@ -805,7 +888,7 @@ int lstat(const char *path, struct stat *b)
 {
     REAL(lstat, int (*)(const char *, struct stat *));
     lookup(path, 1);
-    if (is_dev(path)) return dev_stat(AT_FDCWD, path, b, AT_SYMLINK_NOFOLLOW);
+    if (is_dev(path) || is_ui(path)) return dev_stat(AT_FDCWD, path, b, AT_SYMLINK_NOFOLLOW);
     return real_lstat(path, b);
 }
 
@@ -813,7 +896,7 @@ int fstatat(int dir, const char *path, struct stat *b, int flags)
 {
     REAL(fstatat, int (*)(int, const char *, struct stat *, int));
     lookup(path, 1);
-    if (is_dev(path)) return dev_stat(dir, path, b, flags);
+    if (is_dev(path) || is_ui(path)) return dev_stat(dir, path, b, flags);
     return real_fstatat(dir, path, b, flags);
 }
 
@@ -821,7 +904,7 @@ int stat64(const char *path, struct stat64 *b)
 {
     REAL(stat64, int (*)(const char *, struct stat64 *));
     lookup(path, 1);
-    if (is_dev(path)) return dev_stat(AT_FDCWD, path, (struct stat *)b, 0);
+    if (is_dev(path) || is_ui(path)) return dev_stat(AT_FDCWD, path, (struct stat *)b, 0);
     return real_stat64(path, b);
 }
 
@@ -829,7 +912,7 @@ int lstat64(const char *path, struct stat64 *b)
 {
     REAL(lstat64, int (*)(const char *, struct stat64 *));
     lookup(path, 1);
-    if (is_dev(path)) return dev_stat(AT_FDCWD, path, (struct stat *)b, AT_SYMLINK_NOFOLLOW);
+    if (is_dev(path) || is_ui(path)) return dev_stat(AT_FDCWD, path, (struct stat *)b, AT_SYMLINK_NOFOLLOW);
     return real_lstat64(path, b);
 }
 
@@ -837,7 +920,7 @@ int fstatat64(int dir, const char *path, struct stat64 *b, int flags)
 {
     REAL(fstatat64, int (*)(int, const char *, struct stat64 *, int));
     lookup(path, 1);
-    if (is_dev(path)) return dev_stat(dir, path, (struct stat *)b, flags);
+    if (is_dev(path) || is_ui(path)) return dev_stat(dir, path, (struct stat *)b, flags);
     return real_fstatat64(dir, path, b, flags);
 }
 
@@ -978,6 +1061,26 @@ int inotify_add_watch(int fd, const char *path, uint32_t mask)
     int r = real_inotify_add_watch(fd, path, mask);
     int save = errno;
     ino_result(r, &ino_add_ok, &ino_add_fail, &ino_add_errno);
+    // Which path was refused (diagnosis only; a race may mix two paths) / 어느 경로가 거부됐는지(진단용. 경합하면 두 경로가 섞일 수 있음)
+    if (r < 0 && on() && path) snprintf(ino_fail_path, sizeof(ino_fail_path), "%s", path);
     errno = save;
     return r;
+}
+
+/* Directory opens and symlink reads count as lookups by name (open / stat column)
+ * 디렉터리 열기와 심볼릭 링크 읽기도 이름 조회로 셈(open / stat 칸) */
+DIR *opendir(const char *path)
+{
+    REAL(opendir, DIR *(*)(const char *));
+    lookup(path, 2);
+    return real_opendir(path);
+}
+
+ssize_t readlink(const char *path, char *buf, size_t n)
+{
+    REAL(readlink, ssize_t (*)(const char *, char *, size_t));
+    // classify() reads /proc/self/fd links itself; those are not the client's lookups
+    // classify()가 /proc/self/fd 링크를 직접 읽으므로 그것은 클라이언트 조회가 아님
+    if (strncmp(path, "/proc/self/fd/", 14) != 0) lookup(path, 1);
+    return real_readlink(path, buf, n);
 }
