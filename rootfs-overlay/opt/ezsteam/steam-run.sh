@@ -116,6 +116,11 @@ fi
 # 모든 Windows 게임을 EZ Proton으로(Valve Proton 컨테이너는 PRoot에서 못 돎, steam-compat.py 참고),
 # 라이브러리별 설치된 게임 목록도 남김(진단)
 python3 /opt/ezsteam/steam-compat.py "$STEAM_DIR" 2>&1 || echo "WARN compat : 호환성 도구 설정 실패"
+# Valve's ARM64 Proton requested from the client when missing (steam-proton.py; downloaded by the
+# client from Valve's servers, nothing shipped)
+# 없으면 클라이언트에 Valve ARM64 Proton 받기를 요청함(steam-proton.py. 클라이언트가 Valve 서버에서 받음,
+# 앱에 넣어 배포하지 않음)
+python3 /opt/ezsteam/steam-proton.py "$STEAM_DIR" 2>&1 || echo "WARN proton : Proton 받기 요청 실패"
 
 # Game controller in the Steam client (Big Picture, menus): the same preload library that gives Wine
 # its pad attaches it to the client's own SDL3 when loaded into the client (native/ezspad)
