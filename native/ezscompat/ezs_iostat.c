@@ -53,6 +53,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/stat.h>
+#include <ifaddrs.h>
 #include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
@@ -144,7 +146,9 @@ static int kind_of(int fd)
  */
 #define MAX_PATHS 128
 #define TOP_PATHS 5
-struct path_t { char p[160]; uint64_t n, bytes; };
+/* n, bytes: writes; qa, qs, qo: lookups by name (access, stat, open) of the client
+ * n, bytes: 쓰기. qa, qs, qo: 이름으로 찾은 횟수(access, stat, open) */
+struct path_t { char p[160]; uint64_t n, bytes, qa, qs, qo; };
 static struct path_t paths[MAX_PATHS];
 static int npaths;
 static pthread_mutex_t plock = PTHREAD_MUTEX_INITIALIZER;
@@ -165,7 +169,7 @@ static unsigned short path_slot(const char *path)
     if (i == npaths) {
         if (npaths < MAX_PATHS - 1) {
             strcpy(paths[npaths].p, key);
-            paths[npaths].n = paths[npaths].bytes = 0;
+            paths[npaths].n = paths[npaths].bytes = paths[npaths].qa = paths[npaths].qs = paths[npaths].qo = 0;
             npaths++;
         } else {
             i = MAX_PATHS - 1;
@@ -192,6 +196,47 @@ static void path_add(int fd, uint64_t bytes)
 }
 
 static void report(uint64_t t);
+static uint64_t ifaddrs_calls;
+
+/*
+ * Top TOP_PATHS slots as one line (caller holds plock); what 0 = writes, 1 = lookups by name.
+ * Returns the number of entries shown.
+ * 상위 TOP_PATHS개 칸을 한 줄로 만듦(호출한 쪽이 plock을 잡고 있음). what 0 = 쓰기, 1 = 이름 조회.
+ * 보여 준 항목 수를 돌려줌
+ */
+static int build_top(char *out, size_t size, const char *title, int what)
+{
+    int tl = snprintf(out, size, "%s", title), shown = 0;
+    int pick[TOP_PATHS];
+    for (int r = 0; r < TOP_PATHS; r++) {
+        pick[r] = -1;
+        uint64_t best = 0;
+        // Every slot is checked (unused ones count 0), the overflow slot included
+        // 모든 칸을 봄(안 쓰는 칸은 0회), 넘침 칸 포함
+        for (int i = 0; i < MAX_PATHS; i++) {
+            int used = 0;
+            for (int q = 0; q < r; q++) used |= pick[q] == i;
+            uint64_t v = what ? paths[i].qa + paths[i].qs + paths[i].qo : paths[i].n;
+            if (!used && v > best) {
+                pick[r] = i;
+                best = v;
+            }
+        }
+        if (pick[r] < 0) break;
+        struct path_t *pp = &paths[pick[r]];
+        if (what)
+            tl += snprintf(out + tl, size - (size_t)tl, " %s %llu회(a %llu s %llu o %llu);", pp->p,
+                           (unsigned long long)best, (unsigned long long)pp->qa,
+                           (unsigned long long)pp->qs, (unsigned long long)pp->qo);
+        else
+            tl += snprintf(out + tl, size - (size_t)tl, " %s %llu회 %.2fMB;", pp->p,
+                           (unsigned long long)best, pp->bytes / 1e6);
+        shown++;
+        if (tl >= (int)size - 1) break;
+    }
+    if (shown && tl < (int)size && out[tl - 1] == ';') out[tl - 1] = 0;
+    return shown;
+}
 
 /* Add one call to the statistics / 호출 하나를 통계에 더함 */
 static void count(int k, int op, uint64_t t0, uint64_t bytes)
@@ -242,36 +287,16 @@ static void report(uint64_t span)
         if (len > 0 && len < (int)sizeof(line) && line[len - 1] == ',') line[len - 1] = 0;
         fprintf(stderr, "%s\n", line);
     }
-    // Busiest "other" paths by write calls; the text is built under the lock and printed after
-    // it (printing writes to stderr, which comes back through write() and may need the lock)
-    // 쓰기 호출이 많은 "other" 경로. 글은 잠금 안에서 만들고 잠금 밖에서 출력함(출력이 stderr에 쓰며
-    // write()를 다시 거쳐 잠금이 필요할 수 있음)
-    char top[1400];
-    int tl = snprintf(top, sizeof(top), "ezs-io: other 쓰기 상위:");
-    int shown = 0;
+    // Busiest "other" paths by write calls, then the paths the client looks up most by name, and
+    // the network interface lookups. The text is built under the lock and printed after it
+    // (printing writes to stderr, which comes back through write() and may need the lock)
+    // 쓰기 호출이 많은 "other" 경로, 클라이언트가 이름으로 가장 많이 찾는 경로, 네트워크 인터페이스 조회 수.
+    // 글은 잠금 안에서 만들고 잠금 밖에서 출력함(출력이 stderr에 쓰며 write()를 다시 거쳐 잠금이 필요할 수 있음)
+    char top[1400], look[1600];
     pthread_mutex_lock(&plock);
-    uint64_t taken[TOP_PATHS] = { 0 };
-    int pick[TOP_PATHS];
-    for (int r = 0; r < TOP_PATHS; r++) {
-        pick[r] = -1;
-        // Every slot is checked (unused ones count 0), the overflow slot included
-        // 모든 칸을 봄(안 쓰는 칸은 0회), 넘침 칸 포함
-        for (int i = 0; i < MAX_PATHS; i++) {
-            int used = 0;
-            for (int q = 0; q < r; q++) used |= pick[q] == i;
-            if (!used && paths[i].n && (pick[r] < 0 || paths[i].n > taken[r])) {
-                pick[r] = i;
-                taken[r] = paths[i].n;
-            }
-        }
-        if (pick[r] < 0) break;
-        struct path_t *pp = &paths[pick[r]];
-        tl += snprintf(top + tl, sizeof(top) - (size_t)tl, " %s %llu회 %.2fMB;", pp->p,
-                       (unsigned long long)taken[r], pp->bytes / 1e6);
-        shown++;
-        if (tl >= (int)sizeof(top) - 1) break;
-    }
-    for (int i = 0; i < MAX_PATHS; i++) paths[i].n = paths[i].bytes = 0;
+    int shown = build_top(top, sizeof(top), "ezs-io: other 쓰기 상위:", 0);
+    int looked = build_top(look, sizeof(look), "ezs-io: 이름 조회 상위(access/stat/open):", 1);
+    for (int i = 0; i < MAX_PATHS; i++) paths[i].n = paths[i].bytes = paths[i].qa = paths[i].qs = paths[i].qo = 0;
     // Mostly full: start the table over; descriptors look their path up again
     // 거의 찼으면 표를 새로 시작함. 디스크립터는 경로를 다시 찾음
     if (npaths >= MAX_PATHS * 3 / 4) {
@@ -279,10 +304,10 @@ static void report(uint64_t span)
         memset(slot_of, 0, sizeof(slot_of));
     }
     pthread_mutex_unlock(&plock);
-    if (shown) {
-        if (tl < (int)sizeof(top) && top[tl - 1] == ';') top[tl - 1] = 0;
-        fprintf(stderr, "%s\n", top);
-    }
+    if (shown) fprintf(stderr, "%s\n", top);
+    if (looked) fprintf(stderr, "%s\n", look);
+    uint64_t ifa = __atomic_exchange_n(&ifaddrs_calls, 0, __ATOMIC_RELAXED);
+    if (ifa) fprintf(stderr, "ezs-io: getifaddrs %llu회\n", (unsigned long long)ifa);
 }
 
 /* Next symbol of a given name / 같은 이름의 다음 심볼 */
@@ -320,6 +345,8 @@ static int trace_marker(const char *path)
     return 1;
 }
 
+static void lookup(const char *path, int kind);
+
 static int after_open(int fd, uint64_t t0)
 {
     if (fd >= 0 && on()) count(classify(fd), OP_OPEN, t0, 0);
@@ -335,6 +362,7 @@ int open(const char *path, int flags, ...)
 {
     REAL(open, int (*)(const char *, int, ...));
     if (trace_marker(path)) return -1;
+    lookup(path, 2);
     va_list ap; va_start(ap, flags); mode_t m = mode_arg(flags, ap); va_end(ap);
     uint64_t t0 = now_ns();
     return after_open(real_open(path, flags, m), t0);
@@ -344,6 +372,7 @@ int open64(const char *path, int flags, ...)
 {
     REAL(open64, int (*)(const char *, int, ...));
     if (trace_marker(path)) return -1;
+    lookup(path, 2);
     va_list ap; va_start(ap, flags); mode_t m = mode_arg(flags, ap); va_end(ap);
     uint64_t t0 = now_ns();
     return after_open(real_open64(path, flags, m), t0);
@@ -353,6 +382,7 @@ int openat(int dir, const char *path, int flags, ...)
 {
     REAL(openat, int (*)(int, const char *, int, ...));
     if (trace_marker(path)) return -1;
+    lookup(path, 2);
     va_list ap; va_start(ap, flags); mode_t m = mode_arg(flags, ap); va_end(ap);
     uint64_t t0 = now_ns();
     return after_open(real_openat(dir, path, flags, m), t0);
@@ -362,6 +392,7 @@ int openat64(int dir, const char *path, int flags, ...)
 {
     REAL(openat64, int (*)(int, const char *, int, ...));
     if (trace_marker(path)) return -1;
+    lookup(path, 2);
     va_list ap; va_start(ap, flags); mode_t m = mode_arg(flags, ap); va_end(ap);
     uint64_t t0 = now_ns();
     return after_open(real_openat64(dir, path, flags, m), t0);
@@ -509,4 +540,114 @@ int posix_fallocate64(int fd, off64_t o, off64_t len)
 {
     REAL(posix_fallocate64, int (*)(int, off64_t, off64_t));
     TIMED(OP_ALLOC, fd, real_posix_fallocate64(fd, o, len), 0);
+}
+
+/* ---- lookups by name: which paths the client keeps checking / 이름으로 찾기: 클라이언트가 계속 확인하는 경로 ---- */
+
+/* Count one lookup of a path (kind 0 access, 1 stat, 2 open) / 경로 찾기 하나를 셈(kind 0 access, 1 stat, 2 open) */
+static void lookup(const char *path, int kind)
+{
+    if (!path || !*path || !on()) return;
+    unsigned short sl = path_slot(path);
+    uint64_t *c = kind == 0 ? &paths[sl - 1].qa : kind == 1 ? &paths[sl - 1].qs : &paths[sl - 1].qo;
+    __atomic_add_fetch(c, 1, __ATOMIC_RELAXED);
+}
+
+int access(const char *path, int mode)
+{
+    REAL(access, int (*)(const char *, int));
+    lookup(path, 0);
+    return real_access(path, mode);
+}
+
+int faccessat(int dir, const char *path, int mode, int flags)
+{
+    REAL(faccessat, int (*)(int, const char *, int, int));
+    lookup(path, 0);
+    return real_faccessat(dir, path, mode, flags);
+}
+
+int eaccess(const char *path, int mode)
+{
+    REAL(eaccess, int (*)(const char *, int));
+    lookup(path, 0);
+    return real_eaccess(path, mode);
+}
+
+int stat(const char *path, struct stat *b)
+{
+    REAL(stat, int (*)(const char *, struct stat *));
+    lookup(path, 1);
+    return real_stat(path, b);
+}
+
+int lstat(const char *path, struct stat *b)
+{
+    REAL(lstat, int (*)(const char *, struct stat *));
+    lookup(path, 1);
+    return real_lstat(path, b);
+}
+
+int fstatat(int dir, const char *path, struct stat *b, int flags)
+{
+    REAL(fstatat, int (*)(int, const char *, struct stat *, int));
+    lookup(path, 1);
+    return real_fstatat(dir, path, b, flags);
+}
+
+int stat64(const char *path, struct stat64 *b)
+{
+    REAL(stat64, int (*)(const char *, struct stat64 *));
+    lookup(path, 1);
+    return real_stat64(path, b);
+}
+
+int lstat64(const char *path, struct stat64 *b)
+{
+    REAL(lstat64, int (*)(const char *, struct stat64 *));
+    lookup(path, 1);
+    return real_lstat64(path, b);
+}
+
+int fstatat64(int dir, const char *path, struct stat64 *b, int flags)
+{
+    REAL(fstatat64, int (*)(int, const char *, struct stat64 *, int));
+    lookup(path, 1);
+    return real_fstatat64(dir, path, b, flags);
+}
+
+int statx(int dir, const char *path, int flags, unsigned int mask, struct statx *b)
+{
+    REAL(statx, int (*)(int, const char *, int, unsigned int, struct statx *));
+    lookup(path, 1);
+    return real_statx(dir, path, flags, mask, b);
+}
+
+/*
+ * Programs built against glibc older than 2.33 call __xstat/__lxstat/__fxstatat instead of
+ * stat/lstat/fstatat (compat symbols, not found by dlsym); on aarch64 the structure is the same,
+ * so they are answered with fstatat.
+ * glibc 2.33보다 오래된 glibc로 빌드한 프로그램은 stat/lstat/fstatat 대신 __xstat/__lxstat/__fxstatat를
+ * 부름(호환 심볼이라 dlsym으로 찾지 못함). aarch64에서는 구조체가 같으므로 fstatat로 답함
+ */
+static int compat_stat(int dir, const char *path, struct stat *b, int flags)
+{
+    REAL(fstatat, int (*)(int, const char *, struct stat *, int));
+    lookup(path, 1);
+    return real_fstatat(dir, path, b, flags);
+}
+
+int __xstat(int ver, const char *path, struct stat *b) { (void)ver; return compat_stat(AT_FDCWD, path, b, 0); }
+int __lxstat(int ver, const char *path, struct stat *b) { (void)ver; return compat_stat(AT_FDCWD, path, b, AT_SYMLINK_NOFOLLOW); }
+int __fxstatat(int ver, int dir, const char *path, struct stat *b, int flags) { (void)ver; return compat_stat(dir, path, b, flags); }
+int __xstat64(int ver, const char *path, struct stat64 *b) { (void)ver; return compat_stat(AT_FDCWD, path, (struct stat *)b, 0); }
+int __lxstat64(int ver, const char *path, struct stat64 *b) { (void)ver; return compat_stat(AT_FDCWD, path, (struct stat *)b, AT_SYMLINK_NOFOLLOW); }
+int __fxstatat64(int ver, int dir, const char *path, struct stat64 *b, int flags) { (void)ver; return compat_stat(dir, path, (struct stat *)b, flags); }
+
+/* Network interface list (netlink socket + messages under PRoot) / 네트워크 인터페이스 목록(PRoot 아래에서 netlink 소켓 + 메시지) */
+int getifaddrs(struct ifaddrs **out)
+{
+    REAL(getifaddrs, int (*)(struct ifaddrs **));
+    if (on()) __atomic_add_fetch(&ifaddrs_calls, 1, __ATOMIC_RELAXED);
+    return real_getifaddrs(out);
 }
