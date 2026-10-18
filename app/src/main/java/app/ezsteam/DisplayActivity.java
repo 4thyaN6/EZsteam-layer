@@ -434,9 +434,12 @@ public class DisplayActivity extends Activity {
                 }
                 if (!cefFlags.isEmpty()) c.env.put("EZS_CEF_FLAGS", cefFlags);
                 // Client file I/O statistics (admin option) / 클라이언트 파일 입출력 통계(관리자 옵션)
+                // plus PRoot's own count of the system calls it stops for (PROOT_STAT lines)
+                // PRoot가 멈춰 처리하는 시스템 호출 집계도 함께 켬(PROOT_STAT 줄)
                 if (MainActivity.ioStat(this)) {
                     c.env.put("EZS_IOSTAT", "1");
-                    log("IO 통계 켬: 1분마다 ezs-io: 줄");
+                    c.env.put("PROOT_SYSSTAT", "60");
+                    log("IO 통계 켬: 1분마다 ezs-io:, PROOT_STAT 줄");
                 }
                 // Address order back to glibc's default (an earlier build's IPv4-first gai.conf)
                 // 주소 순서를 glibc 기본값으로 되돌림(이전 빌드가 쓴 IPv4 우선 gai.conf)
@@ -1489,6 +1492,7 @@ public class DisplayActivity extends Activity {
                 cefFeaturesLogged = true;
                 log("CEF 브라우저 스위치:" + (f.length() == 0 ? " (기능 스위치 없음)" : f.toString()));
             }
+            if (type.equals("browser") || type.equals("gpu-process")) logCefGpuLibs(pr.pid);
             String k = sub == null ? type : type + "(" + sub + ")";
             kinds.merge(k, 1, Integer::sum);
             n++;
@@ -1503,6 +1507,50 @@ public class DisplayActivity extends Activity {
         String line = "CEF 도우미 " + n + "개: " + sb;
         if (!line.equals(cefLogged)) {
             cefLogged = line;
+            log(line);
+        }
+    }
+
+    /** Last GPU library line and when it was checked / 마지막 GPU 라이브러리 줄과 확인 시각 */
+    private String cefGpuLogged;
+    private long cefGpuCheckMs;
+
+    /**
+     * Which graphics libraries the web helper process that draws has loaded (its memory map), at
+     * most every 30 s, logged when the set changes. Shows whether the Steam UI GPU test really
+     * uses the GPU: ANGLE (libEGL/libGLESv2) with the Vulkan loader and Turnip
+     * (libvulkan_freedreno) means GPU; SwiftShader or none means software drawing.
+     * 그리기를 맡은 웹 도우미 프로세스가 불러온 그래픽 라이브러리(메모리 맵)를 최대 30초마다 보고, 구성이
+     * 바뀌면 기록함. Steam 화면 GPU 시험이 실제로 GPU를 쓰는지 보여 줌: ANGLE(libEGL/libGLESv2)과
+     * Vulkan 로더, Turnip(libvulkan_freedreno)이 있으면 GPU, SwiftShader거나 없으면 소프트웨어 그리기
+     */
+    private void logCefGpuLibs(int pid) {
+        long now = SystemClock.elapsedRealtime();
+        if (now - cefGpuCheckMs < 30_000) return;
+        cefGpuCheckMs = now;
+        java.util.TreeSet<String> libs = new java.util.TreeSet<>();
+        try (BufferedReader r = new BufferedReader(new java.io.FileReader("/proc/" + pid + "/maps"))) {
+            String line;
+            while ((line = r.readLine()) != null) {
+                int i = line.lastIndexOf('/');
+                if (i < 0) continue;
+                String name = line.substring(i + 1);
+                String low = name.toLowerCase(Locale.ROOT);
+                if (low.startsWith("libegl") || low.startsWith("libglesv2") || low.startsWith("libvulkan")
+                        || low.contains("swiftshader") || low.contains("freedreno") || low.startsWith("libgl.")
+                        || low.startsWith("libglx")) {
+                    libs.add(name);
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            return;
+        }
+        String line = "CEF 그래픽 라이브러리(pid " + pid + "): " + (libs.isEmpty() ? "없음" : String.join(", ", libs));
+        // pid is left out of the comparison so a restart with the same set is not logged again
+        // 같은 구성으로 다시 시작한 경우 다시 기록하지 않도록 pid는 비교에서 뺌
+        String key = String.join(",", libs);
+        if (!key.equals(cefGpuLogged)) {
+            cefGpuLogged = key;
             log(line);
         }
     }

@@ -31,6 +31,10 @@
  * 쓰기 상위: "other" 파일은 요약 뒤에 쓰기 호출이 많은 경로를 나열함("ezs-io: other 쓰기 상위:").
  * 클라이언트의 잦은 작은 쓰기(분당 10만~23만 회, 2026-10-18)와 대기 중 CPU 사용 일부의 출처를 찾기 위함.
  *
+ * Trace marker: opens of the kernel trace marker are refused with EACCES (see trace_marker()),
+ * always, not only with EZS_IOSTAT=1.
+ * 추적 표식: 커널 추적 표식 열기는 EACCES로 거부함(trace_marker() 참고). EZS_IOSTAT=1과 상관없이 항상.
+ *
  * Cost: one clock read before and after each counted call (vDSO, no system call) and one readlink
  * per new descriptor. Only in the client process "steam". Off by default, on with EZS_IOSTAT=1
  * (the slow downloads it was made for came from a VPN, not from file I/O, 2026-10-18).
@@ -290,6 +294,32 @@ static void report(uint64_t span)
 
 /* ---- open family: classify the new descriptor / open 계열: 새 디스크립터를 분류함 ---- */
 
+/*
+ * Kernel trace marker (ftrace): the client opens it and writes about 1000 markers a second, all
+ * failing (62k writes per minute with 0 bytes on the library screen, 2026-10-18). On a desktop
+ * the file is root-only and the open fails with EACCES; the same answer is given here so the
+ * client skips its markers. EZS_TRACE_MARKER=1 leaves the open alone.
+ * 커널 추적 표식(ftrace): 클라이언트가 이것을 열고 초당 약 1000번 표식을 쓰며 모두 실패함(라이브러리
+ * 화면에서 분당 6만 2천 번, 0바이트, 2026-10-18). 데스크톱에서는 이 파일이 root 전용이라 open이
+ * EACCES로 실패하므로 여기서도 같은 답을 줘 클라이언트가 표식을 건너뛰게 함. EZS_TRACE_MARKER=1이면
+ * 건드리지 않음
+ */
+static int trace_marker(const char *path)
+{
+    static int keep = -1;
+    if (!path) return 0;
+    size_t n = strlen(path);
+    static const char tail[] = "/tracing/trace_marker";
+    if (n < sizeof(tail) - 1 || strcmp(path + n - (sizeof(tail) - 1), tail) != 0) return 0;
+    if (keep < 0) {
+        const char *e = getenv("EZS_TRACE_MARKER");
+        keep = e && strcmp(e, "1") == 0;
+    }
+    if (keep) return 0;
+    errno = EACCES;
+    return 1;
+}
+
 static int after_open(int fd, uint64_t t0)
 {
     if (fd >= 0 && on()) count(classify(fd), OP_OPEN, t0, 0);
@@ -304,6 +334,7 @@ static mode_t mode_arg(int flags, va_list ap)
 int open(const char *path, int flags, ...)
 {
     REAL(open, int (*)(const char *, int, ...));
+    if (trace_marker(path)) return -1;
     va_list ap; va_start(ap, flags); mode_t m = mode_arg(flags, ap); va_end(ap);
     uint64_t t0 = now_ns();
     return after_open(real_open(path, flags, m), t0);
@@ -312,6 +343,7 @@ int open(const char *path, int flags, ...)
 int open64(const char *path, int flags, ...)
 {
     REAL(open64, int (*)(const char *, int, ...));
+    if (trace_marker(path)) return -1;
     va_list ap; va_start(ap, flags); mode_t m = mode_arg(flags, ap); va_end(ap);
     uint64_t t0 = now_ns();
     return after_open(real_open64(path, flags, m), t0);
@@ -320,6 +352,7 @@ int open64(const char *path, int flags, ...)
 int openat(int dir, const char *path, int flags, ...)
 {
     REAL(openat, int (*)(int, const char *, int, ...));
+    if (trace_marker(path)) return -1;
     va_list ap; va_start(ap, flags); mode_t m = mode_arg(flags, ap); va_end(ap);
     uint64_t t0 = now_ns();
     return after_open(real_openat(dir, path, flags, m), t0);
@@ -328,9 +361,26 @@ int openat(int dir, const char *path, int flags, ...)
 int openat64(int dir, const char *path, int flags, ...)
 {
     REAL(openat64, int (*)(int, const char *, int, ...));
+    if (trace_marker(path)) return -1;
     va_list ap; va_start(ap, flags); mode_t m = mode_arg(flags, ap); va_end(ap);
     uint64_t t0 = now_ns();
     return after_open(real_openat64(dir, path, flags, m), t0);
+}
+
+/* stdio opens go to libc's internal open, so the trace marker is refused here too
+ * stdio 열기는 libc 내부 open으로 가므로 추적 표식은 여기서도 거부함 */
+FILE *fopen(const char *path, const char *mode)
+{
+    REAL(fopen, FILE *(*)(const char *, const char *));
+    if (trace_marker(path)) return NULL;
+    return real_fopen(path, mode);
+}
+
+FILE *fopen64(const char *path, const char *mode)
+{
+    REAL(fopen64, FILE *(*)(const char *, const char *));
+    if (trace_marker(path)) return NULL;
+    return real_fopen64(path, mode);
 }
 
 int close(int fd)

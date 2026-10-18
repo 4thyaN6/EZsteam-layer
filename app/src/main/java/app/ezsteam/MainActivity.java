@@ -153,7 +153,7 @@ public class MainActivity extends Activity {
             boolean on = !ioStat(this);
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_IOSTAT, on).apply();
             io.setText("IO 통계: " + (on ? "켬" : "끔"));
-            log("IO 통계 " + (on ? "켬(앱 로그 ezs-io: 줄, 1분마다)" : "끔") + " (다음 Steam 실행부터)");
+            log("IO 통계 " + (on ? "켬(앱 로그 ezs-io:, PROOT_STAT 줄, 1분마다)" : "끔") + " (다음 Steam 실행부터)");
         });
 
         // Fifth row: how games hand finished frames to the X server, and the DXVK overlay
@@ -511,8 +511,10 @@ public class MainActivity extends Activity {
         return m >= 0 && m < STEAM_GPU_MODES.length ? m : 0;
     }
 
-    /** Client file I/O statistics (native ezs_iostat, EZS_IOSTAT=1), off by default
-     *  클라이언트 파일 입출력 통계(네이티브 ezs_iostat, EZS_IOSTAT=1), 기본 끔 */
+    /** Client file I/O statistics (native ezs_iostat, EZS_IOSTAT=1) and PRoot syscall statistics
+     *  (PROOT_SYSSTAT=60), off by default
+     *  클라이언트 파일 입출력 통계(네이티브 ezs_iostat, EZS_IOSTAT=1)와 PRoot 시스템 호출 통계
+     *  (PROOT_SYSSTAT=60), 기본 끔 */
     static final String KEY_IOSTAT = "iostat";
 
     static boolean ioStat(android.content.Context ctx) {

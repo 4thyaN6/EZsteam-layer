@@ -1,0 +1,124 @@
+diff --git a/src/syscall/syscall.c b/src/syscall/syscall.c
+index f4c2f50..c685cb0 100644
+--- a/src/syscall/syscall.c
++++ b/src/syscall/syscall.c
+@@ -32,6 +32,110 @@
+ #include "tracee/reg.h"
+ #include "tracee/mem.h"
+ #include "cli/note.h"
++#include "syscall/sysnum.h"
++
++#include <stdio.h>       /* fprintf(3), */
++#include <stdlib.h>      /* getenv(3), atoi(3), */
++#include <stdint.h>      /* uint32_t, uint64_t, */
++#include <time.h>        /* clock_gettime(2), */
++
++/**
++ * Syscall statistics, only when PROOT_SYSSTAT=<seconds> is set: every system call PRoot has to
++ * stop for (seccomp-trapped or all without seccomp) is counted per program name and syscall;
++ * every <seconds> one "PROOT_STAT" summary of the busiest pairs goes to stderr, then the counters
++ * start over. PRoot runs single threaded, so plain counters are enough.
++ * Why: PRoot itself used 32-37% CPU while Steam idled on its library screen (2026-10-18) and
++ * the guest-side file statistics could not show which calls cause it.
++ * 시스템 호출 통계, PROOT_SYSSTAT=<초>가 있을 때만: PRoot가 멈춰서 처리해야 하는 모든 시스템 호출
++ * (seccomp으로 잡힌 것, seccomp이 없으면 전부)을 프로그램 이름·호출별로 셈. <초>마다 가장 많은 짝을
++ * "PROOT_STAT" 한 줄로 stderr에 쓰고 카운터를 새로 시작함. PRoot는 단일 스레드라 일반 카운터로 충분함.
++ * 이유: Steam이 라이브러리 화면에서 대기하는 동안 PRoot 자체가 CPU 32~37%를 썼고(2026-10-18),
++ * 게스트 쪽 파일 통계로는 어떤 호출 때문인지 알 수 없었음
++ */
++#define SYSSTAT_EXES 16
++#define SYSSTAT_TOP 12
++static int sysstat_sec = -1;
++static uint64_t sysstat_last_ns;
++static char sysstat_exe[SYSSTAT_EXES][32];
++static int sysstat_nexe;
++static uint32_t sysstat_count[SYSSTAT_EXES][PR_NB_SYSNUM];
++
++static uint64_t sysstat_now(void)
++{
++	struct timespec ts;
++	clock_gettime(CLOCK_MONOTONIC, &ts);
++	return (uint64_t) ts.tv_sec * 1000000000ull + (uint64_t) ts.tv_nsec;
++}
++
++/* Slot of a program name (last slot collects the rest) / 프로그램 이름의 칸(마지막 칸은 나머지) */
++static int sysstat_slot(const char *exe)
++{
++	const char *base = exe != NULL ? strrchr(exe, '/') : NULL;
++	base = base != NULL ? base + 1 : (exe != NULL ? exe : "?");
++	for (int i = 0; i < sysstat_nexe; i++)
++		if (strncmp(sysstat_exe[i], base, sizeof(sysstat_exe[i]) - 1) == 0)
++			return i;
++	if (sysstat_nexe < SYSSTAT_EXES - 1) {
++		snprintf(sysstat_exe[sysstat_nexe], sizeof(sysstat_exe[0]), "%s", base);
++		return sysstat_nexe++;
++	}
++	snprintf(sysstat_exe[SYSSTAT_EXES - 1], sizeof(sysstat_exe[0]), "%s", "(other)");
++	return SYSSTAT_EXES - 1;
++}
++
++/* One summary line, then counters start over / 요약 한 줄 출력 후 카운터를 새로 시작함 */
++static void sysstat_report(uint64_t span_ns)
++{
++	uint64_t total = 0;
++	for (int e = 0; e < SYSSTAT_EXES; e++)
++		for (int n = 0; n < PR_NB_SYSNUM; n++)
++			total += sysstat_count[e][n];
++	char line[2048];
++	int len = snprintf(line, sizeof(line), "PROOT_STAT %.0fs stops %llu (%.0f/s):",
++			   span_ns / 1e9, (unsigned long long) total, total / (span_ns / 1e9));
++	/* Repeatedly take the largest remaining pair / 남은 짝 중 가장 큰 것을 차례로 꺼냄 */
++	for (int r = 0; r < SYSSTAT_TOP && len < (int) sizeof(line) - 80; r++) {
++		int be = -1, bn = 0;
++		uint32_t best = 0;
++		for (int e = 0; e < SYSSTAT_EXES; e++)
++			for (int n = 0; n < PR_NB_SYSNUM; n++)
++				if (sysstat_count[e][n] > best) {
++					best = sysstat_count[e][n];
++					be = e;
++					bn = n;
++				}
++		if (be < 0)
++			break;
++		len += snprintf(line + len, sizeof(line) - (size_t) len, " %s(%s) %u,",
++				stringify_sysnum((Sysnum) bn), sysstat_exe[be], best);
++		sysstat_count[be][bn] = 0;
++	}
++	if (len > 0 && line[len - 1] == ',')
++		line[len - 1] = '\0';
++	fprintf(stderr, "%s\n", line);
++	memset(sysstat_count, 0, sizeof(sysstat_count));
++}
++
++/* Count one syscall stop / 시스템 호출 정지 하나를 셈 */
++static void sysstat_count_enter(const Tracee *tracee)
++{
++	if (sysstat_sec < 0) {
++		const char *v = getenv("PROOT_SYSSTAT");
++		sysstat_sec = v != NULL && atoi(v) > 0 ? atoi(v) : 0;
++		sysstat_last_ns = sysstat_now();
++	}
++	if (sysstat_sec == 0)
++		return;
++	Sysnum n = get_sysnum(tracee, CURRENT);
++	if ((int) n < 0 || n >= PR_NB_SYSNUM)
++		n = PR_void;
++	sysstat_count[sysstat_slot(tracee->exe)][n]++;
++	uint64_t now = sysstat_now();
++	if (now - sysstat_last_ns >= (uint64_t) sysstat_sec * 1000000000ull) {
++		sysstat_report(now - sysstat_last_ns);
++		sysstat_last_ns = now;
++	}
++}
+ 
+ /**
+  * Copy in @path a C string (PATH_MAX bytes max.) from the @tracee's
+@@ -151,6 +255,8 @@ void translate_syscall(Tracee *tracee)
+ 	int suppressed_syscall_status = 0;
+ 
+ 	if (is_enter_stage) {
++		sysstat_count_enter(tracee);
++
+ 		/* Never restore original register values at the end
+ 		 * of this stage.  */
+ 		tracee->restore_original_regs = false;
