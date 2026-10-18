@@ -26,9 +26,11 @@
  * /mnt/ezlator-library) 아래 경로는 "shared". 소켓·파이프·그 밖의 파일은 "other"(소켓은 요약에서 뺌).
  *
  * Cost: one clock read before and after each counted call (vDSO, no system call) and one readlink
- * per new descriptor. Only in the client process "steam". Off with EZS_IOSTAT=0.
+ * per new descriptor. Only in the client process "steam". Off by default, on with EZS_IOSTAT=1
+ * (the slow downloads it was made for came from a VPN, not from file I/O, 2026-10-18).
  * 비용: 센 호출마다 앞뒤로 시계 읽기 1번(vDSO, 시스템 호출 아님), 새 디스크립터마다 readlink 1번.
- * 클라이언트 프로세스 "steam"에서만 동작. EZS_IOSTAT=0이면 끔.
+ * 클라이언트 프로세스 "steam"에서만 동작. 기본은 꺼짐, EZS_IOSTAT=1이면 켬
+ * (이것을 만든 계기인 느린 다운로드는 파일 입출력이 아니라 VPN 때문이었음, 2026-10-18).
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -86,7 +88,7 @@ static int on(void)
         // programs (steamwebhelper and others) are left untouched
         // 다운로드를 하는 클라이언트 프로세스("steam")에서만 켬. 보조 프로그램(steamwebhelper 등)은
         // 건드리지 않음
-        enabled = !(e && strcmp(e, "0") == 0) && strcmp(program_invocation_short_name, "steam") == 0;
+        enabled = e && strcmp(e, "1") == 0 && strcmp(program_invocation_short_name, "steam") == 0;
     }
     return enabled;
 }
