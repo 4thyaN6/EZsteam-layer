@@ -196,7 +196,28 @@ static void path_add(int fd, uint64_t bytes)
 }
 
 static void report(uint64_t t);
+static int build_lookups(char *out, size_t size);
 static uint64_t ifaddrs_calls;
+/* socket() calls by family and protocol (netlink: protocol number) / 계열·프로토콜별 socket() 호출 수(netlink는 프로토콜 번호) */
+#define SOCK_KINDS 8
+static struct { int domain, proto; uint64_t n; } socks[SOCK_KINDS];
+
+/*
+ * Lookup table (paths looked up by name): separate from the write table and larger, hashed, and
+ * emptied at every summary. Digit runs become "#" (/proc/123/stat -> /proc/#/stat) so a scan
+ * over numbered entries shows as one pattern. Why: with the shared 128-slot table about 39k of
+ * 43k lookups a minute fell into the overflow slot (2026-10-18).
+ * 조회 표(이름으로 찾은 경로): 쓰기 표와 따로 두고 더 크게, 해시로, 요약 때마다 비움. 숫자 묶음은 "#"로
+ * 바꿈(/proc/123/stat -> /proc/#/stat). 번호 붙은 항목을 훑는 것이 한 형태로 보이게 함. 이유: 같이 쓰던
+ * 128칸 표에서는 분당 조회 약 4만 3천 회 중 약 3만 9천 회가 넘침 칸으로 들어갔음(2026-10-18)
+ */
+#define LOOK_SLOTS 1024
+#define LOOK_TOP 8
+struct look_t { char p[120]; uint32_t a, s, o; };
+static struct look_t looks[LOOK_SLOTS];
+static int nlooks;
+static uint64_t look_overflow;
+static pthread_mutex_t llock = PTHREAD_MUTEX_INITIALIZER;
 
 /*
  * Top TOP_PATHS slots as one line (caller holds plock); what 0 = writes, 1 = lookups by name.
@@ -295,7 +316,6 @@ static void report(uint64_t span)
     char top[1400], look[1600];
     pthread_mutex_lock(&plock);
     int shown = build_top(top, sizeof(top), "ezs-io: other 쓰기 상위:", 0);
-    int looked = build_top(look, sizeof(look), "ezs-io: 이름 조회 상위(access/stat/open):", 1);
     for (int i = 0; i < MAX_PATHS; i++) paths[i].n = paths[i].bytes = paths[i].qa = paths[i].qs = paths[i].qo = 0;
     // Mostly full: start the table over; descriptors look their path up again
     // 거의 찼으면 표를 새로 시작함. 디스크립터는 경로를 다시 찾음
@@ -305,9 +325,27 @@ static void report(uint64_t span)
     }
     pthread_mutex_unlock(&plock);
     if (shown) fprintf(stderr, "%s\n", top);
-    if (looked) fprintf(stderr, "%s\n", look);
+    if (build_lookups(look, sizeof(look))) fprintf(stderr, "%s\n", look);
     uint64_t ifa = __atomic_exchange_n(&ifaddrs_calls, 0, __ATOMIC_RELAXED);
     if (ifa) fprintf(stderr, "ezs-io: getifaddrs %llu회\n", (unsigned long long)ifa);
+    // socket() by family (1 unix, 2 inet, 10 inet6, 16 netlink with its protocol: 0 route,
+    // 15 kobject uevent = udev monitor) / 계열별 socket()(1 unix, 2 inet, 10 inet6, 16 netlink와
+    // 그 프로토콜: 0 route, 15 kobject uevent = udev 감시)
+    char sl[400];
+    int sn = snprintf(sl, sizeof(sl), "ezs-io: socket");
+    int sany = 0;
+    for (int i = 0; i < SOCK_KINDS; i++) {
+        uint64_t c = __atomic_exchange_n(&socks[i].n, 0, __ATOMIC_RELAXED);
+        if (!c) continue;
+        sany = 1;
+        sn += snprintf(sl + sn, sizeof(sl) - (size_t)sn, " 계열 %d/프로토콜 %d %llu회,", socks[i].domain,
+                       socks[i].proto, (unsigned long long)c);
+        if (sn >= (int)sizeof(sl) - 1) break;
+    }
+    if (sany) {
+        if (sn < (int)sizeof(sl) && sl[sn - 1] == ',') sl[sn - 1] = 0;
+        fprintf(stderr, "%s\n", sl);
+    }
 }
 
 /* Next symbol of a given name / 같은 이름의 다음 심볼 */
@@ -548,9 +586,80 @@ int posix_fallocate64(int fd, off64_t o, off64_t len)
 static void lookup(const char *path, int kind)
 {
     if (!path || !*path || !on()) return;
-    unsigned short sl = path_slot(path);
-    uint64_t *c = kind == 0 ? &paths[sl - 1].qa : kind == 1 ? &paths[sl - 1].qs : &paths[sl - 1].qo;
-    __atomic_add_fetch(c, 1, __ATOMIC_RELAXED);
+    // Normalised key (digit runs -> '#', long paths keep their tail) and its FNV-1a hash
+    // 정규화한 키(숫자 묶음 -> '#', 긴 경로는 뒤쪽 유지)와 FNV-1a 해시
+    char key[120];
+    size_t n = strlen(path);
+    const char *src = n >= sizeof(key) - 4 ? path + n - (sizeof(key) - 8) : path;
+    size_t k = 0;
+    if (src != path) { memcpy(key, "...", 3); k = 3; }
+    for (; *src && k < sizeof(key) - 1; src++) {
+        if (*src >= '0' && *src <= '9') {
+            if (k == 0 || key[k - 1] != '#') key[k++] = '#';
+        } else {
+            key[k++] = *src;
+        }
+    }
+    key[k] = 0;
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < k; i++) h = (h ^ (unsigned char)key[i]) * 16777619u;
+    pthread_mutex_lock(&llock);
+    struct look_t *e = NULL;
+    for (int probe = 0; probe < LOOK_SLOTS; probe++) {
+        struct look_t *c = &looks[(h + (uint32_t)probe) & (LOOK_SLOTS - 1)];
+        if (!c->p[0]) {
+            // New entry while the table is at most 7/8 full / 표가 7/8 이하일 때만 새 항목
+            if (nlooks < LOOK_SLOTS * 7 / 8) {
+                memcpy(c->p, key, k + 1);
+                c->a = c->s = c->o = 0;
+                nlooks++;
+                e = c;
+            }
+            break;
+        }
+        if (strcmp(c->p, key) == 0) { e = c; break; }
+    }
+    if (e) {
+        if (kind == 0) e->a++;
+        else if (kind == 1) e->s++;
+        else e->o++;
+    } else {
+        look_overflow++;
+    }
+    pthread_mutex_unlock(&llock);
+}
+
+/* Top lookups as one line, then the table is emptied / 조회 상위를 한 줄로 만든 뒤 표를 비움 */
+static int build_lookups(char *out, size_t size)
+{
+    pthread_mutex_lock(&llock);
+    uint64_t total = look_overflow;
+    for (int i = 0; i < LOOK_SLOTS; i++) total += looks[i].a + looks[i].s + looks[i].o;
+    int tl = snprintf(out, size, "ezs-io: 이름 조회 %llu회, 경로 %d개, 상위:", (unsigned long long)total, nlooks);
+    int pick[LOOK_TOP], shown = 0;
+    for (int r = 0; r < LOOK_TOP && total; r++) {
+        pick[r] = -1;
+        uint32_t best = 0;
+        for (int i = 0; i < LOOK_SLOTS; i++) {
+            int used = 0;
+            for (int q = 0; q < r; q++) used |= pick[q] == i;
+            uint32_t v = looks[i].a + looks[i].s + looks[i].o;
+            if (!used && v > best) { pick[r] = i; best = v; }
+        }
+        if (pick[r] < 0) break;
+        struct look_t *e = &looks[pick[r]];
+        tl += snprintf(out + tl, size - (size_t)tl, " %s %u(a %u s %u o %u);", e->p, best, e->a, e->s, e->o);
+        shown++;
+        if (tl >= (int)size - 1) break;
+    }
+    if (look_overflow && tl < (int)size - 40)
+        tl += snprintf(out + tl, size - (size_t)tl, " 표 넘침 %llu;", (unsigned long long)look_overflow);
+    if (tl > 0 && tl < (int)size && out[tl - 1] == ';') out[tl - 1] = 0;
+    memset(looks, 0, sizeof(looks));
+    nlooks = 0;
+    look_overflow = 0;
+    pthread_mutex_unlock(&llock);
+    return shown;
 }
 
 int access(const char *path, int mode)
@@ -650,4 +759,27 @@ int getifaddrs(struct ifaddrs **out)
     REAL(getifaddrs, int (*)(struct ifaddrs **));
     if (on()) __atomic_add_fetch(&ifaddrs_calls, 1, __ATOMIC_RELAXED);
     return real_getifaddrs(out);
+}
+
+/* Count socket() by family / 계열별 socket() 수를 셈 */
+int socket(int domain, int type, int proto)
+{
+    REAL(socket, int (*)(int, int, int));
+    if (on()) {
+        int pr = domain == 16 ? proto : 0;
+        // Fixed slots are claimed once per kind (a race only splits a count) / 종류마다 칸을 한 번 잡음(경합해도 수가 나뉠 뿐임)
+        for (int i = 0; i < SOCK_KINDS; i++) {
+            if (socks[i].n && socks[i].domain == domain && socks[i].proto == pr) {
+                __atomic_add_fetch(&socks[i].n, 1, __ATOMIC_RELAXED);
+                break;
+            }
+            if (!socks[i].n) {
+                socks[i].domain = domain;
+                socks[i].proto = pr;
+                __atomic_add_fetch(&socks[i].n, 1, __ATOMIC_RELAXED);
+                break;
+            }
+        }
+    }
+    return real_socket(domain, type, proto);
 }
