@@ -251,9 +251,15 @@ while :; do
     # 게임이 모두 있어 훑는 데 몇 초가 걸렸음
     av=$(find "$STEAM_DIR/steamrtarm64" "$STEAM_DIR/linuxarm64" -maxdepth 4 -name 'libavcodec.so*' -print -quit 2>/dev/null)
     echo "INFO ffmpeg : ${av:-클라이언트 폴더에 libavcodec 없음}"
-    echo "INFO steam : 시작 $n ($(date +%H:%M:%S))"
+    # Steam UI drawing: software by default (-cef-disable-gpu); with EZS_STEAM_GPU=1 (app test
+    # switch) the web helper may use the GPU, with the Chromium flags the app puts in EZS_CEF_FLAGS
+    # Steam 화면 그리기: 기본은 소프트웨어(-cef-disable-gpu). EZS_STEAM_GPU=1(앱 시험 스위치)이면 웹
+    # 도우미가 GPU를 쓸 수 있음. Chromium 플래그는 앱이 EZS_CEF_FLAGS에 넣음
+    GPUARG=-cef-disable-gpu
+    [ "${EZS_STEAM_GPU:-0}" = 1 ] && GPUARG=
+    echo "INFO steam : 시작 $n ($(date +%H:%M:%S)) 화면 GPU=${EZS_STEAM_GPU:-0}"
     LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_CLIENT_PRELOAD" \
-        "$BIN" -no-cef-sandbox -cef-disable-gpu -chromeosnopreallocate $VERIFY ${EZS_STEAM_EXTRA:-} >>"$LOG" 2>&1
+        "$BIN" -no-cef-sandbox $GPUARG -chromeosnopreallocate $VERIFY ${EZS_STEAM_EXTRA:-} >>"$LOG" 2>&1
     rc=$?
     echo "INFO steam : 종료 rc=$rc ($(date +%H:%M:%S))"
     # 42: restart after a self update (at most 5 times in a row) / 42: 자체 갱신 후 재시작(연속 5회까지)

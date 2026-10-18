@@ -105,38 +105,26 @@ if new not in s:
     print("ezsteam-prepare: webhelper flags hook added")
 else:
     print("ezsteam-prepare: webhelper flags hook present")
-# Disabled features merged into Steam's own --disable-features: Chromium keeps only the last
-# --disable-features switch, and Steam's comes after ours (measured: our list was dropped and
-# the storage service stayed a separate process, 2026-10-18). The lines go right before the
-# command that starts the helper (continued lines included).
-# 끌 기능을 Steam 자체 --disable-features에 합침: Chromium은 마지막 --disable-features만 쓰고
-# Steam 값이 우리 값 뒤에 옴(실측: 우리 목록이 빠져 저장소 서비스가 별도 프로세스로 남았음,
-# 2026-10-18). 도우미를 시작하는 명령(이어진 줄 포함) 바로 앞에 넣음
+# Remove the feature merge lines an earlier build added: Steam passes its own --disable-features
+# internally, not through the wrapper's arguments, so the merge never applied (measured: still 4
+# helpers, 2026-10-18). The block runs from the marker to its closing "fi".
+# 이전 빌드가 넣은 기능 합치기 줄을 지움: Steam은 자체 --disable-features를 감쌈 스크립트 인자가
+# 아니라 내부에서 넘기므로 합치기가 적용되지 않았음(실측: 도우미 계속 4개, 2026-10-18). 덩어리는
+# 표식부터 닫는 "fi"까지임
 MARK = "# ezs-cef-merge"
-if MARK not in s:
+if MARK in s:
     lines = s.split("\n")
-    i = next(k for k, l in enumerate(lines) if new in l)
-    while i > 0 and lines[i - 1].rstrip().endswith("\\"):
-        i -= 1
-    snippet = [
-        MARK,
-        'if [ -n "${EZS_CEF_DISABLE:-}" ]; then',
-        '    _ezs_n=$#; _ezs_hit=',
-        '    for _ezs_a in "$@"; do',
-        '        case "$_ezs_a" in --disable-features=*) _ezs_a="$_ezs_a,$EZS_CEF_DISABLE"; _ezs_hit=1 ;; esac',
-        '        set -- "$@" "$_ezs_a"',
-        '    done',
-        '    shift "$_ezs_n"',
-        '    [ -n "$_ezs_hit" ] || set -- "$@" "--disable-features=$EZS_CEF_DISABLE"',
-        'fi',
-    ]
-    lines[i:i] = snippet
+    i = lines.index(MARK)
+    j = i
+    while j < len(lines) and lines[j].strip() != "fi":
+        j += 1
+    del lines[i:j + 1]
     s = "\n".join(lines)
-    print("ezsteam-prepare: webhelper feature merge added")
+    print("ezsteam-prepare: old webhelper feature merge removed")
 open(p, "w").write(s)
 PYEOF
 fi
-echo "$LOG_TAG cef flags: ${EZS_CEF_FLAGS:-(없음)} / disable: ${EZS_CEF_DISABLE:-(없음)}"
+echo "$LOG_TAG cef flags: ${EZS_CEF_FLAGS:-(없음)} / Steam 화면 GPU: ${EZS_STEAM_GPU:-0}"
 
 # Compatibility tool (always refreshed so updates of this layer take effect)
 # 호환 도구(이 레이어 갱신이 반영되도록 매번 덮어씀)

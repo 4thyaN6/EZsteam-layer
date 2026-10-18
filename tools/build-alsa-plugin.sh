@@ -98,7 +98,7 @@ fi
 # 공용 저장소용 flock 대체(native/ezscompat), glibc + libdl만 필요
 # plus file I/O timing of the client (ezs_iostat.c, diagnosis of slow downloads into shared storage)
 # 클라이언트 파일 입출력 시간 측정 포함(ezs_iostat.c, 공용 저장소로의 느린 다운로드 진단)
-gcc -shared -fPIC -O2 -Wall -Wextra -o "$OUT/libezs_compat.so" native/ezscompat/ezs_flock.c native/ezscompat/ezs_iostat.c -ldl
+gcc -shared -fPIC -O2 -Wall -Wextra -o "$OUT/libezs_compat.so" native/ezscompat/ezs_flock.c native/ezscompat/ezs_iostat.c -ldl -lpthread
 strip --strip-unneeded "$OUT/libezs_compat.so"
 nm -D "$OUT/libezs_compat.so" | grep -q ' T flock$'
 nm -D "$OUT/libezs_compat.so" | grep -q ' T pwrite64$'

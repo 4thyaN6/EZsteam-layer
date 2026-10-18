@@ -25,6 +25,12 @@
  * 열리는 것을 보지 못한 디스크립터는 처음 쓰일 때 같은 방식으로 분류함. EZS_SHARED_LIBRARY(기본
  * /mnt/ezlator-library) 아래 경로는 "shared". 소켓·파이프·그 밖의 파일은 "other"(소켓은 요약에서 뺌).
  *
+ * Top writers: for "other" files the busiest paths by write calls are listed after each summary
+ * ("ezs-io: other 쓰기 상위:"), to find what makes the client's many small writes (100k-230k per
+ * minute, 2026-10-18) and part of its idle CPU use.
+ * 쓰기 상위: "other" 파일은 요약 뒤에 쓰기 호출이 많은 경로를 나열함("ezs-io: other 쓰기 상위:").
+ * 클라이언트의 잦은 작은 쓰기(분당 10만~23만 회, 2026-10-18)와 대기 중 CPU 사용 일부의 출처를 찾기 위함.
+ *
  * Cost: one clock read before and after each counted call (vDSO, no system call) and one readlink
  * per new descriptor. Only in the client process "steam". Off by default, on with EZS_IOSTAT=1
  * (the slow downloads it was made for came from a VPN, not from file I/O, 2026-10-18).
@@ -36,6 +42,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -93,6 +100,9 @@ static int on(void)
     return enabled;
 }
 
+static unsigned short path_slot(const char *path);
+static unsigned short slot_of[MAX_FD];
+
 /* Kind of a descriptor from its /proc/self/fd link / /proc/self/fd 링크로 디스크립터 종류를 정함 */
 static int classify(int fd)
 {
@@ -107,6 +117,7 @@ static int classify(int fd)
         path[n] = 0;
         if (strncmp(path, prefix, prefix_len) == 0 && (path[prefix_len] == '/' || path[prefix_len] == 0)) k = K_SHARED;
         else if (path[0] != '/') k = K_SOCKET; /* socket:[...], pipe:[...], anon_inode:... */
+        else slot_of[fd] = path_slot(path);
     }
     kind[fd] = (unsigned char)k;
     return k;
@@ -117,6 +128,63 @@ static int kind_of(int fd)
     if (fd < 0 || fd >= MAX_FD) return K_FILE;
     int k = kind[fd];
     return k ? k : classify(fd);
+}
+
+/*
+ * Path table for "other" files: each descriptor keeps its path's slot (+1; 0 = not looked up).
+ * Slots are added under a lock at open/first use; counters are atomic. When the table is mostly
+ * full at a report it is emptied and descriptors look their path up again at their next write.
+ * "other" 파일용 경로 표: 디스크립터마다 경로 칸 번호(+1, 0 = 아직 안 찾음)를 둠. 칸은 open이나 첫 사용 때
+ * 잠금 안에서 추가하고 카운터는 원자적으로 셈. 요약 때 표가 거의 차 있으면 비우고, 디스크립터는 다음
+ * 쓰기 때 경로를 다시 찾음
+ */
+#define MAX_PATHS 128
+#define TOP_PATHS 5
+struct path_t { char p[160]; uint64_t n, bytes; };
+static struct path_t paths[MAX_PATHS];
+static int npaths;
+static pthread_mutex_t plock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Slot (+1) for a path; the last slot collects paths once the table is full
+ * 경로의 칸 번호(+1). 표가 차면 마지막 칸이 나머지 경로를 모음 */
+static unsigned short path_slot(const char *path)
+{
+    size_t n = strlen(path);
+    // Long paths keep their tail (the file name tells most) / 긴 경로는 뒤쪽을 남김(파일 이름이 가장 많이 알려 줌)
+    char key[160];
+    if (n >= sizeof(key)) snprintf(key, sizeof(key), "...%s", path + n - (sizeof(key) - 4));
+    else memcpy(key, path, n + 1);
+    pthread_mutex_lock(&plock);
+    int i;
+    for (i = 0; i < npaths; i++)
+        if (strcmp(paths[i].p, key) == 0) break;
+    if (i == npaths) {
+        if (npaths < MAX_PATHS - 1) {
+            strcpy(paths[npaths].p, key);
+            paths[npaths].n = paths[npaths].bytes = 0;
+            npaths++;
+        } else {
+            i = MAX_PATHS - 1;
+            strcpy(paths[i].p, "(그 밖의 경로)");
+        }
+    }
+    pthread_mutex_unlock(&plock);
+    return (unsigned short)(i + 1);
+}
+
+/* Count one write on an "other" file by its path / "other" 파일 쓰기 하나를 경로별로 셈 */
+static int classify(int fd);
+static void path_add(int fd, uint64_t bytes)
+{
+    if (fd < 0 || fd >= MAX_FD) return;
+    unsigned short sl = slot_of[fd];
+    if (!sl) {
+        classify(fd);
+        sl = slot_of[fd];
+        if (!sl) return;
+    }
+    __atomic_add_fetch(&paths[sl - 1].n, 1, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&paths[sl - 1].bytes, bytes, __ATOMIC_RELAXED);
 }
 
 static void report(uint64_t t);
@@ -169,6 +237,47 @@ static void report(uint64_t span)
         if (!any) continue;
         if (len > 0 && len < (int)sizeof(line) && line[len - 1] == ',') line[len - 1] = 0;
         fprintf(stderr, "%s\n", line);
+    }
+    // Busiest "other" paths by write calls; the text is built under the lock and printed after
+    // it (printing writes to stderr, which comes back through write() and may need the lock)
+    // 쓰기 호출이 많은 "other" 경로. 글은 잠금 안에서 만들고 잠금 밖에서 출력함(출력이 stderr에 쓰며
+    // write()를 다시 거쳐 잠금이 필요할 수 있음)
+    char top[1400];
+    int tl = snprintf(top, sizeof(top), "ezs-io: other 쓰기 상위:");
+    int shown = 0;
+    pthread_mutex_lock(&plock);
+    uint64_t taken[TOP_PATHS] = { 0 };
+    int pick[TOP_PATHS];
+    for (int r = 0; r < TOP_PATHS; r++) {
+        pick[r] = -1;
+        // Every slot is checked (unused ones count 0), the overflow slot included
+        // 모든 칸을 봄(안 쓰는 칸은 0회), 넘침 칸 포함
+        for (int i = 0; i < MAX_PATHS; i++) {
+            int used = 0;
+            for (int q = 0; q < r; q++) used |= pick[q] == i;
+            if (!used && paths[i].n && (pick[r] < 0 || paths[i].n > taken[r])) {
+                pick[r] = i;
+                taken[r] = paths[i].n;
+            }
+        }
+        if (pick[r] < 0) break;
+        struct path_t *pp = &paths[pick[r]];
+        tl += snprintf(top + tl, sizeof(top) - (size_t)tl, " %s %llu회 %.2fMB;", pp->p,
+                       (unsigned long long)taken[r], pp->bytes / 1e6);
+        shown++;
+        if (tl >= (int)sizeof(top) - 1) break;
+    }
+    for (int i = 0; i < MAX_PATHS; i++) paths[i].n = paths[i].bytes = 0;
+    // Mostly full: start the table over; descriptors look their path up again
+    // 거의 찼으면 표를 새로 시작함. 디스크립터는 경로를 다시 찾음
+    if (npaths >= MAX_PATHS * 3 / 4) {
+        npaths = 0;
+        memset(slot_of, 0, sizeof(slot_of));
+    }
+    pthread_mutex_unlock(&plock);
+    if (shown) {
+        if (tl < (int)sizeof(top) && top[tl - 1] == ';') top[tl - 1] = 0;
+        fprintf(stderr, "%s\n", top);
     }
 }
 
@@ -232,7 +341,7 @@ int close(int fd)
     uint64_t t0 = now_ns();
     int r = real_close(fd);
     int save = errno;
-    if (fd >= 0 && fd < MAX_FD) kind[fd] = K_UNKNOWN;
+    if (fd >= 0 && fd < MAX_FD) kind[fd] = K_UNKNOWN, slot_of[fd] = 0;
     count(k, OP_CLOSE, t0, 0);
     errno = save;
     return r;
@@ -248,6 +357,8 @@ int close(int fd)
         __typeof__(call) r_ = call;                          \
         int save_ = errno;                                   \
         count(k_, op, t0_, r_ > 0 ? (uint64_t)(bytes_expr) : 0); \
+        if (op == OP_WRITE && k_ == K_FILE)                  \
+            path_add(fd, r_ > 0 ? (uint64_t)(bytes_expr) : 0); \
         errno = save_;                                       \
         return r_;                                           \
     } while (0)

@@ -38,7 +38,7 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
     }
 
     /** Scaling modes / 확대 방식 */
-    public static final int SCALE_LINEAR = 0, SCALE_BICUBIC = 1, SCALE_SHARP = 2;
+    public static final int SCALE_LINEAR = 0, SCALE_BICUBIC = 1, SCALE_SHARP = 2, SCALE_FSR = 3;
 
     /** Key events from the soft keyboard's input connection (UI thread)
      *  소프트 키보드 입력 연결에서 오는 키 이벤트(UI 스레드) */
@@ -53,6 +53,13 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
     private volatile StatsListener stats;
 
     private int program, texture, aPos, aTex;
+    // FSR 1 (two passes): EASU into an offscreen texture at output size, then RCAS to the screen
+    // FSR 1(2단계): EASU로 출력 크기의 화면 밖 텍스처에 그린 뒤 RCAS로 화면에 그림
+    private int easuProg, rcasProg, fsrFbo, fsrTex, fsrW, fsrH;
+    private int eaPos, eaTex, eSrc, raPos, raTex, rOut, rCon;
+    /** FSR shader or offscreen setup failed (that mode then draws like bicubic + sharpen)
+     *  FSR 셰이더나 화면 밖 버퍼 준비가 실패함(그때 그 모드는 바이큐빅+선명처럼 그림) */
+    private volatile boolean fsrFailed;
     private int texW, texH;
     private int viewW, viewH;
     /** Area of the view that shows the X screen (letterbox) / X 화면이 그려지는 뷰 영역(레터박스) */
@@ -233,6 +240,7 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         }
         aPos = GLES20.glGetAttribLocation(program, "aPos");
         aTex = GLES20.glGetAttribLocation(program, "aTex");
+        linkFsr(vs);
         uSrc = GLES20.glGetUniformLocation(program, "uSrc");
         uMode = GLES20.glGetUniformLocation(program, "uMode");
         uSharp = GLES20.glGetUniformLocation(program, "uSharp");
@@ -294,17 +302,16 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         // GL viewport origin is bottom-left / GL 뷰포트 원점은 왼쪽 아래
         GLES20.glViewport(x, viewH - y - h, w, h);
 
-        GLES20.glUseProgram(program);
-        GLES20.glUniform2f(uSrc, f.width, f.height);
-        GLES20.glUniform1i(uMode, scaleMode);
-        GLES20.glUniform1f(uSharp, 0.5f);
-        quad.position(0);
-        GLES20.glVertexAttribPointer(aPos, 2, GLES20.GL_FLOAT, false, 16, quad);
-        GLES20.glEnableVertexAttribArray(aPos);
-        quad.position(2);
-        GLES20.glVertexAttribPointer(aTex, 2, GLES20.GL_FLOAT, false, 16, quad);
-        GLES20.glEnableVertexAttribArray(aTex);
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+        if (scaleMode == SCALE_FSR && drawFsr(f, x, viewH - y - h, w, h)) {
+            // Drawn by the two FSR passes / FSR 2단계로 그림
+        } else {
+            GLES20.glUseProgram(program);
+            GLES20.glUniform2f(uSrc, f.width, f.height);
+            // FSR not available: same look as bicubic + sharpen / FSR을 못 쓰면 바이큐빅+선명과 같게 그림
+            GLES20.glUniform1i(uMode, scaleMode == SCALE_FSR ? SCALE_SHARP : scaleMode);
+            GLES20.glUniform1f(uSharp, 0.5f);
+            drawQuad(aPos, aTex);
+        }
 
         // Statistics / 통계
         statFrames++;
@@ -352,6 +359,185 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
 
     /** Last shader error (null when none), for the host's log / 마지막 셰이더 오류(없으면 null), 호스트 로그용 */
     public volatile String shaderError;
+
+    /** Draw the full quad with the given attribute locations / 지정한 속성 위치로 사각형 전체를 그림 */
+    private void drawQuad(int pos, int tex) {
+        quad.position(0);
+        GLES20.glVertexAttribPointer(pos, 2, GLES20.GL_FLOAT, false, 16, quad);
+        GLES20.glEnableVertexAttribArray(pos);
+        quad.position(2);
+        GLES20.glVertexAttribPointer(tex, 2, GLES20.GL_FLOAT, false, 16, quad);
+        GLES20.glEnableVertexAttribArray(tex);
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+    }
+
+    /**
+     * Compile the two FSR 1 passes. Own GLSL ES port of the published AMD FidelityFX Super
+     * Resolution 1.0 algorithm (EASU: edge adaptive spatial upsampling, RCAS: robust contrast
+     * adaptive sharpening). FidelityFX FSR is MIT licensed, Copyright (c) 2021 Advanced Micro
+     * Devices, Inc.; this port keeps the math, not the source layout.
+     * FSR 1 두 단계를 컴파일함. 공개된 AMD FidelityFX Super Resolution 1.0 알고리즘(EASU: 경계 적응
+     * 공간 확대, RCAS: 대비 적응 선명화)을 GLSL ES로 직접 옮긴 것임. FidelityFX FSR은 MIT 라이선스
+     * (Copyright (c) 2021 Advanced Micro Devices, Inc.)이며 계산 방식만 따르고 원본 소스 구조는 따르지 않음
+     */
+    private void linkFsr(String vs) {
+        fsrFbo = fsrTex = fsrW = fsrH = 0;
+        // EASU: 12 source taps around the 2x2 quad f g / j k (b c above, n o below, e i left, h l right).
+        // Luma gradients of the quad give an edge direction and length; each tap is weighted by a
+        // Lanczos-2-like kernel stretched along the edge, then clamped to the quad's min/max.
+        // EASU: 2x2 묶음 f g / j k 주변 원본 12개 표본(위 b c, 아래 n o, 왼쪽 e i, 오른쪽 h l).
+        // 묶음의 밝기 기울기로 경계 방향과 길이를 구하고, 경계를 따라 늘인 Lanczos-2 근사 커널로 각 표본에
+        // 가중치를 준 뒤 묶음의 최소·최대로 제한함(링잉 방지)
+        String easu = "precision highp float; uniform sampler2D uTex; uniform vec2 uSrc; varying vec2 vTex;\n"
+                + "vec3 tp(vec2 fp, vec2 o) { return texture2D(uTex, (fp + o + 0.5) / uSrc).bgr; }\n"
+                + "float lu(vec3 c) { return c.b * 0.5 + c.r * 0.5 + c.g; }\n"
+                // Accumulate direction and length for one quad pixel (up a, left b, centre c, right d, down e)
+                // 묶음 픽셀 하나의 방향·길이 누적(위 a, 왼쪽 b, 가운데 c, 오른쪽 d, 아래 e)
+                + "void st(inout vec2 dir, inout float len, float w, float a, float b, float c, float d, float e) {\n"
+                + "  float lx = max(abs(d - c), abs(c - b)); float dx = d - b;\n"
+                + "  lx = clamp(abs(dx) / max(lx, 1e-5), 0.0, 1.0); lx *= lx;\n"
+                + "  float ly = max(abs(e - c), abs(c - a)); float dy = e - a;\n"
+                + "  ly = clamp(abs(dy) / max(ly, 1e-5), 0.0, 1.0); ly *= ly;\n"
+                + "  dir += vec2(dx, dy) * w; len += (lx + ly) * w; }\n"
+                // One filtered tap / 필터 표본 하나
+                + "void tap(inout vec3 ac, inout float aw, vec2 off, vec2 dir, vec2 len2, float lob, float clp, vec3 c) {\n"
+                + "  vec2 v = vec2(off.x * dir.x + off.y * dir.y, -off.x * dir.y + off.y * dir.x) * len2;\n"
+                + "  float d2 = min(dot(v, v), clp);\n"
+                + "  float wb = 0.4 * d2 - 1.0; float wa = lob * d2 - 1.0; wb *= wb; wa *= wa;\n"
+                + "  wb = 1.5625 * wb - 0.5625; float w = wb * wa; ac += c * w; aw += w; }\n"
+                + "void main() {\n"
+                + "  vec2 pp = vTex * uSrc - 0.5; vec2 fp = floor(pp); pp -= fp;\n"
+                + "  vec3 b = tp(fp, vec2(0.0, -1.0)), c = tp(fp, vec2(1.0, -1.0));\n"
+                + "  vec3 e = tp(fp, vec2(-1.0, 0.0)), f = tp(fp, vec2(0.0, 0.0)), g = tp(fp, vec2(1.0, 0.0)), h = tp(fp, vec2(2.0, 0.0));\n"
+                + "  vec3 i = tp(fp, vec2(-1.0, 1.0)), j = tp(fp, vec2(0.0, 1.0)), k = tp(fp, vec2(1.0, 1.0)), l = tp(fp, vec2(2.0, 1.0));\n"
+                + "  vec3 n = tp(fp, vec2(0.0, 2.0)), o = tp(fp, vec2(1.0, 2.0));\n"
+                + "  float bL = lu(b), cL = lu(c), eL = lu(e), fL = lu(f), gL = lu(g), hL = lu(h);\n"
+                + "  float iL = lu(i), jL = lu(j), kL = lu(k), lL = lu(l), nL = lu(n), oL = lu(o);\n"
+                + "  vec2 dir = vec2(0.0); float len = 0.0;\n"
+                + "  st(dir, len, (1.0 - pp.x) * (1.0 - pp.y), bL, eL, fL, gL, jL);\n"
+                + "  st(dir, len, pp.x * (1.0 - pp.y), cL, fL, gL, hL, kL);\n"
+                + "  st(dir, len, (1.0 - pp.x) * pp.y, fL, iL, jL, kL, nL);\n"
+                + "  st(dir, len, pp.x * pp.y, gL, jL, kL, lL, oL);\n"
+                // Normalise the direction (flat area: axis aligned) / 방향 정규화(평탄한 곳은 축 방향)
+                + "  float dr = dot(dir, dir); if (dr < 1.0 / 32768.0) dir = vec2(1.0, 0.0); else dir *= inversesqrt(dr);\n"
+                + "  len = len * 0.5; len *= len;\n"
+                + "  float stretch = dot(dir, dir) / max(abs(dir.x), abs(dir.y));\n"
+                + "  vec2 len2 = vec2(1.0 + (stretch - 1.0) * len, 1.0 - 0.5 * len);\n"
+                + "  float lob = 0.5 + (0.21 - 0.5) * len; float clp = 1.0 / lob;\n"
+                + "  vec3 ac = vec3(0.0); float aw = 0.0;\n"
+                + "  tap(ac, aw, vec2(0.0, -1.0) - pp, dir, len2, lob, clp, b);\n"
+                + "  tap(ac, aw, vec2(1.0, -1.0) - pp, dir, len2, lob, clp, c);\n"
+                + "  tap(ac, aw, vec2(-1.0, 1.0) - pp, dir, len2, lob, clp, i);\n"
+                + "  tap(ac, aw, vec2(0.0, 1.0) - pp, dir, len2, lob, clp, j);\n"
+                + "  tap(ac, aw, vec2(0.0, 0.0) - pp, dir, len2, lob, clp, f);\n"
+                + "  tap(ac, aw, vec2(-1.0, 0.0) - pp, dir, len2, lob, clp, e);\n"
+                + "  tap(ac, aw, vec2(1.0, 1.0) - pp, dir, len2, lob, clp, k);\n"
+                + "  tap(ac, aw, vec2(2.0, 1.0) - pp, dir, len2, lob, clp, l);\n"
+                + "  tap(ac, aw, vec2(2.0, 0.0) - pp, dir, len2, lob, clp, h);\n"
+                + "  tap(ac, aw, vec2(1.0, 0.0) - pp, dir, len2, lob, clp, g);\n"
+                + "  tap(ac, aw, vec2(1.0, 2.0) - pp, dir, len2, lob, clp, o);\n"
+                + "  tap(ac, aw, vec2(0.0, 2.0) - pp, dir, len2, lob, clp, n);\n"
+                + "  vec3 mn = min(min(f, g), min(j, k)); vec3 mx = max(max(f, g), max(j, k));\n"
+                + "  gl_FragColor = vec4(clamp(ac / max(aw, 1e-5), mn, mx), 1.0); }\n";
+        // RCAS: per channel, the largest negative lobe that keeps the cross neighbourhood (b d f h)
+        // from clipping, scaled by uCon (2^-sharpness) and lowered on noise; the offscreen texture
+        // is upside down relative to the quad, so its rows are read flipped.
+        // RCAS: 채널마다 십자 이웃(b d f h)이 잘리지 않는 가장 큰 음수 로브를 구하고 uCon(2^-선명도)을
+        // 곱한 뒤 잡음이면 낮춤. 화면 밖 텍스처는 사각형 기준으로 위아래가 뒤집혀 있어 줄을 거꾸로 읽음
+        String rcas = "precision highp float; uniform sampler2D uTex; uniform vec2 uOut; uniform float uCon;\n"
+                + "varying vec2 vTex;\n"
+                + "vec3 tp(vec2 p, vec2 o) { return texture2D(uTex, p + o / uOut).rgb; }\n"
+                + "float lu(vec3 c) { return c.b * 0.5 + c.r * 0.5 + c.g; }\n"
+                + "void main() {\n"
+                + "  vec2 p = vec2(vTex.x, 1.0 - vTex.y);\n"
+                + "  vec3 b = tp(p, vec2(0.0, -1.0)), d = tp(p, vec2(-1.0, 0.0)), e = tp(p, vec2(0.0));\n"
+                + "  vec3 f = tp(p, vec2(1.0, 0.0)), h = tp(p, vec2(0.0, 1.0));\n"
+                + "  vec3 mn4 = min(min(b, d), min(f, h)); vec3 mx4 = max(max(b, d), max(f, h));\n"
+                + "  vec3 hitMin = mn4 / max(4.0 * mx4, vec3(1e-5));\n"
+                + "  vec3 hitMax = (1.0 - mx4) / min(4.0 * mn4 - 4.0, vec3(-1e-5));\n"
+                + "  vec3 lb = max(-hitMin, hitMax);\n"
+                + "  float lobe = max(-0.1875, min(max(lb.r, max(lb.g, lb.b)), 0.0)) * uCon;\n"
+                // Noise: a lone pixel against a flat cross gets less sharpening / 잡음: 평탄한 십자 속 외딴 점은 덜 선명하게
+                + "  float bL = lu(b), dL = lu(d), eL = lu(e), fL = lu(f), hL = lu(h);\n"
+                + "  float nz = 0.25 * (bL + dL + fL + hL) - eL;\n"
+                + "  float rg = max(max(max(bL, dL), max(eL, fL)), hL) - min(min(min(bL, dL), min(eL, fL)), hL);\n"
+                + "  nz = clamp(abs(nz) / max(rg, 1e-5), 0.0, 1.0); lobe *= -0.5 * nz + 1.0;\n"
+                + "  gl_FragColor = vec4(clamp((lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0), 0.0, 1.0), 1.0); }\n";
+        String before = shaderError;
+        easuProg = link(vs, easu);
+        rcasProg = link(vs, rcas);
+        fsrFailed = easuProg == 0 || rcasProg == 0;
+        if (fsrFailed) {
+            // Keep the main shader's own error text first / 기본 셰이더 오류 문구를 앞에 둠
+            shaderError = (before == null ? "" : before + " / ") + "fsr: " + shaderError;
+            return;
+        }
+        eaPos = GLES20.glGetAttribLocation(easuProg, "aPos");
+        eaTex = GLES20.glGetAttribLocation(easuProg, "aTex");
+        eSrc = GLES20.glGetUniformLocation(easuProg, "uSrc");
+        raPos = GLES20.glGetAttribLocation(rcasProg, "aPos");
+        raTex = GLES20.glGetAttribLocation(rcasProg, "aTex");
+        rOut = GLES20.glGetUniformLocation(rcasProg, "uOut");
+        rCon = GLES20.glGetUniformLocation(rcasProg, "uCon");
+    }
+
+    /**
+     * Draw with FSR 1 into the given screen area; false when FSR is not usable (caller draws the
+     * normal way). The offscreen texture follows the output size.
+     * 주어진 화면 영역에 FSR 1로 그림. FSR을 못 쓰면 false(호출한 쪽이 보통 방식으로 그림).
+     * 화면 밖 텍스처는 출력 크기를 따름
+     */
+    private boolean drawFsr(XvfbFramebuffer f, int vx, int vy, int w, int h) {
+        if (fsrFailed || w <= 0 || h <= 0) return false;
+        if (fsrW != w || fsrH != h) {
+            int[] a = new int[1];
+            if (fsrTex == 0) {
+                GLES20.glGenTextures(1, a, 0);
+                fsrTex = a[0];
+            }
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fsrTex);
+            // Nearest: RCAS reads exact output pixels / 최근접: RCAS가 출력 픽셀을 정확히 읽음
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, h, 0,
+                    GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null);
+            if (fsrFbo == 0) {
+                GLES20.glGenFramebuffers(1, a, 0);
+                fsrFbo = a[0];
+            }
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fsrFbo);
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
+                    GLES20.GL_TEXTURE_2D, fsrTex, 0);
+            int st = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER);
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+            if (st != GLES20.GL_FRAMEBUFFER_COMPLETE) {
+                fsrFailed = true;
+                shaderError = (shaderError == null ? "" : shaderError + " / ") + "fsr fbo: 0x" + Integer.toHexString(st);
+                return false;
+            }
+            fsrW = w;
+            fsrH = h;
+        }
+        // Pass 1: EASU, X screen → offscreen texture / 1단계: EASU, X 화면 → 화면 밖 텍스처
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fsrFbo);
+        GLES20.glViewport(0, 0, w, h);
+        GLES20.glUseProgram(easuProg);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture);
+        GLES20.glUniform2f(eSrc, f.width, f.height);
+        drawQuad(eaPos, eaTex);
+        // Pass 2: RCAS, offscreen texture → screen area / 2단계: RCAS, 화면 밖 텍스처 → 화면 영역
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+        GLES20.glViewport(vx, vy, w, h);
+        GLES20.glUseProgram(rcasProg);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fsrTex);
+        GLES20.glUniform2f(rOut, w, h);
+        // Sharpness 0.2 stops (FSR's usual default) / 선명도 0.2단(FSR 보통 기본값)
+        GLES20.glUniform1f(rCon, (float) Math.pow(2.0, -0.2));
+        drawQuad(raPos, raTex);
+        return true;
+    }
 
     /** Compile and link a program; 0 and shaderError set on failure
      *  프로그램 컴파일·링크. 실패하면 0을 돌려주고 shaderError를 채움 */

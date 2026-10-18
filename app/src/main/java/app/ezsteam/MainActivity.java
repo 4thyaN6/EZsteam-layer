@@ -136,13 +136,24 @@ public class MainActivity extends Activity {
             cef.setText(cefLabel(on));
             log("CEF 절감 " + (on ? "켬: " + CEF_SLIM_FLAGS : "끔") + " (다음 Steam 실행부터)");
         });
-        // Test: Steam web helper as a single process / 시험: Steam 웹 도우미를 한 프로세스로
-        Button single = addButton(row4, "CEF 단일: " + (cefSingle(this) ? "켬" : "끔"), null);
-        single.setOnClickListener(v -> {
-            boolean on = !cefSingle(this);
-            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_CEF_SINGLE, on).apply();
-            single.setText("CEF 단일: " + (on ? "켬" : "끔"));
-            log("CEF 단일 프로세스(시험) " + (on ? "켬: " + CEF_SINGLE_ARG : "끔") + " (다음 Steam 실행부터)");
+        // Test: Steam UI drawn with the GPU (off → Chromium's choice → ANGLE on Vulkan)
+        // 시험: Steam 화면을 GPU로 그림(끔 → Chromium 선택 → Vulkan 위 ANGLE)
+        Button gpu = addButton(row4, "Steam 화면 GPU: " + STEAM_GPU_MODES[steamGpu(this)][0], null);
+        gpu.setOnClickListener(v -> {
+            int m = (steamGpu(this) + 1) % STEAM_GPU_MODES.length;
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(KEY_STEAM_GPU, m).apply();
+            gpu.setText("Steam 화면 GPU: " + STEAM_GPU_MODES[m][0]);
+            log("Steam 화면 GPU(시험) " + STEAM_GPU_MODES[m][0]
+                    + (m == 0 ? "" : ": " + STEAM_GPU_MODES[m][1]) + " (다음 Steam 실행부터)");
+        });
+        // Diagnosis: the client's file I/O summary with its busiest written paths, once a minute
+        // 진단: 클라이언트 파일 입출력 요약과 쓰기가 많은 경로를 1분마다 기록
+        Button io = addButton(row4, "IO 통계: " + (ioStat(this) ? "켬" : "끔"), null);
+        io.setOnClickListener(v -> {
+            boolean on = !ioStat(this);
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_IOSTAT, on).apply();
+            io.setText("IO 통계: " + (on ? "켬" : "끔"));
+            log("IO 통계 " + (on ? "켬(앱 로그 ezs-io: 줄, 1분마다)" : "끔") + " (다음 Steam 실행부터)");
         });
 
         // Fifth row: how games hand finished frames to the X server, and the DXVK overlay
@@ -461,45 +472,51 @@ public class MainActivity extends Activity {
      * the client already runs without), GPU in the browser process, audio service in process, one
      * renderer process. The network service stays a separate process: with it in process the client
      * no longer accepts its UI WebSocket (0x3008, measured). Steam's own flags come after these
-     * and win on conflicts. Measured with the network service also in process: 9 -> 4 helpers.
-     * The storage service is asked to run in process too (StorageServiceOutOfProcess off; an
-     * unknown feature name is ignored by Chromium). Why: a first game start reached 31 child
+     * and win on conflicts. --disable-site-isolation-trials lets pages share one renderer.
+     * Measured: 4 helpers (browser, renderer, network, storage); Steam passes its own
+     * --disable-features internally, so feature switches from here are dropped. Why: a first game start reached 31 child
      * processes with 7 web helpers and Android ended the session (exit 137, 2026-10-18).
      * Steam 웹 도우미 보조 프로세스를 줄이는 Chromium 플래그(안드로이드는 모든 앱 합계 추가 프로세스
      * 32개까지 허용): zygote 없음(샌드박스 없이 실행해야 하며 클라이언트는 이미 그렇게 실행 중),
      * GPU를 브라우저 프로세스 안에서, 오디오 서비스도 안에서, 렌더러 1개. 네트워크 서비스는 별도
      * 프로세스로 둠: 안에서 돌리면 클라이언트가 UI WebSocket을 받아들이지 않음(0x3008, 실측).
      * Steam 자체 플래그가 뒤에 오므로 겹치면 Steam 값이 우선함. 네트워크 서비스까지 안에서 돌렸을
-     * 때 실측: 도우미 9개 → 4개. 저장소 서비스도 안에서 돌게 요청함(StorageServiceOutOfProcess 끔.
-     * 모르는 기능 이름은 Chromium이 무시함). 이유: 게임 첫 실행 때 웹 도우미 7개로 자식 프로세스가
+     * 때 실측: 도우미 9개 → 4개. --disable-site-isolation-trials는 페이지들이 렌더러 하나를 같이 쓰게 함.
+     * 실측: 도우미 4개(browser, renderer, network, storage). Steam이 자체 --disable-features를 내부에서
+     * 넘기므로 여기서 주는 기능 스위치는 빠짐. 이유: 게임 첫 실행 때 웹 도우미 7개로 자식 프로세스가
      * 31개가 되어 안드로이드가 세션을 끝냈음(exit 137, 2026-10-18)
      */
     static final String CEF_SLIM_FLAGS = "--no-sandbox --no-zygote --in-process-gpu --renderer-process-limit=1"
             + " --disable-site-isolation-trials";
     /**
-     * Features to switch off, merged by the web helper wrapper into Steam's own --disable-features
-     * (Chromium uses only the last such switch; ezsteam-prepare.sh). --disable-site-isolation-trials
-     * above lets pages share a renderer: with only the process limit there were 3 renderers
-     * (app log 2026-10-18).
-     * 끌 기능 목록. 웹 도우미 감쌈 스크립트가 Steam 자체 --disable-features에 합침(Chromium은 그런 스위치
-     * 중 마지막 것만 씀, ezsteam-prepare.sh). 위의 --disable-site-isolation-trials는 페이지들이 렌더러를
-     * 같이 쓰게 함: 프로세스 한도만으로는 렌더러가 3개였음(앱 로그 2026-10-18)
+     * Steam UI GPU test modes {label, extra Chromium flags}. Off: Steam starts with
+     * -cef-disable-gpu (software drawing, as before). The other modes drop that option
+     * (steam-run.sh, EZS_STEAM_GPU=1) and add flags to the web helper. The GPU stays inside the
+     * browser process (--in-process-gpu above), so the helper count does not grow. Not yet measured
+     * on the device: steamwebhelper-output.log in a report shows whether the GPU started.
+     * Steam 화면 GPU 시험 방식 {이름, 추가 Chromium 플래그}. 끔: Steam을 -cef-disable-gpu로 시작함(기존처럼
+     * 소프트웨어 그리기). 나머지는 그 옵션을 빼고(steam-run.sh, EZS_STEAM_GPU=1) 웹 도우미에 플래그를
+     * 더함. GPU는 브라우저 프로세스 안에 있으므로(위 --in-process-gpu) 도우미 수는 늘지 않음. 기기에서
+     * 아직 측정 안 함: 제보의 steamwebhelper-output.log로 GPU가 시작됐는지 확인함
      */
-    static final String CEF_SLIM_DISABLE = "AudioServiceOutOfProcess,StorageServiceOutOfProcess";
+    static final String KEY_STEAM_GPU = "steam_gpu";
+    static final String[][] STEAM_GPU_MODES = {
+            {"끔", ""},
+            {"Chromium 선택", "--ignore-gpu-blocklist"},
+            {"ANGLE Vulkan", "--ignore-gpu-blocklist --use-gl=angle --use-angle=vulkan"},
+    };
 
-    /**
-     * Steam's own option to run its web helper as one process (Valve developer wiki, Steam command
-     * line options). Test switch in admin mode, off by default: Chromium's single-process mode is
-     * meant for debugging and may break parts of the Steam UI.
-     * Steam 자체 옵션으로 웹 도우미를 한 프로세스로 실행(Valve 개발자 위키, Steam 명령줄 옵션).
-     * 관리자 모드 시험 스위치, 기본 끔: Chromium 단일 프로세스 모드는 디버깅용이라 Steam 화면 일부가
-     * 깨질 수 있음
-     */
-    static final String KEY_CEF_SINGLE = "cef_single";
-    static final String CEF_SINGLE_ARG = "-cef-single-process";
+    static int steamGpu(android.content.Context ctx) {
+        int m = ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getInt(KEY_STEAM_GPU, 0);
+        return m >= 0 && m < STEAM_GPU_MODES.length ? m : 0;
+    }
 
-    static boolean cefSingle(android.content.Context ctx) {
-        return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_CEF_SINGLE, false);
+    /** Client file I/O statistics (native ezs_iostat, EZS_IOSTAT=1), off by default
+     *  클라이언트 파일 입출력 통계(네이티브 ezs_iostat, EZS_IOSTAT=1), 기본 끔 */
+    static final String KEY_IOSTAT = "iostat";
+
+    static boolean ioStat(android.content.Context ctx) {
+        return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_IOSTAT, false);
     }
 
     /** CEF process saving on (default) or off / CEF 프로세스 절감 켬(기본) 또는 끔 */

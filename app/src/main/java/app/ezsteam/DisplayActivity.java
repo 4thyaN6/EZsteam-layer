@@ -82,7 +82,7 @@ public class DisplayActivity extends Activity {
 
     /** Last key sent to X, shown in the top bar / X로 보낸 마지막 키, 위쪽 막대에 표시 */
     private volatile String lastKey = "-";
-    private volatile boolean shaderLogged;
+    private volatile String shaderLogged;
     /** Child processes now / most seen, free memory (monitor thread) / 현재·최대 자식 프로세스 수, 여유 메모리(감시 스레드) */
     private volatile int procNow, procMax;
     private volatile long memFreeMb;
@@ -112,7 +112,8 @@ public class DisplayActivity extends Activity {
     private final long startMs = SystemClock.elapsedRealtime();
     /** Turn on PRoot's crash report (PROOT_CRASH_LOG) / PRoot 크래시 보고(PROOT_CRASH_LOG) 켜기 */
     private static final boolean CRASH_LOG = false;
-    private static final String[] SCALE_NAMES = {"선형", "바이큐빅", "바이큐빅+선명"};
+    // Index = FramebufferView.SCALE_* / 순서 = FramebufferView.SCALE_*
+    private static final String[] SCALE_NAMES = {"선형", "바이큐빅", "바이큐빅+선명", "FSR 1"};
     private Button scaleButton;
 
     // Touch state / 터치 상태
@@ -249,9 +250,11 @@ public class DisplayActivity extends Activity {
 
         view.setStatsListener((fps, ms, changed, fw, fh) -> {
             String err = view.shaderError;
-            if (err != null && !shaderLogged) {
-                shaderLogged = true;
-                log("확대 셰이더 오류(선형으로 대체): " + err);
+            // Logged again when the text changes (FSR can fail later, at its first use)
+            // 문구가 바뀌면 다시 기록함(FSR은 처음 쓸 때 늦게 실패할 수 있음)
+            if (err != null && !err.equals(shaderLogged)) {
+                shaderLogged = err;
+                log("확대 셰이더 오류(기본: 선형, FSR: 바이큐빅+선명으로 대체): " + err);
             }
             // Second line: elapsed time, frame hand-over mode and CPU use, to compare runs of equal length
             // 둘째 줄: 경과 시간, 화면 전달 방식, CPU 사용률. 같은 길이의 실행끼리 비교하기 위함
@@ -309,11 +312,13 @@ public class DisplayActivity extends Activity {
         return b;
     }
 
-    /** Next scaling mode: linear → bicubic → bicubic + sharpen / 다음 확대 방식: 선형 → 바이큐빅 → 바이큐빅 + 선명 */
+    /** Next scaling mode: linear → bicubic → bicubic + sharpen → FSR 1 (EASU + RCAS)
+     *  다음 확대 방식: 선형 → 바이큐빅 → 바이큐빅 + 선명 → FSR 1(EASU + RCAS) */
     private void cycleScale() {
         int m = (view.getScaleMode() + 1) % SCALE_NAMES.length;
         view.setScaleMode(m);
         scaleButton.setText("확대: " + SCALE_NAMES[m]);
+        log("확대 방식: " + SCALE_NAMES[m]);
     }
 
     /** Immersive full screen (system bars hidden) / 몰입형 전체 화면(시스템 막대 숨김) */
@@ -419,13 +424,19 @@ public class DisplayActivity extends Activity {
                 if (CRASH_LOG) c.env.put("PROOT_CRASH_LOG", "1");
                 // Fewer Steam web helper processes (option on the main screen, on by default)
                 // Steam 웹 도우미 프로세스 줄이기(메인 화면 옵션, 기본 켬)
-                if (MainActivity.cefSlim(this)) {
-                    c.env.put("EZS_CEF_FLAGS", MainActivity.CEF_SLIM_FLAGS);
-                    c.env.put("EZS_CEF_DISABLE", MainActivity.CEF_SLIM_DISABLE);
+                String cefFlags = MainActivity.cefSlim(this) ? MainActivity.CEF_SLIM_FLAGS : "";
+                // Steam UI GPU test (admin option, off by default) / Steam 화면 GPU 시험(관리자 옵션, 기본 끔)
+                int gpuMode = MainActivity.steamGpu(this);
+                if (gpuMode > 0) {
+                    c.env.put("EZS_STEAM_GPU", "1");
+                    cefFlags = (cefFlags + " " + MainActivity.STEAM_GPU_MODES[gpuMode][1]).trim();
+                    log("Steam 화면 GPU(시험) " + MainActivity.STEAM_GPU_MODES[gpuMode][0] + ": " + cefFlags);
                 }
-                if (MainActivity.cefSingle(this)) {
-                    c.env.put("EZS_STEAM_EXTRA", MainActivity.CEF_SINGLE_ARG);
-                    log("CEF 단일 프로세스(시험) 켬: " + MainActivity.CEF_SINGLE_ARG);
+                if (!cefFlags.isEmpty()) c.env.put("EZS_CEF_FLAGS", cefFlags);
+                // Client file I/O statistics (admin option) / 클라이언트 파일 입출력 통계(관리자 옵션)
+                if (MainActivity.ioStat(this)) {
+                    c.env.put("EZS_IOSTAT", "1");
+                    log("IO 통계 켬: 1분마다 ezs-io: 줄");
                 }
                 // Address order back to glibc's default (an earlier build's IPv4-first gai.conf)
                 // 주소 순서를 glibc 기본값으로 되돌림(이전 빌드가 쓴 IPv4 우선 gai.conf)
@@ -1689,11 +1700,20 @@ public class DisplayActivity extends Activity {
         // 않았음, 2026-10-18). 짧은 Valve 스크립트이며 사용자가 저장하는 제보에만 들어감
         File wh = new File(rootfs, "home/steam/.local/share/Steam/steamrtarm64/steamwebhelper.sh");
         if (wh.isFile()) files.add(wh);
+        // The web helper's own output (the wrapper sends it to Steam/logs/steamwebhelper.log): GPU
+        // and GL start-up lines for the Steam UI GPU test; IP addresses masked like the connection log
+        // 웹 도우미 자체 출력(감쌈 스크립트가 Steam/logs/steamwebhelper.log로 보냄): Steam 화면 GPU 시험용
+        // GPU·GL 시작 줄. IP 주소는 접속 로그처럼 가림
+        java.util.Map<File, String> alias = new java.util.HashMap<>();
+        File whLog = new File(rootfs, "home/steam/.local/share/Steam/logs/steamwebhelper.log");
+        if (whLog.isFile()) {
+            files.add(whLog);
+            alias.put(whLog, "steamwebhelper-output.log");
+        }
         // Unity games' own logs (Player.log in each prefix, newest 3): a game that stays on a black
         // screen leaves its reason there, not in the Proton log (2026-10-18)
         // Unity 게임 자체 로그(prefix마다 있는 Player.log, 최근 3개): 검은 화면에서 멈춘 게임은 이유를
         // Proton 로그가 아니라 여기에 남김(2026-10-18)
-        java.util.Map<File, String> alias = new java.util.HashMap<>();
         java.util.List<File> unity = new java.util.ArrayList<>();
         File[] pfxs = new File(rootfs, "home/steam/.local/share/Steam/steamapps/compatdata").listFiles(File::isDirectory);
         for (File pfx : pfxs == null ? new File[0] : pfxs) {
@@ -1730,7 +1750,7 @@ public class DisplayActivity extends Activity {
             for (File f : files) {
                 zip.putNextEntry(new java.util.zip.ZipEntry("logs/" + alias.getOrDefault(f, f.getName())));
                 boolean image = f.getName().endsWith(".png");
-                boolean maskIp = f.getName().equals("connection_log.txt");
+                boolean maskIp = f.getName().equals("connection_log.txt") || f.equals(whLog);
                 try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(f, "r")) {
                     long len = in.length();
                     if (len > LOG_SAVE_MAX) {
