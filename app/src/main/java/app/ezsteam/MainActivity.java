@@ -563,14 +563,71 @@ public class MainActivity extends Activity {
         busy = true;
         log("== " + name);
         new Thread(() -> {
+            Thread beat = startHeartbeat(name);
             try {
                 t.run();
             } catch (Throwable e) {
                 log("ERROR " + e);
             } finally {
                 busy = false;
+                beat.interrupt();
             }
         }, "ezs-" + name).start();
+    }
+
+    /**
+     * Every 30 s while a task runs: one line with elapsed time, data received by this app (the
+     * rootfs programs included) and the busiest child process over the interval, so a long step
+     * (downloads, apt, Steam's first update) can be told from a stuck one.
+     * 작업이 도는 동안 30초마다 한 줄: 경과 시간, 이 앱이 받은 데이터(rootfs 프로그램 포함), 그 사이 가장
+     * 바쁜 자식 프로세스. 오래 걸리는 단계(받기, apt, Steam 첫 갱신)와 멈춘 단계를 가리기 위함
+     * Why: during a clean install the screen showed only CPU and PRoot numbers moving, with no way
+     * to tell progress from a hang (user, 2026-10-18).
+     * 이유: 새 설치 중 화면에 CPU와 PRoot 숫자만 오르내려 진행 중인지 멈췄는지 알 수 없었음(사용자,
+     * 2026-10-18)
+     */
+    private Thread startHeartbeat(String name) {
+        Thread th = new Thread(() -> {
+            long t0 = android.os.SystemClock.elapsedRealtime();
+            int uid = android.os.Process.myUid();
+            long rx0 = android.net.TrafficStats.getUidRxBytes(uid), rxLast = rx0;
+            java.util.Map<Integer, Long> lastTicks = new java.util.HashMap<>();
+            try {
+                while (true) {
+                    Thread.sleep(30000);
+                    long rx = android.net.TrafficStats.getUidRxBytes(uid);
+                    // Busiest child over the last 30 s (ticks are 1/100 s) / 지난 30초 동안 가장 바쁜 자식(틱은 1/100초)
+                    String top = "-";
+                    long best = 0;
+                    java.util.Map<Integer, Long> ticks = new java.util.HashMap<>();
+                    java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps =
+                            app.ezsteam.runtime.ChildProcessCounter.descendants(android.os.Process.myPid());
+                    for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
+                        ticks.put(pr.pid, pr.cpuTicks);
+                        Long before = lastTicks.get(pr.pid);
+                        long d = pr.cpuTicks - (before == null ? 0 : before);
+                        String comm = pr.name.contains(" | ") ? pr.name.substring(0, pr.name.indexOf(" | ")) : pr.name;
+                        if (d > best && !comm.contains("libproot")) {
+                            best = d;
+                            top = comm;
+                        }
+                    }
+                    lastTicks = ticks;
+                    long sec = (android.os.SystemClock.elapsedRealtime() - t0) / 1000;
+                    log(String.format(java.util.Locale.ROOT, "… %s 진행 중 %d분 %02d초: 받은 양 %s, 최근 30초 %s, 자식 %d개, 가장 바쁜 프로세스 %s",
+                            name, sec / 60, sec % 60,
+                            rx < 0 ? "-" : String.format(java.util.Locale.ROOT, "%.1f MB", (rx - rx0) / 1e6),
+                            rx < 0 ? "-" : String.format(java.util.Locale.ROOT, "%.1f Mbps", (rx - rxLast) * 8 / 30e6),
+                            ps.size(), best > 0 ? top + String.format(java.util.Locale.ROOT, " (%.0f%%)", best / 30.0) : "없음 (CPU 사용 없음)"));
+                    rxLast = rx;
+                }
+            } catch (InterruptedException ignored) {
+                // task finished / 작업 끝남
+            }
+        }, "ezs-heartbeat");
+        th.setDaemon(true);
+        th.start();
+        return th;
     }
 
     /** Thread-safe log append / 스레드 안전 로그 추가 */

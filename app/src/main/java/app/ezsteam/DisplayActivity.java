@@ -454,6 +454,7 @@ public class DisplayActivity extends Activity {
                 while ((line = r.readLine()) != null) {
                     log(line);
                     if (line.startsWith("READY ")) onReady(c, line);
+                    if (line.startsWith("NEED deps")) installDeps(c);
                 }
             }
             log("exit=" + p.waitFor() + " (자식 프로세스 최대 " + procMax + "개, 여유 메모리 "
@@ -462,6 +463,38 @@ public class DisplayActivity extends Activity {
             log("ERROR " + e);
         }
         if (fb == null) runOnUiThread(() -> logScroll.setVisibility(View.VISIBLE));
+    }
+
+    /**
+     * Install the libraries steam-run.sh asked for ("NEED deps"): steam-deps.sh install in a
+     * second PRoot as fake root (apt needs root; the Steam session runs as user steam), then
+     * remove the request file so steam-run.sh goes on. Output goes to the app log as "DEPS".
+     * steam-run.sh가 요청한 라이브러리 설치("NEED deps"): 두 번째 PRoot에서 가짜 root로 steam-deps.sh
+     * install을 돌림(apt는 root가 필요하고 Steam 세션은 사용자 steam으로 돎). 그다음 요청 파일을 지워
+     * steam-run.sh가 계속하게 함. 출력은 앱 로그에 "DEPS"로 남김
+     */
+    private void installDeps(GlibcLauncher.Config session) {
+        new Thread(() -> {
+            File req = new File(session.rootfs, "tmp/ezs-deps-request");
+            try {
+                GlibcLauncher.Config c = new GlibcLauncher.Config();
+                c.rootfs = session.rootfs;
+                c.nativeLibDir = session.nativeLibDir;
+                c.dataDir = session.dataDir;
+                log("DEPS 필요한 라이브러리 설치 시작 (apt, 네트워크 사용)");
+                Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/steam-deps.sh",
+                        Arrays.asList("install"), null, null);
+                try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+                    String l;
+                    while ((l = r.readLine()) != null) log("DEPS " + l);
+                }
+                log("DEPS 끝 exit=" + p.waitFor());
+            } catch (IOException | InterruptedException | RuntimeException e) {
+                log("DEPS 실패: " + e);
+            } finally {
+                if (req.exists() && !req.delete()) log("DEPS 요청 파일을 지우지 못함: " + req);
+            }
+        }, "ezs-deps").start();
     }
 
     /** "READY w h /tmp/ezs-fb/Xvfb_screen0": map the screen and connect input

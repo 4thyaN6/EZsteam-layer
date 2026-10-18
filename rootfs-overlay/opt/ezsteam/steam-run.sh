@@ -183,7 +183,27 @@ while :; do
     n=$((n + 1))
     # Missing libraries of the (possibly just updated) client, report only
     # (방금 갱신됐을 수 있는) 클라이언트의 없는 라이브러리, 보고만 함
-    sh /opt/ezsteam/steam-deps.sh check
+    # Missing libraries apt can provide: steam-deps.sh writes a request file and prints
+    # "NEED deps"; the app installs them as root (Steam runs as a user and cannot) and removes
+    # the file. Wait for that, at most 10 minutes. After the client's first self update a fresh
+    # install needed libva.so.2, libvdpau.so.1, libavcodec.so.61, libavutil.so.59 (2026-10-18)
+    # apt가 줄 수 있는 없는 라이브러리: steam-deps.sh가 요청 파일을 쓰고 "NEED deps"를 출력함. 앱이
+    # root로 설치하고(Steam은 일반 사용자라 못 함) 파일을 지움. 그것을 최대 10분 기다림. 새 설치에서는
+    # 클라이언트 첫 자체 갱신 뒤 libva.so.2, libvdpau.so.1, libavcodec.so.61, libavutil.so.59가 필요했음
+    # (2026-10-18)
+    REQ=/tmp/ezs-deps-request
+    rm -f "$REQ"
+    EZS_DEPS_REQUEST=$REQ sh /opt/ezsteam/steam-deps.sh check
+    if [ -f "$REQ" ]; then
+        w=0
+        while [ -f "$REQ" ] && [ $w -lt 300 ]; do sleep 2; w=$((w + 1)); done
+        if [ -f "$REQ" ]; then
+            rm -f "$REQ"
+            echo "WARN deps : 앱의 라이브러리 설치를 기다리다 시간 초과 (10분)"
+        else
+            sh /opt/ezsteam/steam-deps.sh check
+        fi
+    fi
     # File check of the client: skipped (-noverifyfiles, faster start) only while the client UI
     # library loads. A fresh install from the current bootstrap stopped at once with "dlmopen
     # steamui.so failed: libavcodec.so.62" right after "Verification skipped" (tester device): the
@@ -203,11 +223,24 @@ while :; do
     if [ -f "$UI" ] && [ "$ui_id" != "$(cat "$UI_OK" 2>/dev/null)" ]; then
         libdirs=$(find "$STEAM_DIR/steamrtarm64" "$STEAM_DIR/linuxarm64" -maxdepth 4 -name '*.so*' -type f 2>/dev/null \
             | xargs -r -n1 dirname | sort -u | paste -sd: -)
-        ui_missing=$(LD_LIBRARY_PATH="$libdirs" ldd "$UI" 2>/dev/null | awk '/not found/ {print $1}' | tr '\n' ' ')
-        if [ -n "$ui_missing" ]; then
+        ui_missing=$(LD_LIBRARY_PATH="$libdirs" ldd "$UI" 2>/dev/null | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ')
+        # The file check is only for the client's own libraries (FFmpeg, CEF), and at most once
+        # per start of this script: with system libraries missing (libva.so.2) it ran at every
+        # restart, and each check "repaired" steamrt64 (a link to steamrtarm64, sizes differ from
+        # the manifest) and restarted the client again, 6 times in a row (2026-10-18)
+        # 파일 검사는 클라이언트 자체 라이브러리(FFmpeg, CEF)가 없을 때만, 이 스크립트 시작당 한 번만 함:
+        # 시스템 라이브러리(libva.so.2)가 없을 때 재시작마다 검사가 돌았고, 검사할 때마다 steamrt64
+        # (steamrtarm64로의 링크, 매니페스트와 크기가 다름)를 "고치고" 클라이언트를 다시 시작해 6회 연속
+        # 반복했음(2026-10-18)
+        own_missing=$(echo "$ui_missing" | tr ' ' '\n' | grep -E '^(libcef|libav|libsw)' | tr '\n' ' ')
+        if [ -n "$own_missing" ] && [ -z "${VERIFIED:-}" ]; then
             VERIFY=
+            VERIFIED=1
             rm -f "$UI_OK"
-            echo "INFO steam : steamui.so에 없는 라이브러리($ui_missing) → 파일 검사·받기를 켜고 시작"
+            echo "INFO steam : steamui.so에 없는 클라이언트 라이브러리($own_missing) → 파일 검사·받기를 켜고 시작"
+        elif [ -n "$ui_missing" ]; then
+            rm -f "$UI_OK"
+            echo "WARN steam : steamui.so에 없는 라이브러리($ui_missing), 파일 검사 없이 시작"
         else
             mkdir -p "$HOME/.steam" && echo "$ui_id" > "$UI_OK"
         fi

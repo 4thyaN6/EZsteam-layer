@@ -38,6 +38,22 @@ scan() {
 }
 
 missing=$(scan)
+
+# First Debian package apt knows for a soname, empty when none (works as any user)
+# soname에 대해 apt가 아는 첫 데비안 패키지, 없으면 빈 값(아무 사용자로나 동작)
+pkg_for() {
+    echo "$1" | python3 -c '
+import re, sys
+so = sys.stdin.read().strip()
+m = re.match(r"(lib.+?)\.so\.(\d+)", so)
+if m:
+    base, ver = m.group(1).lower(), m.group(2)
+    sep = "-" if base[-1].isdigit() else ""
+    print(" ".join(dict.fromkeys([base + sep + ver, base + sep + ver + "t64", base + "-" + ver, base + "-" + ver + "t64"])))
+' | tr ' ' '\n' | while IFS= read -r c; do
+        [ -n "$c" ] && apt-cache show "$c" >/dev/null 2>&1 && { echo "$c"; break; }
+    done
+}
 # Libraries the client ships itself somewhere deeper in its folder (e.g. libcef.so and its video
 # libraries) are not missing: the client loads them from there. A tester got FAIL lines for
 # libcef.so / libav*.so.* that apt cannot provide
@@ -56,7 +72,27 @@ if [ -z "$missing" ]; then
 fi
 echo "INFO deps : 없는 라이브러리 $(echo "$missing" | wc -l)개: $(echo "$missing" | tr '\n' ' ')"
 if [ "$MODE" != install ]; then
-    echo "WARN deps : [Steam 설치]를 다시 누르면 위 라이브러리를 찾아 설치함"
+    # Libraries apt can provide (a package name it knows): the app installs them as root and
+    # removes the request file (steam-run.sh waits for it). The client's own libraries (FFmpeg 8,
+    # CEF) have no Debian package and are left to the client's file check.
+    # apt가 줄 수 있는 라이브러리(아는 패키지 이름이 있음): 앱이 root로 설치하고 요청 파일을 지움
+    # (steam-run.sh가 기다림). 클라이언트 자체 라이브러리(FFmpeg 8, CEF)는 데비안 패키지가 없어
+    # 클라이언트 파일 검사에 맡김
+    if ls /var/lib/apt/lists/*Packages >/dev/null 2>&1; then
+        req=$(echo "$missing" | while IFS= read -r so; do
+            [ -n "$so" ] && [ -n "$(pkg_for "$so")" ] && echo "$so"
+        done | tr '\n' ' ')
+    else
+        # No package lists (removed by a cleanup): let install mode refresh them and decide
+        # 패키지 목록 없음(정리로 지워짐): install 모드가 목록을 새로 받고 판단하게 함
+        req=$(echo "$missing" | tr '\n' ' ')
+    fi
+    if [ -n "$req" ] && [ -n "${EZS_DEPS_REQUEST:-}" ]; then
+        : > "$EZS_DEPS_REQUEST"
+        echo "NEED deps : $req"
+    elif [ -n "$req" ]; then
+        echo "WARN deps : [Steam 설치]를 다시 누르면 위 라이브러리를 찾아 설치함"
+    fi
     exit 0
 fi
 
@@ -79,19 +115,18 @@ for so in sys.stdin.read().split():
     for c in $cands; do
         if apt-cache show "$c" >/dev/null 2>&1; then pkg=$c; break; fi
     done
-    # CEF and its video libraries (FFmpeg 8 names, not in Debian trixie) come with the client's
-    # own packages, not from apt (tester device: libcef.so, libavcodec.so.62 ... missing right after
-    # the bootstrap); the client's file check fetches them (steam-run.sh)
-    # CEF와 그 영상 라이브러리(FFmpeg 8 이름, Debian trixie에 없음)는 apt가 아니라 클라이언트 자체 패키지로
-    # 옴(테스터 기기: 부트스트랩 직후 libcef.so, libavcodec.so.62 등이 없음). 클라이언트 파일 검사가 받아옴
-    # (steam-run.sh)
-    case "$so" in
-        libcef.so*|libavcodec.so*|libavformat.so*|libavutil.so*|libavfilter.so*|libswscale.so*|libswresample.so*)
-            echo "INFO deps : $so 는 Steam 클라이언트가 직접 받음 (첫 실행 때 파일 검사)"
-            continue
-            ;;
-    esac
+    # No Debian package: CEF and FFmpeg 8 names come with the client's own packages (its file
+    # check fetches them, steam-run.sh). Older FFmpeg names (e.g. libavcodec.so.61) do exist in
+    # Debian and are installed like any other library.
+    # 데비안 패키지 없음: CEF와 FFmpeg 8 이름은 클라이언트 자체 패키지로 옴(파일 검사가 받아옴,
+    # steam-run.sh). 이전 FFmpeg 이름(예: libavcodec.so.61)은 데비안에 있어 다른 라이브러리처럼 설치함
     if [ -z "$pkg" ]; then
+        case "$so" in
+            libcef.so*|libav*.so*|libsw*.so*)
+                echo "INFO deps : $so 는 Steam 클라이언트가 직접 받음 (첫 실행 때 파일 검사)"
+                continue
+                ;;
+        esac
         echo "FAIL deps : $so 패키지 이름을 찾지 못함 (후보: ${cands:-없음})"
     elif $APT install -y --no-install-recommends "$pkg" >/dev/null 2>&1; then
         echo "OK   deps : $so <- $pkg"
