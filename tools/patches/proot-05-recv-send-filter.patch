@@ -1,0 +1,240 @@
+diff --git a/src/syscall/exit.c b/src/syscall/exit.c
+index 3c9e718..bd26fd5 100644
+--- a/src/syscall/exit.c
++++ b/src/syscall/exit.c
+@@ -49,6 +49,74 @@
+ #include "extension/extension.h"
+ #include "arch.h"
+ 
++#include <stdlib.h>       /* getenv(3), */
++#include <fcntl.h>        /* O_CLOEXEC, */
++#include <sys/stat.h>     /* lstat(2), */
++#include <sys/socket.h>   /* SOCK_CLOEXEC, */
++#include <sys/resource.h> /* prlimit(2), */
++
++/**
++ * Free descriptor number in the netlink range of @tracee, or -1 (also when its open file limit
++ * is too low, or when PROOT_FULL_RECV keeps every recvmsg traced so nothing needs moving).
++ * Read from /proc/<pid>/fd; the range is far above what programs normally open.
++ * @tracee의 netlink 구간에서 빈 디스크립터 번호, 없으면 -1(열린 파일 한도가 너무 낮거나 PROOT_FULL_RECV로
++ * 모든 recvmsg를 추적해 옮길 필요가 없을 때도 -1). /proc/<pid>/fd에서 읽음. 이 구간은 프로그램이 보통
++ * 여는 번호보다 훨씬 위임
++ */
++static int free_netlink_fd(const Tracee *tracee)
++{
++	struct rlimit limit;
++	struct stat st;
++	char path[64];
++	int fd;
++
++	if (getenv("PROOT_FULL_RECV") != NULL)
++		return -1;
++	if (prlimit(tracee->pid, RLIMIT_NOFILE, NULL, &limit) == 0
++	    && limit.rlim_cur != RLIM_INFINITY
++	    && limit.rlim_cur < (rlim_t) (NETLINK_FD_BASE + NETLINK_FD_COUNT))
++		return -1;
++	for (fd = NETLINK_FD_BASE; fd < NETLINK_FD_BASE + NETLINK_FD_COUNT; fd++) {
++		snprintf(path, sizeof(path), "/proc/%d/fd/%d", tracee->pid, fd);
++		if (lstat(path, &st) < 0 && errno == ENOENT)
++			return fd;
++	}
++	return -1;
++}
++
++/**
++ * Move a just created netlink socket of @tracee to the netlink range: dup3 to the free number
++ * (keeping close-on-exec), close the old one, and report the new number as socket()'s result.
++ * Returns the descriptor to record (the old one when it could not be moved; then its
++ * recvmsg/recvfrom are no longer seen, which is reported on stderr).
++ * 방금 만든 @tracee의 netlink 소켓을 netlink 구간으로 옮김: 빈 번호로 dup3(close-on-exec 유지), 옛 번호를
++ * 닫고, 새 번호를 socket() 결과로 돌려줌. 기록할 디스크립터를 돌려줌(옮기지 못하면 옛 번호. 그때는 그
++ * 소켓의 recvmsg/recvfrom을 볼 수 없으므로 stderr에 알림)
++ */
++static int move_netlink_fd(Tracee *tracee, int fd)
++{
++	int new_fd;
++	int flags;
++
++	if (fd >= NETLINK_FD_BASE && fd < NETLINK_FD_BASE + NETLINK_FD_COUNT)
++		return fd;
++	if (getenv("PROOT_FULL_RECV") != NULL)
++		return fd;
++	new_fd = free_netlink_fd(tracee);
++	if (new_fd < 0) {
++		fprintf(stderr, "proot: netlink fd %d not moved (no free number in %d..%d); "
++			"set PROOT_FULL_RECV if network lookups fail\n",
++			fd, NETLINK_FD_BASE, NETLINK_FD_BASE + NETLINK_FD_COUNT - 1);
++		return fd;
++	}
++	flags = (peek_reg(tracee, ORIGINAL, SYSARG_2) & SOCK_CLOEXEC) != 0 ? O_CLOEXEC : 0;
++	if (register_chained_syscall(tracee, PR_dup3, fd, new_fd, flags, 0, 0, 0) < 0
++	    || register_chained_syscall(tracee, PR_close, fd, 0, 0, 0, 0, 0) < 0)
++		return fd;
++	force_chain_final_result(tracee, (word_t) new_fd);
++	return new_fd;
++}
++
+ /**
+  * Translate the output arguments of the current @tracee's syscall in
+  * the @tracee->pid process area. This function sets the result of
+@@ -782,6 +850,7 @@ void translate_syscall_exit(Tracee *tracee)
+ 			int fd = (int) peek_reg(tracee, CURRENT, SYSARG_RESULT);
+ 			if (fd >= 0) {
+ 				int i;
++				fd = move_netlink_fd(tracee, fd);
+ 				if (tracee->fake_netlink_fds_count < MAX_FAKE_NETLINK_FDS) {
+ 					/* Avoid duplicates.  */
+ 					bool present = false;
+@@ -809,6 +878,7 @@ void translate_syscall_exit(Tracee *tracee)
+ 			int fd = (int) peek_reg(tracee, CURRENT, SYSARG_RESULT);
+ 			if (fd >= 0) {
+ 				int i;
++				fd = move_netlink_fd(tracee, fd);
+ 				if (tracee->netlink_route_fds_count < MAX_NETLINK_ROUTE_FDS) {
+ 					bool present = false;
+ 					for (i = 0; i < tracee->netlink_route_fds_count; i++) {
+diff --git a/src/syscall/seccomp.c b/src/syscall/seccomp.c
+index a2cd1c0..2d736c9 100644
+--- a/src/syscall/seccomp.c
++++ b/src/syscall/seccomp.c
+@@ -164,10 +164,101 @@ static bool ioctl_by_request(Sysnum sysnum)
+ 	return sysnum == PR_ioctl && getenv("PROOT_FULL_IOCTL") == NULL;
+ }
+ 
++/**
++ * recvmsg/recvfrom: PRoot only rewrites them on the netlink sockets it watches, which exit.c
++ * moves to NETLINK_FD_BASE..+NETLINK_FD_COUNT; on any other descriptor they run without a stop.
++ * Only when no extension needs their exit stage (flags 0). PROOT_FULL_RECV set: trace all.
++ * Why: idle Steam made about 1000 such calls a second on its own sockets (web helper, X
++ * server, client), all of them stopping PRoot for nothing (PROOT_STAT, 2026-10-19).
++ * recvmsg/recvfrom: PRoot는 자기가 지켜보는 netlink 소켓에서만 고쳐 씀. exit.c가 그 소켓을
++ * NETLINK_FD_BASE..+NETLINK_FD_COUNT로 옮김. 다른 디스크립터에서는 멈춤 없이 실행됨. 확장이 종료 단계를
++ * 필요로 하지 않을 때만(flags 0). PROOT_FULL_RECV가 있으면 전부 추적함.
++ * 이유: 대기 중 Steam이 자기 소켓(웹 도우미, X 서버, 클라이언트)에서 초당 약 1000번 이 호출을 했고
++ * 모두 쓸데없이 PRoot를 멈췄음(PROOT_STAT, 2026-10-19)
++ */
++static bool recv_by_fd(Sysnum sysnum, int flags)
++{
++	return (sysnum == PR_recvmsg || sysnum == PR_recvfrom) && flags == 0
++		&& getenv("PROOT_FULL_RECV") == NULL;
++}
++
++#define LENGTH_TRACE_RECV 6
++
++/* Trace only when the first argument (descriptor, low 32 bits) is in the netlink range
++ * 첫 인자(디스크립터, 하위 32비트)가 netlink 구간일 때만 추적함 */
++static int add_trace_recv(struct sock_fprog *program, word_t syscall, int flag)
++{
++	struct sock_filter statements[LENGTH_TRACE_RECV] = {
++		/* Not this syscall: skip the block / 이 호출이 아니면 덩어리를 건너뜀 */
++		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, syscall, 0, LENGTH_TRACE_RECV - 1),
++		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, offsetof(struct seccomp_data, args[0])),
++		/* fd < BASE: allow / fd < BASE면 허용 */
++		BPF_JUMP(BPF_JMP + BPF_JGE + BPF_K, NETLINK_FD_BASE, 0, 1),
++		/* fd >= BASE + COUNT: allow, else trace / fd >= BASE + COUNT면 허용, 아니면 추적 */
++		BPF_JUMP(BPF_JMP + BPF_JGE + BPF_K, NETLINK_FD_BASE + NETLINK_FD_COUNT, 0, 1),
++		BPF_STMT(BPF_RET + BPF_K, SECCOMP_RET_ALLOW),
++		BPF_STMT(BPF_RET + BPF_K, SECCOMP_RET_TRACE + flag),
++	};
++
++	if (syscall > UINT32_MAX)
++		return -ERANGE;
++
++	return add_statements(program, LENGTH_TRACE_RECV, statements);
++}
++
++/**
++ * sendto: PRoot needs it on the netlink range (fake replies) and whenever a destination address
++ * is given (Unix socket path translation); a plain send on a connected socket (address NULL,
++ * descriptor outside the range) runs without a stop. Same conditions as recv_by_fd().
++ * sendto: PRoot는 netlink 구간(가짜 응답)과 목적지 주소가 있을 때(유닉스 소켓 경로 변환)만 필요함.
++ * 연결된 소켓에 그냥 보내는 것(주소 NULL, 구간 밖 디스크립터)은 멈춤 없이 실행됨. 조건은 recv_by_fd()와 같음
++ */
++static bool sendto_by_fd(Sysnum sysnum, int flags)
++{
++	return sysnum == PR_sendto && flags == 0 && getenv("PROOT_FULL_RECV") == NULL;
++}
++
++#define LENGTH_TRACE_SENDTO 10
++#if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
++#error "sendto filter assumes little-endian argument words"
++#endif
++
++static int add_trace_sendto(struct sock_fprog *program, word_t syscall, int flag)
++{
++	const size_t addr = offsetof(struct seccomp_data, args[4]);
++	struct sock_filter statements[LENGTH_TRACE_SENDTO] = {
++		/* 0: not sendto, skip / sendto가 아니면 건너뜀 */
++		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, syscall, 0, LENGTH_TRACE_SENDTO - 1),
++		/* 1-3: descriptor in the netlink range -> trace / 디스크립터가 netlink 구간이면 추적 */
++		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, offsetof(struct seccomp_data, args[0])),
++		BPF_JUMP(BPF_JMP + BPF_JGE + BPF_K, NETLINK_FD_BASE, 0, 1),
++		BPF_JUMP(BPF_JMP + BPF_JGE + BPF_K, NETLINK_FD_BASE + NETLINK_FD_COUNT, 0, 5),
++		/* 4-7: destination address not NULL (both words) -> trace / 목적지 주소가 NULL이 아니면(두 워드) 추적 */
++		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, addr),
++		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, 0, 0, 3),
++		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, addr + 4),
++		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, 0, 0, 1),
++		/* 8: allow, 9: trace / 8: 허용, 9: 추적 */
++		BPF_STMT(BPF_RET + BPF_K, SECCOMP_RET_ALLOW),
++		BPF_STMT(BPF_RET + BPF_K, SECCOMP_RET_TRACE + flag),
++	};
++
++	if (syscall > UINT32_MAX)
++		return -ERANGE;
++
++	return add_statements(program, LENGTH_TRACE_SENDTO, statements);
++}
++
+ /* Statements one traced syscall takes / 추적하는 시스템 호출 하나가 차지하는 문장 수 */
+-static size_t trace_length(Sysnum sysnum)
++static size_t trace_length(Sysnum sysnum, int flags)
+ {
+-	return ioctl_by_request(sysnum) ? LENGTH_TRACE_IOCTL : 2;
++	if (ioctl_by_request(sysnum))
++		return LENGTH_TRACE_IOCTL;
++	if (recv_by_fd(sysnum, flags))
++		return LENGTH_TRACE_RECV;
++	if (sendto_by_fd(sysnum, flags))
++		return LENGTH_TRACE_SENDTO;
++	return 2;
+ }
+ 
+ /**
+@@ -348,7 +439,7 @@ static int set_seccomp_filters(const FilteredSysnum *sysnums)
+ 			for (k = 0; sysnums[k].value != PR_void; k++) {
+ 				syscall = detranslate_sysnum(seccomp_archs[i].abis[j], sysnums[k].value);
+ 				if (syscall != SYSCALL_AVOIDER)
+-					nb_traced_syscalls += trace_length(sysnums[k].value);
++					nb_traced_syscalls += trace_length(sysnums[k].value, sysnums[k].flags);
+ 			}
+ 		}
+ 
+@@ -367,6 +458,10 @@ static int set_seccomp_filters(const FilteredSysnum *sysnums)
+ 				/* Filter: trace if handled syscall (ioctl: only some requests) */
+ 				if (ioctl_by_request(sysnums[k].value))
+ 					status = add_trace_ioctl(&program, syscall, sysnums[k].flags);
++				else if (recv_by_fd(sysnums[k].value, sysnums[k].flags))
++					status = add_trace_recv(&program, syscall, sysnums[k].flags);
++				else if (sendto_by_fd(sysnums[k].value, sysnums[k].flags))
++					status = add_trace_sendto(&program, syscall, sysnums[k].flags);
+ 				else
+ 					status = add_trace_syscall(&program, syscall, sysnums[k].flags);
+ 				if (status < 0)
+diff --git a/src/tracee/tracee.h b/src/tracee/tracee.h
+index eaf8625..8665714 100644
+--- a/src/tracee/tracee.h
++++ b/src/tracee/tracee.h
+@@ -135,6 +135,12 @@ typedef struct tracee {
+ 	 * one datagram at a time ("reply_off" is how far the tracee has
+ 	 * read), since that is how the kernel delivers a dump.  */
+ #define MAX_FAKE_NETLINK_FDS 8
++/* Netlink sockets PRoot watches are moved to these descriptor numbers so the seccomp filter
++ * can send recvmsg/recvfrom to PRoot only for them (syscall/seccomp.c, syscall/exit.c).
++ * PRoot가 지켜보는 netlink 소켓은 이 디스크립터 번호로 옮겨 seccomp 필터가 그것들의 recvmsg/recvfrom만
++ * PRoot로 보내게 함(syscall/seccomp.c, syscall/exit.c) */
++#define NETLINK_FD_BASE 900
++#define NETLINK_FD_COUNT 64
+ #define MAX_FAKE_NETLINK_REPLY 8192
+ 	struct fake_netlink_socket {
+ 		int fd;
