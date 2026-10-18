@@ -116,6 +116,7 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - 최소 창 관리자 역할(XTestClient): 관리 창이 매핑되면 WM_STATE=Normal, 언매핑되면 Withdrawn을 둠(Wine은 이 속성을 받기 전까지 그 창의 포커스를 무시함). WM_TAKE_FOCUS·SetInputFocus에는 루트 `_EZS_TIME` 속성 변경으로 얻은 실제 서버 시각을 씀(Wine은 CurrentTime=0인 WM_TAKE_FOCUS를 비전경 창에 적용하지 않음)
 - 실제 마우스: 이동(버튼 없이도)·휠(버튼 4~7)·버튼(1 왼쪽, 2 가운데, 3 오른쪽, 8/9 뒤로/앞으로)을 X로 보냄. 화면 위 안드로이드 화살표는 숨김(X 커서만 보임). [마우스 잠금]: 포인터 캡처로 상대 이동(시점 회전 게임용), 다시 터치하면 해제
 - 화면 배치: 위 = 버튼 줄(화면 폭, 넘치면 옆으로 밀림), 가운데 = 로그(화면이 뜨면 숨김, [로그]로 표시), 아래 왼쪽 = 상태 띠([정보]로 숨김). [숨김]은 [≡] 모서리 버튼만 남김
+- 앱 로그 파일: 화면 세션마다 rootfs `~/ezs-logs/app-session.log`에도 씀(16MB까지), 이전 세션은 `app-session-prev.log`로 보관 → 앱을 다시 연 뒤 저장한 제보에도 이전 세션이 들어감
 - 라이브러리 자동 설치: Steam 시작 전 `steam-deps.sh check`가 apt로 줄 수 있는 없는 라이브러리를 찾으면 `/tmp/ezs-deps-request`를 쓰고 `NEED deps` 출력 → 앱이 두 번째 PRoot(가짜 root)에서 `steam-deps.sh install`을 돌리고 파일을 지움(앱 로그 `DEPS`) → steam-run.sh가 최대 10분 기다린 뒤 시작. 새 설치에서 클라이언트 첫 갱신 뒤 libva.so.2, libvdpau.so.1, libavcodec.so.61, libavutil.so.59가 필요했음. 클라이언트 파일 검사(-noverifyfiles 없이 시작)는 steamui.so에 클라이언트 자체 라이브러리(libcef, libav*, libsw*)가 없을 때만, 스크립트 시작당 한 번만 함(시스템 라이브러리만 없을 때 검사가 매번 돌아 steamrt64 링크를 고치고 재시작하기를 6번 반복했음)
 - 시작 시간: steamui.so 라이브러리 검사(ldd)는 steamui.so의 크기·시각이 지난번 통과 때와 같으면 건너뜀(`~/.steam/.ezs-steamui-ok`), libavcodec 위치 찾기는 클라이언트 프로그램 폴더(steamrtarm64, linuxarm64)만 봄(Steam 폴더 전체를 훑느라 시작마다 약 12초). 제보에 `Steam/logs/connection_log.txt`(IP 주소는 `<v4>`/`<v6>`로 가림) 포함
 - LogScrubber는 `[U:1:n]` 계정 id와 `Using JWT n`도 가림

@@ -130,6 +130,7 @@ public class DisplayActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON | WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        openSessionLog();
         // Foreground priority for the whole session, also while the user is in another app
         // 사용자가 다른 앱에 있는 동안에도 세션 전체를 포그라운드 우선순위로 유지함
         SessionService.start(this);
@@ -324,12 +325,55 @@ public class DisplayActivity extends Activity {
     }
 
     /** Append a log line, keeping the last LOG_LINES / 로그 줄 추가, 마지막 LOG_LINES줄만 유지 */
+    /**
+     * The app log of this session as a file too (~/ezs-logs/app-session.log in the rootfs); the
+     * previous session's file is kept as app-session-prev.log. Both go into the report with the
+     * other ~/ezs-logs files. Why: a report saved after reopening the app had only the new
+     * session; what happened when a game was started before was lost (2026-10-18).
+     * 이 세션의 앱 로그를 파일로도 남김(rootfs의 ~/ezs-logs/app-session.log). 이전 세션 파일은
+     * app-session-prev.log로 보관함. 둘 다 다른 ~/ezs-logs 파일과 함께 제보에 들어감. 이유: 앱을 다시 연
+     * 뒤 저장한 제보에는 새 세션만 있어, 그 전에 게임을 시작했을 때의 일이 사라졌음(2026-10-18)
+     */
+    private java.io.Writer sessionLog;
+    private long sessionLogBytes;
+    /** Cap of the session file / 세션 파일 상한 */
+    private static final long SESSION_LOG_MAX = 16L << 20;
+
+    private void openSessionLog() {
+        try {
+            File dir = new File(RootfsInstaller.rootfsDir(this), "home/steam/ezs-logs");
+            if (!dir.isDirectory() && !dir.mkdirs()) return;
+            File cur = new File(dir, "app-session.log");
+            File prev = new File(dir, "app-session-prev.log");
+            if (cur.isFile()) {
+                if (prev.exists() && !prev.delete()) return;
+                if (!cur.renameTo(prev)) return;
+            }
+            sessionLog = new java.io.BufferedWriter(new java.io.OutputStreamWriter(
+                    new java.io.FileOutputStream(cur), StandardCharsets.UTF_8));
+        } catch (IOException | RuntimeException e) {
+            sessionLog = null;
+        }
+    }
+
     private void log(String s) {
         runOnUiThread(() -> {
             logLines.addLast(s);
             // Time stamp only in the saved copy / 시각은 저장용 사본에만 붙임
-            saveLines.addLast(new java.text.SimpleDateFormat("HH:mm:ss", Locale.ROOT)
-                    .format(new java.util.Date()) + " " + s);
+            String stamped = new java.text.SimpleDateFormat("HH:mm:ss", Locale.ROOT)
+                    .format(new java.util.Date()) + " " + s;
+            saveLines.addLast(stamped);
+            java.io.Writer w = sessionLog;
+            if (w != null && sessionLogBytes < SESSION_LOG_MAX) {
+                try {
+                    w.write(stamped);
+                    w.write('\n');
+                    w.flush();
+                    sessionLogBytes += stamped.length() + 1;
+                } catch (IOException e) {
+                    sessionLog = null;
+                }
+            }
             while (saveLines.size() > SAVE_LINES) saveLines.removeFirst();
             if (logLines.size() > LOG_LINES) {
                 while (logLines.size() > LOG_LINES) logLines.removeFirst();
@@ -1743,6 +1787,15 @@ public class DisplayActivity extends Activity {
         }
         new Thread(this::stopProcess, "ezs-display-stop").start();
         SessionService.stop(this);
+        java.io.Writer w = sessionLog;
+        sessionLog = null;
+        if (w != null) {
+            try {
+                w.close();
+            } catch (IOException ignored) {
+                // nothing to do / 할 일 없음
+            }
+        }
         super.onDestroy();
     }
 
