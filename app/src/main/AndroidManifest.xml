@@ -16,6 +16,13 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 
+    <!-- Steam session kept at foreground priority while the user is in another app or the screen
+         is off (SessionService): normal permissions, granted at install -->
+    <!-- 사용자가 다른 앱에 있거나 화면이 꺼져도 Steam 세션을 포그라운드 우선순위로 유지(SessionService):
+         일반 권한이며 설치 시 허용됨 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <!-- extractNativeLibs is irrelevant (no JNI libs); glibc files live in the rootfs -->
     <!-- JNI 라이브러리가 없어 해당 없음. glibc 파일은 rootfs 안에 있음 -->
     <application
@@ -42,5 +49,10 @@
             android:screenOrientation="sensorLandscape"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
             android:windowSoftInputMode="adjustNothing|stateHidden" />
+
+        <!-- Foreground service of a running session / 실행 중인 세션의 포그라운드 서비스 -->
+        <service
+            android:name=".SessionService"
+            android:exported="false" />
     </application>
 </manifest>

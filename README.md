@@ -114,6 +114,7 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - 최소 창 관리자 역할(XTestClient): 관리 창이 매핑되면 WM_STATE=Normal, 언매핑되면 Withdrawn을 둠(Wine은 이 속성을 받기 전까지 그 창의 포커스를 무시함). WM_TAKE_FOCUS·SetInputFocus에는 루트 `_EZS_TIME` 속성 변경으로 얻은 실제 서버 시각을 씀(Wine은 CurrentTime=0인 WM_TAKE_FOCUS를 비전경 창에 적용하지 않음)
 - 실제 마우스: 이동(버튼 없이도)·휠(버튼 4~7)·버튼(1 왼쪽, 2 가운데, 3 오른쪽, 8/9 뒤로/앞으로)을 X로 보냄. 화면 위 안드로이드 화살표는 숨김(X 커서만 보임). [마우스 잠금]: 포인터 캡처로 상대 이동(시점 회전 게임용), 다시 터치하면 해제
 - 화면 배치: 위 = 버튼 줄(화면 폭, 넘치면 옆으로 밀림), 가운데 = 로그(화면이 뜨면 숨김, [로그]로 표시), 아래 왼쪽 = 상태 띠([정보]로 숨김). [숨김]은 [≡] 모서리 버튼만 남김
+- 세션 유지(`SessionService`): 화면이 열려 있는 동안 포그라운드 서비스(알림 "Steam 실행 중", 누르면 앱으로)와 CPU 깨우기 잠금·Wi-Fi 잠금을 잡아 다른 앱으로 가거나 화면이 꺼져도 다운로드·게임이 백그라운드 제한을 받지 않게 함(포그라운드 서비스가 없을 때 다운로드가 134~147 Mbps에서 3 Mbps로 떨어진 기록 있음, 원인 미확정). 권한은 FOREGROUND_SERVICE, WAKE_LOCK(일반 권한). 앱 로그: `APP 화면 떠남/돌아옴`, 1분마다 `PERF`(CPU, 이 앱 수신 Mbps, 화면 앞/뒤, CPU 최고 클럭, 배터리 온도, 여유 메모리). 제보 device.txt에 `free:`(앱 저장소, 공용 저장소 여유 공간)
 - 화면 위쪽 막대 `자식 N(최대 M)`: 앱 자식 프로세스 수(안드로이드 한도: 모든 앱 합계 32), 28개 이상이면 로그에 `PROC` 목록. `여유`: 기기 여유 메모리
 - [환경 시험]의 `pthread`, `sys-*` 항목이 FAIL `SIGSYS (seccomp)`이면 PRoot가 해당 호출을 처리하지 못한 것 → rootfs glibc 패치(termux-pacman 방식) 검토
 - (선택) 앱 없이: `tools/device-smoke.sh` 머리 주석 참고

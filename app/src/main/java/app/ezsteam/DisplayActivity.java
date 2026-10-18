@@ -130,6 +130,9 @@ public class DisplayActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON | WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        // Foreground priority for the whole session, also while the user is in another app
+        // 사용자가 다른 앱에 있는 동안에도 세션 전체를 포그라운드 우선순위로 유지함
+        SessionService.start(this);
         // Volume keys change the media volume, which the game sound uses (AudioServer, USAGE_GAME)
         // 볼륨 키가 게임 소리가 쓰는 미디어 볼륨을 바꾸게 함(AudioServer, USAGE_GAME)
         setVolumeControlStream(android.media.AudioManager.STREAM_MUSIC);
@@ -1009,9 +1012,15 @@ public class DisplayActivity extends Activity {
         if (hasFocus) hideSystemBars();
     }
 
+    /** This screen is in front (between onResume and onPause) / 이 화면이 앞에 있음(onResume~onPause) */
+    private volatile boolean inFront = true;
+
     @Override
     protected void onPause() {
         super.onPause();
+        // Logged so a slowdown can be matched with leaving the app / 느려진 때와 앱을 떠난 때를 맞춰 보려고 기록함
+        inFront = false;
+        log("APP 화면 떠남 (다른 앱, 홈 또는 화면 꺼짐)");
         view.onPause();
         // Fingers lifted while away are never reported; release the touch pad buttons
         // 화면을 떠난 동안 뗀 손가락은 알려지지 않으므로 터치 패드 버튼을 모두 뗌
@@ -1021,6 +1030,8 @@ public class DisplayActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (!inFront) log("APP 화면 돌아옴");
+        inFront = true;
         view.onResume();
     }
 
@@ -1163,6 +1174,9 @@ public class DisplayActivity extends Activity {
             // CPU ticks per pid at the previous pass / 이전 회차의 pid별 CPU 틱
             java.util.Map<Integer, Long> lastTicks = new java.util.HashMap<>();
             long lastNs = 0;
+            int pass = 0;
+            long lastRx = android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid());
+            long lastRxNs = System.nanoTime();
             while (!finishing) {
                 java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps =
                         app.ezsteam.runtime.ChildProcessCounter.descendants(android.os.Process.myPid());
@@ -1192,6 +1206,21 @@ public class DisplayActivity extends Activity {
                                 .append(pr.rssKb / 1024).append("MB");
                     }
                     log(sb.toString());
+                }
+                // Once a minute: CPU, network receive rate of this app (Steam downloads included),
+                // front/back, CPU clock, battery temperature, so a slowdown can be told apart
+                // (background, heat, or the network)
+                // 1분마다: CPU, 이 앱의 네트워크 수신 속도(Steam 다운로드 포함), 앞/뒤, CPU 클럭, 배터리
+                // 온도. 느려진 원인(백그라운드, 발열, 네트워크)을 가리기 위함
+                if (++pass % 30 == 0) {
+                    long rx = android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid());
+                    long ns = System.nanoTime();
+                    float mbps = rx < 0 || lastRx < 0 ? -1f : (rx - lastRx) * 8f / ((ns - lastRxNs) / 1e3f);
+                    lastRx = rx;
+                    lastRxNs = ns;
+                    log(String.format(Locale.ROOT, "PERF %s  수신 %s  화면 %s  CPU 최고 클럭 %s  배터리 %s  여유 메모리 %.1fGB",
+                            cpuText, mbps < 0 ? "-" : String.format(Locale.ROOT, "%.1f Mbps", mbps),
+                            inFront ? "앞" : "뒤", maxCpuClock(), batteryTemp(), memFreeMb / 1024f));
                 }
                 SystemClock.sleep(2000);
             }
@@ -1234,6 +1263,42 @@ public class DisplayActivity extends Activity {
         Float g = game == null ? null : pct.get(game.pid);
         cpuText = String.format(Locale.ROOT, "CPU 전체 %.0f%%  게임 %s  Xvfb %.0f%%  PRoot %.0f%%",
                 all, g == null ? "-" : String.format(Locale.ROOT, "%.0f%%", g), xvfb, proot);
+    }
+
+    /**
+     * Highest current clock over all CPU cores, "-" when the files are not readable
+     * 모든 CPU 코어 중 가장 높은 현재 클럭. 파일을 읽을 수 없으면 "-"
+     */
+    private static String maxCpuClock() {
+        long best = -1;
+        for (int i = 0; i < 16; i++) {
+            File f = new File("/sys/devices/system/cpu/cpu" + i + "/cpufreq/scaling_cur_freq");
+            if (!f.exists()) continue;
+            try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(f))) {
+                best = Math.max(best, Long.parseLong(r.readLine().trim()));
+            } catch (IOException | RuntimeException ignored) {
+                // not readable on this device / 이 기기에서는 읽을 수 없음
+            }
+        }
+        return best <= 0 ? "-" : String.format(Locale.ROOT, "%.2fGHz", best / 1e6);
+    }
+
+    /** Battery temperature from the sticky battery broadcast / 고정 배터리 방송의 배터리 온도 */
+    private String batteryTemp() {
+        android.content.Intent b = registerReceiver(null,
+                new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
+        int t = b == null ? Integer.MIN_VALUE : b.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, Integer.MIN_VALUE);
+        return t == Integer.MIN_VALUE ? "-" : String.format(Locale.ROOT, "%.1f°C", t / 10f);
+    }
+
+    /** Free space of the filesystem holding a folder, in GB / 폴더가 있는 파일 시스템의 여유 공간(GB) */
+    private static String freeGb(File dir) {
+        try {
+            android.os.StatFs st = new android.os.StatFs(dir.getAbsolutePath());
+            return String.format(Locale.ROOT, "%.1fGB", st.getAvailableBytes() / 1e9);
+        } catch (RuntimeException e) {
+            return "-";
+        }
     }
 
     /** Process name before " | " (kernel comm) / " | " 앞의 프로세스 이름(커널 comm) */
@@ -1487,6 +1552,10 @@ public class DisplayActivity extends Activity {
         }
         sb.append("hardware: ").append(android.os.Build.HARDWARE).append('\n');
         sb.append("rootfs: ").append(RootfsInstaller.installedVersion(this)).append('\n');
+        // Free space: app storage (rootfs, Steam library "/") and shared storage (EZlator library)
+        // 여유 공간: 앱 저장소(rootfs, Steam 기본 라이브러리 "/")와 공용 저장소(EZlator 라이브러리)
+        sb.append("free: app ").append(freeGb(getFilesDir())).append(", shared ")
+                .append(freeGb(android.os.Environment.getExternalStorageDirectory())).append('\n');
         sb.append("time: ").append(new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.ROOT)
                 .format(new java.util.Date())).append('\n');
         return sb.toString();
@@ -1581,6 +1650,7 @@ public class DisplayActivity extends Activity {
             }
         }
         new Thread(this::stopProcess, "ezs-display-stop").start();
+        SessionService.stop(this);
         super.onDestroy();
     }
 
