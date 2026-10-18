@@ -1340,6 +1340,13 @@ public class DisplayActivity extends Activity {
                         throw e;
                     }
                     log("로그 저장 위치: " + zip.getAbsolutePath());
+                    // Make the new file visible over USB (MTP) right away: a computer lists files from
+                    // Android's media index, which did not know new reports yet (user report: the
+                    // computer and the device showed different report files)
+                    // USB(MTP)에서 새 파일이 바로 보이게 함: 컴퓨터는 안드로이드 미디어 목록으로 파일을 보는데,
+                    // 그 목록이 새 제보를 아직 몰랐음(사용자 보고: 컴퓨터와 기기에서 보이는 제보 파일이 달랐음)
+                    android.media.MediaScannerConnection.scanFile(this, new String[]{zip.getAbsolutePath()},
+                            new String[]{"application/zip"}, null);
                     notice("로그 저장됨: Download/.EZlator/Reports/" + zip.getName());
                 } catch (IOException | RuntimeException e) {
                     log("공용 폴더 저장 실패, 파일 선택 창으로 저장: " + e);
@@ -1405,9 +1412,19 @@ public class DisplayActivity extends Activity {
         if (logs != null) files.addAll(Arrays.asList(logs));
         File lsof = new File(rootfs, "tmp/ezs-lsof.log");
         if (lsof.isFile()) files.add(lsof);
+        // The client's own download log (which library, which depots, why a game is downloaded again)
+        // 클라이언트 자체 다운로드 로그(어느 라이브러리, 어느 depot, 왜 다시 받는지)
+        File content = new File(rootfs, "home/steam/.local/share/Steam/logs/content_log.txt");
+        if (content.isFile()) files.add(content);
         int n = 0;
         app.ezsteam.runtime.LogScrubber scrub = app.ezsteam.runtime.LogScrubber.forRootfs(rootfs);
         try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(os)) {
+            // Device and build, so a report sent without a message still says where it came from
+            // (model, Android, SoC; nothing personal)
+            // 기기와 빌드 정보. 글 없이 보낸 제보도 어디서 왔는지 알 수 있게 함(모델, 안드로이드, SoC. 개인정보 없음)
+            zip.putNextEntry(new java.util.zip.ZipEntry("device.txt"));
+            zip.write(deviceText().getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
             zip.putNextEntry(new java.util.zip.ZipEntry("app-log.txt"));
             zip.write(scrub.scrub(appLog).getBytes(StandardCharsets.UTF_8));
             zip.closeEntry();
@@ -1458,6 +1475,23 @@ public class DisplayActivity extends Activity {
      * 화면에 짧은 알림: Steam이 도는 동안 로그 화면이 숨겨져 저장 결과가 보이지 않았음(사용자 보고:
      * "로그 저장이 안 되는 것 같음")
      */
+    private String deviceText() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("app build: ").append(BuildConfig.GIT_SHA).append('\n');
+        sb.append("device: ").append(android.os.Build.MANUFACTURER).append(' ').append(android.os.Build.MODEL)
+                .append(" (").append(android.os.Build.DEVICE).append(")\n");
+        sb.append("android: ").append(android.os.Build.VERSION.RELEASE)
+                .append(" (API ").append(android.os.Build.VERSION.SDK_INT).append(")\n");
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
+            sb.append("soc: ").append(android.os.Build.SOC_MANUFACTURER).append(' ').append(android.os.Build.SOC_MODEL).append('\n');
+        }
+        sb.append("hardware: ").append(android.os.Build.HARDWARE).append('\n');
+        sb.append("rootfs: ").append(RootfsInstaller.installedVersion(this)).append('\n');
+        sb.append("time: ").append(new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.ROOT)
+                .format(new java.util.Date())).append('\n');
+        return sb.toString();
+    }
+
     private void notice(String text) {
         runOnUiThread(() -> android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_LONG).show());
     }

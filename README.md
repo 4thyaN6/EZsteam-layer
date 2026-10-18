@@ -107,7 +107,7 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
   - EZlator Steam 라이브러리 `/storage/emulated/0/EZlator/SteamLibrary`를 rootfs `/mnt/ezlator-library`로 연결, steam-run.sh가 `steam-library.py`로 클라이언트 라이브러리 목록(config/·steamapps/libraryfolders.vdf)에 추가(첫 실행 전에는 다음 시작부터). 그 라이브러리 게임의 Proton prefix는 ezproton이 rootfs 안 `steamapps/compatdata/<appid>`로 돌림
   - 공용 저장소는 flock에 ENOSYS(errno 38)를 돌려줌(실측) → `native/ezscompat/ezs_flock.c`(libezs_compat.so, steam-run.sh가 클라이언트에 LD_PRELOAD)가 ENOSYS/EOPNOTSUPP만 성공으로 바꿈
   - Steam 시작 전 `steam-compat.py`가 config.vdf의 CompatToolMapping 기본값("0")과 다른 도구를 가리키는 게임별 항목을 `ezproton`으로 바꿈(공유 라이브러리 게임이 기본값 Valve Proton → pressure-vessel `opendir(/proc/self/root)`로 실패했음, 실측). 라이브러리별 appmanifest 수도 로그에 남김
-  - `steam-proton.py`: ARM64 Proton(4185400을 요구하는 toolmanifest + proton)이 없으면 `appmanifest_4628740.acf`(StateFlags 6)를 남겨 클라이언트가 Valve 서버에서 받게 함(appid는 커뮤니티 목록 기준, 설치된 기기에서는 appid를 로그로 확인). 앱은 Valve 파일을 갖지 않음
+  - `steam-proton.py`: ARM64 Proton(4185400을 요구하는 toolmanifest + proton)이 없으면 `appmanifest_4628740.acf`(StateFlags 6)를 남겨 클라이언트가 Valve 서버에서 받게 함(appid는 시험 기기 설치본 기준, 설치된 기기에서는 appid를 로그로 확인). 앱은 Valve 파일을 갖지 않음
   - 내부 폴더(files/ezs, files/ezs-data)는 EZlator(imagefs, contents, steam 등)와 이름이 겹치지 않아 그대로 둠
 - 뒤로 가기: 실제 장치(키보드·게임패드·마우스)에서 온 뒤로 가기는 X의 Esc로 보냄. 화면 뒤로 가기·[닫기]는 Steam 모드에서 종료를 먼저 물어봄
 - 키보드 포커스: 창 관리자가 없으므로 앱(XTestClient)이 터치·키 누름 때 포인터 아래 최상위 창에 SetInputFocus + WM_TAKE_FOCUS를 보냄(Wine은 WM_TAKE_FOCUS를 받아야 창을 활성화함). 창이 바뀔 때만 보내고 앱 로그에 `X 포커스 → 창 0x…`. 새 최상위 창이 나타나면(루트 SubstructureNotify의 MapNotify, override-redirect 제외) 그 창에 바로, 0.3초·1.5초 뒤에 다시 보냄(`(새 창)`). 터치·마우스 누름 때는 같은 창이어도 항상 다시 보냄. 볼륨 키는 안드로이드 미디어 볼륨으로

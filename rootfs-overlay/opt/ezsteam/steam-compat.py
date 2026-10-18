@@ -69,6 +69,26 @@ def libraries(steam, v):
         listed = sorted(lib.get("apps", {}).keys()) if isinstance(lib.get("apps"), dict) else []
         print("INFO library : [%s] %s appmanifest %d개 %s, 목록 %d개" % (
             key, lib.get("path"), len(have), " ".join(have), len(listed)))
+        # Game folders without an install record: the client sees them as not installed and
+        # downloads again unless the install goes to this same library (user report 2026-10-18)
+        # 설치 기록이 없는 게임 폴더: 클라이언트는 설치 안 됨으로 보며, 같은 라이브러리로 설치하지 않으면
+        # 다시 받음(사용자 보고 2026-10-18)
+        dirs = set()
+        for n in have:
+            try:
+                with open(os.path.join(apps_dir, "appmanifest_%s.acf" % n), encoding="utf-8", errors="replace") as f:
+                    d = v.parse(f.read()).get("AppState", {}).get("installdir")
+                if d:
+                    dirs.add(d)
+            except OSError:
+                pass
+        try:
+            orphans = sorted(d for d in os.listdir(os.path.join(apps_dir, "common"))
+                             if d not in dirs and os.path.isdir(os.path.join(apps_dir, "common", d)))
+        except OSError:
+            orphans = []
+        if orphans:
+            print("INFO library : [%s] 설치 기록 없는 게임 폴더 %d개: %s" % (key, len(orphans), ", ".join(orphans)))
 
 
 def main():

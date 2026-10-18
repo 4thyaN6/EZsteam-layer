@@ -18,13 +18,13 @@
 #   설치 안 됨, 기록도 없음: StateFlags "6"(설치됨 + 업데이트 필요)인 steamapps/appmanifest_<APPID>.acf를
 #   만들어 클라이언트가 시작할 때 다운로드를 대기열에 넣게 함
 #
-# APPID 4628740 = "Proton 11.0 (ARM64)" per the community list of Proton appids
-# (steamcommunity.com/sharedfiles/filedetails/?id=2013973376); not yet confirmed on a device, the
-# "installed" log line above confirms it. The install record format follows the client's own
+# APPID 4628740 = "Proton 11.0 (ARM64)" as installed by the client on the test device (user
+# report 2026-10-18, build id 25833186), same as the community list of Proton appids
+# (steamcommunity.com/sharedfiles/filedetails/?id=2013973376). The install record format follows the client's own
 # appmanifest files; StateFlags 6 = 4 (installed) | 2 (update required) (LaunchBox help article).
-# APPID 4628740 = 커뮤니티 Proton appid 목록의 "Proton 11.0 (ARM64)"(steamcommunity.com/sharedfiles/
-# filedetails/?id=2013973376). 기기에서는 아직 확인 안 됨. 위 "설치됨" 로그 줄로 확인함. 설치 기록 형식은
-# 클라이언트 자체 appmanifest를 따름. StateFlags 6 = 4(설치됨) | 2(업데이트 필요)(LaunchBox 도움말)
+# APPID 4628740 = 시험 기기에서 클라이언트가 설치한 "Proton 11.0 (ARM64)"(사용자 보고 2026-10-18, 빌드 id
+# 25833186). 커뮤니티 Proton appid 목록(steamcommunity.com/sharedfiles/filedetails/?id=2013973376)과 같음. 설치 기록 형식은 클라이언트
+# 자체 appmanifest를 따름. StateFlags 6 = 4(설치됨) | 2(업데이트 필요)(LaunchBox 도움말)
 import glob
 import os
 import re
