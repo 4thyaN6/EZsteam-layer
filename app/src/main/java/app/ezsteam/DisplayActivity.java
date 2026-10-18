@@ -420,6 +420,10 @@ public class DisplayActivity extends Activity {
                 // Fewer Steam web helper processes (option on the main screen, on by default)
                 // Steam 웹 도우미 프로세스 줄이기(메인 화면 옵션, 기본 켬)
                 if (MainActivity.cefSlim(this)) c.env.put("EZS_CEF_FLAGS", MainActivity.CEF_SLIM_FLAGS);
+                if (MainActivity.cefSingle(this)) {
+                    c.env.put("EZS_STEAM_EXTRA", MainActivity.CEF_SINGLE_ARG);
+                    log("CEF 단일 프로세스(시험) 켬: " + MainActivity.CEF_SINGLE_ARG);
+                }
                 // Address order back to glibc's default (an earlier build's IPv4-first gai.conf)
                 // 주소 순서를 glibc 기본값으로 되돌림(이전 빌드가 쓴 IPv4 우선 gai.conf)
                 try {
@@ -1276,6 +1280,7 @@ public class DisplayActivity extends Activity {
                         app.ezsteam.runtime.ChildProcessCounter.descendants(android.os.Process.myPid());
                 procNow = ps.size();
                 updateCpu(ps, lastTicks, lastNs);
+                logCefHelpers(ps);
                 lastNs = System.nanoTime();
                 java.util.Map<Integer, Float> pct = cpuPct;
                 StringBuilder list = new StringBuilder();
@@ -1427,6 +1432,65 @@ public class DisplayActivity extends Activity {
         }
         m.appendTail(sb);
         return sb.toString();
+    }
+
+    /** Last logged web helper summary / 마지막으로 기록한 웹 도우미 요약 */
+    private String cefLogged = "";
+    private boolean cefFeaturesLogged;
+
+    /**
+     * When the set of Steam web helper processes changes: one line with their count and kinds
+     * (Chromium --type and --utility-sub-type from /proc/<pid>/cmdline), and once the feature
+     * switches of the browser process. Shows which helper kinds are left to merge (32 process
+     * limit, a first game start ended at 31 with 7 helpers, 2026-10-18).
+     * Steam 웹 도우미 프로세스 구성이 바뀔 때: 개수와 종류 한 줄(/proc/<pid>/cmdline의 Chromium --type,
+     * --utility-sub-type), 그리고 브라우저 프로세스의 기능 스위치 한 번. 합칠 수 있는 도우미 종류를 보기
+     * 위함(프로세스 한도 32, 게임 첫 실행이 도우미 7개로 31개에서 끝났음, 2026-10-18)
+     */
+    private void logCefHelpers(java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps) {
+        java.util.TreeMap<String, Integer> kinds = new java.util.TreeMap<>();
+        int n = 0;
+        for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
+            if (!exeName(pr).startsWith("steamwebhelper")) continue;
+            String[] args;
+            try {
+                byte[] raw = java.nio.file.Files.readAllBytes(new File("/proc/" + pr.pid + "/cmdline").toPath());
+                args = new String(raw, StandardCharsets.UTF_8).split("\0");
+            } catch (IOException | RuntimeException e) {
+                continue;
+            }
+            String type = "browser", sub = null;
+            for (String a : args) {
+                if (a.startsWith("--type=")) type = a.substring(7);
+                else if (a.startsWith("--utility-sub-type=")) sub = a.substring(19);
+            }
+            if (type.equals("browser") && !cefFeaturesLogged) {
+                StringBuilder f = new StringBuilder();
+                for (String a : args) {
+                    if (a.startsWith("--enable-features=") || a.startsWith("--disable-features=")
+                            || a.equals("--single-process") || a.startsWith("--renderer-process-limit")) {
+                        f.append(' ').append(a);
+                    }
+                }
+                cefFeaturesLogged = true;
+                log("CEF 브라우저 스위치:" + (f.length() == 0 ? " (기능 스위치 없음)" : f.toString()));
+            }
+            String k = sub == null ? type : type + "(" + sub + ")";
+            kinds.merge(k, 1, Integer::sum);
+            n++;
+        }
+        if (n == 0) return;
+        StringBuilder sb = new StringBuilder();
+        for (java.util.Map.Entry<String, Integer> e : kinds.entrySet()) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(e.getKey());
+            if (e.getValue() > 1) sb.append('×').append(e.getValue());
+        }
+        String line = "CEF 도우미 " + n + "개: " + sb;
+        if (!line.equals(cefLogged)) {
+            cefLogged = line;
+            log(line);
+        }
     }
 
     /** Process name before " | " (kernel comm) / " | " 앞의 프로세스 이름(커널 comm) */

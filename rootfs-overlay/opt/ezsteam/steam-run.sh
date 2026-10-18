@@ -253,7 +253,7 @@ while :; do
     echo "INFO ffmpeg : ${av:-클라이언트 폴더에 libavcodec 없음}"
     echo "INFO steam : 시작 $n ($(date +%H:%M:%S))"
     LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_CLIENT_PRELOAD" \
-        "$BIN" -no-cef-sandbox -cef-disable-gpu -chromeosnopreallocate $VERIFY >>"$LOG" 2>&1
+        "$BIN" -no-cef-sandbox -cef-disable-gpu -chromeosnopreallocate $VERIFY ${EZS_STEAM_EXTRA:-} >>"$LOG" 2>&1
     rc=$?
     echo "INFO steam : 종료 rc=$rc ($(date +%H:%M:%S))"
     # 42: restart after a self update (at most 5 times in a row) / 42: 자체 갱신 후 재시작(연속 5회까지)
