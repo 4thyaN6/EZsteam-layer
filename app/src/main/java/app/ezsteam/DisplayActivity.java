@@ -184,7 +184,13 @@ public class DisplayActivity extends Activity {
         addButton(bar, "프로세스", v -> showProcesses());
         addButton(bar, "Proton", v -> showProtonLog());
         addButton(bar, "로그", v -> logScroll.setVisibility(logScroll.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
-        addButton(bar, "로그 저장", v -> saveLogs());
+        Button saveBtn = addButton(bar, "로그 저장", v -> saveLogs());
+        // Long press: choose the place with the file picker / 길게 누름: 파일 선택 창으로 위치를 고름
+        saveBtn.setOnLongClickListener(v -> {
+            pickLogFile("ezsteam-logs-" + new java.text.SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.ROOT)
+                    .format(new java.util.Date()) + ".zip");
+            return true;
+        });
         addButton(bar, "정보", v -> {
             statsShown = !statsShown;
             statsView.setVisibility(statsShown ? View.VISIBLE : View.GONE);
@@ -1327,10 +1333,17 @@ public class DisplayActivity extends Activity {
                     File zip = new File(dir, app.ezsteam.runtime.SharedStorage.REPORT_PREFIX + stamp + ".zip");
                     try (java.io.OutputStream os = new java.io.FileOutputStream(zip)) {
                         writeLogZip(os, appLog, procs);
+                    } catch (IOException | RuntimeException e) {
+                        // No half-written report left behind / 반쯤 쓴 제보 파일을 남기지 않음
+                        //noinspection ResultOfMethodCallIgnored
+                        zip.delete();
+                        throw e;
                     }
-                    log("로그 저장 위치: Download/.EZlator/Reports/" + zip.getName());
+                    log("로그 저장 위치: " + zip.getAbsolutePath());
+                    notice("로그 저장됨: Download/.EZlator/Reports/" + zip.getName());
                 } catch (IOException | RuntimeException e) {
                     log("공용 폴더 저장 실패, 파일 선택 창으로 저장: " + e);
+                    notice("공용 폴더 저장 실패, 저장 위치를 고르십시오");
                     runOnUiThread(() -> pickLogFile("ezsteam-logs-" + stamp + ".zip"));
                 }
             }, "ezs-log-save").start();
@@ -1368,8 +1381,10 @@ public class DisplayActivity extends Activity {
         new Thread(() -> {
             try (java.io.OutputStream os = getContentResolver().openOutputStream(uri)) {
                 writeLogZip(os, appLog, procs);
+                notice("로그 저장됨");
             } catch (IOException | RuntimeException e) {
                 log("로그 저장 실패: " + e);
+                notice("로그 저장 실패: " + e.getMessage());
             }
         }, "ezs-log-save").start();
     }
@@ -1383,7 +1398,7 @@ public class DisplayActivity extends Activity {
      * images are copied as they are.
      * 글은 개인 값을 가림(Steam 계정·표시 이름, SteamID64, 토큰, 이메일: LogScrubber). 그림은 그대로 넣음
      */
-    private void writeLogZip(java.io.OutputStream os, String appLog, String procs) {
+    private void writeLogZip(java.io.OutputStream os, String appLog, String procs) throws IOException {
         File rootfs = RootfsInstaller.rootfsDir(this);
         java.util.List<File> files = new java.util.ArrayList<>();
         File[] logs = new File(rootfs, "home/steam/ezs-logs").listFiles(File::isFile);
@@ -1430,9 +1445,21 @@ public class DisplayActivity extends Activity {
             }
             zip.finish();
             log("로그 저장 완료: 로그 파일 " + n + "개 + 앱 로그 + 프로세스 목록 (계정·표시 이름, SteamID, 이메일은 가림)");
-        } catch (IOException | RuntimeException e) {
-            log("로그 저장 실패: " + e);
         }
+        // Failures go to the caller (it reports them and removes or replaces the file); before this
+        // a failure was logged inside and the caller still reported the file as saved
+        // 실패는 호출한 쪽으로 넘김(호출한 쪽이 알리고 파일을 지우거나 다른 방법으로 저장함). 전에는 안에서
+        // 실패를 기록만 하고 호출한 쪽은 저장됐다고 알렸음
+    }
+
+    /**
+     * Short message on screen: the log view is hidden while Steam runs, so save results were not
+     * visible (user report: "log saving does not seem to work")
+     * 화면에 짧은 알림: Steam이 도는 동안 로그 화면이 숨겨져 저장 결과가 보이지 않았음(사용자 보고:
+     * "로그 저장이 안 되는 것 같음")
+     */
+    private void notice(String text) {
+        runOnUiThread(() -> android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_LONG).show());
     }
 
     /** Scrollable, selectable text window / 스크롤·선택 가능한 글 창 */

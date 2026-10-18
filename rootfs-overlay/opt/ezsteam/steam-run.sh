@@ -111,6 +111,12 @@ if [ -n "${EZS_SHARED_LIBRARY:-}" ] && [ -d "$EZS_SHARED_LIBRARY" ]; then
         || echo "WARN library : $EZS_SHARED_LIBRARY 등록 실패"
 fi
 
+# Every Windows game on EZ Proton (Valve's Proton container cannot run under PRoot, see
+# steam-compat.py), plus the list of libraries with their installed games (diagnosis)
+# 모든 Windows 게임을 EZ Proton으로(Valve Proton 컨테이너는 PRoot에서 못 돎, steam-compat.py 참고),
+# 라이브러리별 설치된 게임 목록도 남김(진단)
+python3 /opt/ezsteam/steam-compat.py "$STEAM_DIR" 2>&1 || echo "WARN compat : 호환성 도구 설정 실패"
+
 # Game controller in the Steam client (Big Picture, menus): the same preload library that gives Wine
 # its pad attaches it to the client's own SDL3 when loaded into the client (native/ezspad)
 # Steam 클라이언트(빅픽처, 메뉴)의 게임 컨트롤러: Wine에 패드를 주는 같은 preload 라이브러리가

@@ -40,7 +40,10 @@ def parse(text):
         elif brace == "}":
             stack.pop()
         elif s is not None:
-            s = s.replace('\\"', '"').replace("\\\\", "\\")
+            # Kept as written (escapes not decoded), so dump() writes every value back byte for
+            # byte (config.vdf holds values with backslash escapes)
+            # 쓴 그대로 둠(이스케이프를 풀지 않음). 그래서 dump()가 모든 값을 바이트 그대로 다시 씀
+            # (config.vdf에는 백슬래시 이스케이프가 든 값이 있음)
             if key is None:
                 key = s
             else:
@@ -54,11 +57,9 @@ def dump(d, depth=0):
     out = []
     pad = "\t" * depth
     for k, v in d.items():
-        k = k.replace("\\", "\\\\").replace('"', '\\"')
         if isinstance(v, dict):
             out.append('%s"%s"\n%s{\n%s%s}\n' % (pad, k, pad, dump(v, depth + 1), pad))
         else:
-            v = v.replace("\\", "\\\\").replace('"', '\\"')
             out.append('%s"%s"\t\t"%s"\n' % (pad, k, v))
     return "".join(out)
 
