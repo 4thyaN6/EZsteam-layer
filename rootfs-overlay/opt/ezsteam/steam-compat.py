@@ -144,9 +144,52 @@ def network(steam):
         print("INFO network : 이름 찾기 실패 (%s)" % e)
 
 
+def reset_cell_once(steam, v):
+    """
+    Remove the download region chosen in the client (CellIDServerOverride in config.vdf) once, so
+    the client picks its region from the connection again. Done a single time per rootfs (marker
+    ~/.steam/.ezs-cell-reset); a region chosen after that is kept.
+    클라이언트에서 고른 다운로드 지역(config.vdf의 CellIDServerOverride)을 한 번 지워 클라이언트가 접속
+    주소로 지역을 다시 고르게 함. rootfs마다 한 번만 함(표시 파일 ~/.steam/.ezs-cell-reset). 그 뒤에 고른
+    지역은 그대로 둠
+    Why: the override was 15, and the client then used European servers for both sign-in
+    (GetCMListForConnect?cellid=15: ams1, fra1, par1, ... no Asian site; pings timed out for 6 s
+    before sign-in) and downloads (cache*-ams1, about 3 Mbps), connection_log.txt and
+    content_log.txt 2026-10-18. With cell 8 (2026-10-15) downloads came from Seoul at 444 Mbps.
+    이유: 지정값이 15였고, 클라이언트는 로그인(GetCMListForConnect?cellid=15: ams1, fra1, par1 등, 아시아
+    없음. 로그인 전 핑이 6초 동안 시간 초과)과 다운로드(cache*-ams1, 약 3 Mbps) 모두 유럽 서버를 썼음
+    (connection_log.txt, content_log.txt 2026-10-18). 셀 8(2026-10-15)에서는 서울에서 444 Mbps로 받았음
+    """
+    mark = os.path.join(os.path.expanduser("~"), ".steam", ".ezs-cell-reset")
+    path = os.path.join(steam, "config", "config.vdf")
+    if os.path.exists(mark) or not os.path.isfile(path):
+        return
+    with open(path, encoding="utf-8", errors="replace") as f:
+        data = v.parse(f.read())
+    removed = []
+
+    def strip(d):
+        for k in list(d.keys()):
+            if isinstance(d[k], dict):
+                strip(d[k])
+            elif k.lower() == "cellidserveroverride":
+                removed.append(d.pop(k))
+    strip(data)
+    if removed:
+        tmp = path + ".ezs-tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(v.dump(data))
+        os.replace(tmp, path)
+        print("OK   network : 다운로드 지역 지정값(%s) 지움 → 자동 (한 번만, 이후 고른 지역은 유지)" % ", ".join(removed))
+    os.makedirs(os.path.dirname(mark), exist_ok=True)
+    with open(mark, "w") as f:
+        f.write("done\n")
+
+
 def main():
     steam = sys.argv[1]
     libraries(steam, vdf())
+    reset_cell_once(steam, vdf())
     network(steam)
     path = os.path.join(steam, "config", "config.vdf")
     if not os.path.isfile(path):
