@@ -1630,11 +1630,20 @@ public class DisplayActivity extends Activity {
     private void updatePrep(java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps) {
         long now = SystemClock.elapsedRealtime();
         int best = -1;
-        for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) best = Math.max(best, prepIndexOf(exeName(pr)));
-        // A new prefix counts as its own step for up to 60 s until an installer shows up
-        // 새 prefix는 설치 프로그램이 보이기 전까지 최대 60초 동안 따로 한 단계로 셈
+        boolean wine = false;
+        for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
+            best = Math.max(best, prepIndexOf(exeName(pr)));
+            wine |= isWineProc(exeName(pr));
+        }
+        // A new prefix counts as its own step for up to 60 s until an installer shows up, and only
+        // while Wine runs: at Steam start the old steam.log is read again from the top, and its
+        // earlier "Upgrading prefix" line showed the banner with nothing running (user screenshot,
+        // 2026-10-19)
+        // 새 prefix는 설치 프로그램이 보이기 전까지 최대 60초 동안 따로 한 단계로 셈. Wine이 돌 때만:
+        // Steam 시작 때 예전 steam.log를 처음부터 다시 읽으므로, 그 안의 예전 "Upgrading prefix" 줄 때문에
+        // 아무것도 돌지 않는데 안내 띠가 떴음(사용자 화면, 2026-10-19)
         long hint = prefixHintMs;
-        if (hint != 0 && now - hint < 60_000 && best < 1) best = 1;
+        if (hint != 0 && now - hint < 60_000 && best < 1 && wine) best = 1;
         if (best >= 0) {
             String kind = PREP_NAMES[best];
             if (prepKind == null) {
@@ -1651,9 +1660,11 @@ public class DisplayActivity extends Activity {
             prepKind = kind;
             prepLastSeenMs = now;
             // Processes started since the preparation began = sub-tasks / 준비 시작 뒤 생긴 프로세스 = 하위 작업
-            int before = prepPids.size();
-            for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) prepPids.add(pr.pid);
-            prepNew += prepPids.size() - before;
+            // Only Wine processes count (not Steam's own helpers starting meanwhile)
+            // Wine 프로세스만 셈(그사이 시작한 Steam 자체 보조 프로그램은 빼고)
+            for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
+                if (prepPids.add(pr.pid) && isWineProc(exeName(pr))) prepNew++;
+            }
             // The install script alone also runs at every start (about 10 s): no "first start" wording then
             // 설치 스크립트만 도는 것은 매번 시작할 때도 있음(약 10초): 그때는 "첫 실행" 문구를 쓰지 않음
             if (best >= 1) prepFirstRun = true;
@@ -1677,6 +1688,14 @@ public class DisplayActivity extends Activity {
     }
 
     private int prepNew;
+
+    /** Wine side process by kernel name (Windows programs, wineserver, preloader); names are cut
+     *  to 15 characters, so ".ex" also counts / 커널 이름으로 본 Wine 쪽 프로세스(윈도우 프로그램,
+     *  wineserver, preloader). 이름이 15자로 잘리므로 ".ex"도 셈 */
+    private static boolean isWineProc(String comm) {
+        String n = comm.toLowerCase(Locale.ROOT);
+        return n.endsWith(".exe") || n.endsWith(".ex") || n.startsWith("wine");
+    }
     private boolean prepFirstRun;
 
     private static String mmss(long ms) {
