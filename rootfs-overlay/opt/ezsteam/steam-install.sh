@@ -44,12 +44,18 @@ echo "OK   user : $(grep '^steam:' /etc/passwd)"
 # 2. 패키지. lsof: 클라이언트가 UI 포트를 찾는 데 씀(없으면 UI가 연결되지 않음).
 #    gtk2, ibus, libvpx, nss, SDL2: ARM64 클라이언트 패키징들에 나온 항목. 나머지: Chromium 기반
 #    웹 도우미가 흔히 여는 라이브러리. 없는 이름은 알려 주고 나머지는 그대로 설치함
+#    libva2, libvdpau1, libavcodec61, libavutil59: needed after the client's first self update
+#    (fresh installs 2026-10-18 and 2026-10-19); installed here so the first Steam start does not
+#    stop for them
+#    libva2, libvdpau1, libavcodec61, libavutil59: 클라이언트 첫 자체 갱신 뒤 필요했음(새 설치
+#    2026-10-18, 2026-10-19). 첫 Steam 시작이 이것 때문에 멈추지 않도록 여기서 설치함
 PKGS="lsof unzip curl ca-certificates xdg-utils xdg-user-dirs procps file
 libgtk2.0-0t64 libibus-1.0-5 libvpx9 libnss3 libnspr4 libsdl2-2.0-0 libopenal1 libusb-1.0-0
 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libdrm2 libgbm1 libxcomposite1 libxdamage1
 libxrandr2 libxfixes3 libxkbcommon0 libxss1 libxtst6 libxi6 libxcursor1 libxinerama1
 libasound2t64 libpulse0 libpango-1.0-0 libcairo2 libdbus-1-3 libudev1 libgl1 libegl1
-libfontconfig1 fonts-dejavu-core libsdl3-0 libpipewire-0.3-0t64 locales dbus"
+libfontconfig1 fonts-dejavu-core libsdl3-0 libpipewire-0.3-0t64 locales dbus
+libva2 libvdpau1 libavcodec61 libavutil59"
 echo "INFO resolv : $(grep -c nameserver /etc/resolv.conf 2>/dev/null) nameserver"
 before=$(du -sk /usr 2>/dev/null | cut -f1)
 $APT update || { echo "FAIL apt-update : 네트워크·DNS 확인"; exit 1; }

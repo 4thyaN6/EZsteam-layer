@@ -106,21 +106,31 @@ rm -f "$HOME/ezs-logs/steam-input-probe.log" "$HOME/ezs-logs/steam-input-scan.tx
 # 이 클라이언트와 공유하는 EZlator Steam 라이브러리(저장소 권한이 있으면 앱이 /mnt/ezlator-library에
 # 연결함, 시험 빌드): 추가 라이브러리 폴더로 등록해 그곳에 이미 받은 게임을 다시 받지 않고 찾게 함.
 # Proton prefix는 rootfs 안에 둠(compat/ezproton 참고): 공용 저장소는 prefix의 심볼릭 링크를 담을 수 없음
-if [ -n "${EZS_SHARED_LIBRARY:-}" ] && [ -d "$EZS_SHARED_LIBRARY" ]; then
-    python3 /opt/ezsteam/steam-library.py "$STEAM_DIR" "$EZS_SHARED_LIBRARY" 2>&1 \
-        || echo "WARN library : $EZS_SHARED_LIBRARY 등록 실패"
-fi
+# Client settings applied before each start: shared library, compat tool, Proton request. Run
+# again before each restart of the same session: the first start of a fresh install updates the
+# client (exit 42) and only then are its settings files there, so a library registered only once
+# appeared after the next app start (user report 2026-10-19)
+# 시작 전마다 적용하는 클라이언트 설정: 공유 라이브러리, 호환 도구, Proton 요청. 같은 세션의 재시작
+# 전에도 다시 실행함: 새 설치의 첫 시작은 클라이언트를 갱신하고(exit 42) 그 뒤에야 설정 파일이 생기므로,
+# 한 번만 등록하면 라이브러리가 다음 앱 시작 때 나타났음(사용자 보고 2026-10-19)
+client_settings() {
+    if [ -n "${EZS_SHARED_LIBRARY:-}" ] && [ -d "$EZS_SHARED_LIBRARY" ]; then
+        python3 /opt/ezsteam/steam-library.py "$STEAM_DIR" "$EZS_SHARED_LIBRARY" 2>&1 \
+            || echo "WARN library : $EZS_SHARED_LIBRARY 등록 실패"
+    fi
 
-# Every Windows game on EZ Proton (Valve's Proton container cannot run under PRoot, see
-# steam-compat.py), plus the list of libraries with their installed games (diagnosis)
-# 모든 Windows 게임을 EZ Proton으로(Valve Proton 컨테이너는 PRoot에서 못 돎, steam-compat.py 참고),
-# 라이브러리별 설치된 게임 목록도 남김(진단)
-python3 /opt/ezsteam/steam-compat.py "$STEAM_DIR" 2>&1 || echo "WARN compat : 호환성 도구 설정 실패"
-# Valve's ARM64 Proton requested from the client when missing (steam-proton.py; downloaded by the
-# client from Valve's servers, nothing shipped)
-# 없으면 클라이언트에 Valve ARM64 Proton 받기를 요청함(steam-proton.py. 클라이언트가 Valve 서버에서 받음,
-# 앱에 넣어 배포하지 않음)
-python3 /opt/ezsteam/steam-proton.py "$STEAM_DIR" 2>&1 || echo "WARN proton : Proton 받기 요청 실패"
+    # Every Windows game on EZ Proton (Valve's Proton container cannot run under PRoot, see
+    # steam-compat.py), plus the list of libraries with their installed games (diagnosis)
+    # 모든 Windows 게임을 EZ Proton으로(Valve Proton 컨테이너는 PRoot에서 못 돎, steam-compat.py 참고),
+    # 라이브러리별 설치된 게임 목록도 남김(진단)
+    python3 /opt/ezsteam/steam-compat.py "$STEAM_DIR" 2>&1 || echo "WARN compat : 호환성 도구 설정 실패"
+    # Valve's ARM64 Proton requested from the client when missing (steam-proton.py; downloaded by the
+    # client from Valve's servers, nothing shipped)
+    # 없으면 클라이언트에 Valve ARM64 Proton 받기를 요청함(steam-proton.py. 클라이언트가 Valve 서버에서 받음,
+    # 앱에 넣어 배포하지 않음)
+    python3 /opt/ezsteam/steam-proton.py "$STEAM_DIR" 2>&1 || echo "WARN proton : Proton 받기 요청 실패"
+}
+client_settings
 
 # Game controller in the Steam client (Big Picture, menus): the same preload library that gives Wine
 # its pad attaches it to the client's own SDL3 when loaded into the client (native/ezspad)
@@ -181,6 +191,17 @@ cd "$STEAM_DIR" || exit 0
 n=0
 while :; do
     n=$((n + 1))
+    # Restart after a self update: the client may have replaced its own files (web helper
+    # wrapper, launch wrapper) and written its first settings files, so the hooks and settings
+    # are applied again (the first session of a fresh install ran with an unhooked web helper:
+    # 9 helper processes, 2026-10-19)
+    # 자체 갱신 후 재시작: 클라이언트가 자기 파일(웹 도우미 감쌈 스크립트, 실행 감쌈)을 바꾸고 첫 설정 파일을
+    # 썼을 수 있으므로 연결과 설정을 다시 적용함(새 설치 첫 세션이 연결 안 된 웹 도우미로 돌았음: 도우미
+    # 프로세스 9개, 2026-10-19)
+    if [ $n -gt 1 ]; then
+        sh /opt/ezsteam/ezsteam-prepare.sh
+        client_settings
+    fi
     # Missing libraries of the (possibly just updated) client, report only
     # (방금 갱신됐을 수 있는) 클라이언트의 없는 라이브러리, 보고만 함
     # Missing libraries apt can provide: steam-deps.sh writes a request file and prints

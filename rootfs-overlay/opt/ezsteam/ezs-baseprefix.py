@@ -6,12 +6,18 @@
 # prefix마다 복사함. 게임 첫 시작 때 prefix를 만들고 같은 설치 프로그램을 다시 돌리지 않게 함(DirectX만
 # 약 3분 걸렸음, 2026-10-19)
 #
+#   python3 ezs-baseprefix.py prepare [<Proton dir>]
 #   python3 ezs-baseprefix.py ensure <game compat data dir> <Proton dir>
 #
-# Called by compat/ezproton before Proton, for every start; does nothing when the game prefix is
-# complete (Proton's "version" file present).
-# compat/ezproton이 Proton보다 먼저 매 시작마다 부름. 게임 prefix가 완성돼 있으면("version" 파일 있음)
-# 아무것도 하지 않음.
+# prepare: started by the app ahead of time (ezs-baseprefix.sh), right after Steam has downloaded
+# Proton and after a game download brought new redistributables, so the work is done before the
+# first game start. ensure: called by compat/ezproton before Proton, for every start; does nothing
+# when the game prefix is complete (Proton's "version" file present), otherwise copies the base
+# (and only builds it there if prepare has not run).
+# prepare: 앱이 미리 시작함(ezs-baseprefix.sh). Steam이 Proton을 받은 직후와 게임 다운로드로 새 재배포가
+# 생긴 뒤에 돌려, 게임 첫 시작 전에 끝내 둠. ensure: compat/ezproton이 Proton보다 먼저 매 시작마다 부름.
+# 게임 prefix가 완성돼 있으면("version" 파일 있음) 아무것도 하지 않고, 아니면 기본 prefix를 복사함
+# (prepare가 돌지 않았을 때만 그 자리에서 만듦).
 #
 # What goes into the base / 기본 prefix에 넣는 것:
 # - Proton's own new prefix (its default_pfx copy + wineboot), made by running Proton itself
@@ -105,7 +111,7 @@ def redist_steps():
     for lib in LIBRARIES:
         shared = os.path.join(lib, "common", "Steamworks Shared")
         redist = os.path.join(shared, "_CommonRedist")
-        if not os.path.isdir(redist):
+        if not os.path.isdir(redist) or not shared_ready(lib):
             continue
         steps = []
         for root, dirs, files in os.walk(redist):
@@ -146,6 +152,42 @@ def redist_steps():
                     })
         return steps
     return []
+
+
+def shared_ready(lib):
+    """
+    Steamworks Shared (appid 228980) fully downloaded in this library: its install record says
+    StateFlags 4 (installed, nothing pending). Installers are not run from a download in progress.
+    No record (folder copied by hand) counts as ready.
+    이 라이브러리에 Steamworks Shared(appid 228980)가 다 받아졌는지: 설치 기록의 StateFlags가 4(설치됨,
+    남은 작업 없음). 받는 중인 파일로 설치 프로그램을 돌리지 않음. 기록이 없으면(직접 복사한 폴더) 준비된 것으로 봄
+    """
+    acf = os.path.join(lib, "appmanifest_228980.acf")
+    try:
+        with open(acf, encoding="utf-8", errors="replace") as f:
+            m = re.search(r'"StateFlags"\s+"(\d+)"', f.read())
+    except OSError:
+        return True
+    return m is None or m.group(1) == "4"
+
+
+def find_proton():
+    """Valve ARM64 Proton folder, same rule as compat/ezproton / compat/ezproton과 같은 규칙의 Proton 폴더"""
+    found = None
+    common = os.path.join(STEAM, "steamapps", "common")
+    try:
+        names = sorted(os.listdir(common))
+    except OSError:
+        return None
+    for name in names:
+        d = os.path.join(common, name)
+        try:
+            with open(os.path.join(d, "toolmanifest.vdf"), encoding="utf-8", errors="replace") as f:
+                if "4185400" in f.read() and os.path.isfile(os.path.join(d, "proton")):
+                    found = d
+        except OSError:
+            continue
+    return found
 
 
 def unix_exe(installdir, exe):
@@ -342,36 +384,69 @@ def copy_into(compat):
     say("copy done: %s (%.1f s, CommonRedist keys %d)" % (compat, time.time() - t0, keys))
 
 
+def bring_up_to_date(proton_dir):
+    """Build or rebuild the base for this Proton and add new redistributables; caller holds the lock.
+    Returns the mark, or None when the base could not be made.
+    이 Proton용 기본 prefix를 만들거나 다시 만들고 새 재배포를 더함. 호출한 쪽이 잠금을 잡고 있음.
+    표식을 돌려줌. 기본 prefix를 못 만들면 None"""
+    version = proton_version(proton_dir)
+    mark = read_mark()
+    if mark is None or mark.get("proton") != version or not os.path.isfile(os.path.join(BASE, "version")):
+        if mark is not None:
+            say("rebuild: Proton %s -> %s" % (mark.get("proton"), version))
+        if not build(proton_dir, version):
+            return None
+        mark = read_mark()
+    add_redists(proton_dir, mark)
+    return mark
+
+
+def locked():
+    """Exclusive lock on the base (one builder at a time; a game start waits for a running prepare)
+    기본 prefix의 단독 잠금(한 번에 하나만. 게임 시작은 돌고 있는 prepare를 기다림)"""
+    os.makedirs(os.path.dirname(BASE), exist_ok=True)
+    lock = open(BASE + ".lock", "w")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    return lock
+
+
+def prepare(proton_dir):
+    if not proton_dir or not os.path.isfile(os.path.join(proton_dir, "proton")):
+        say("prepare: Proton not installed yet")
+        return 0
+    with locked():
+        say("prepare start: Proton " + proton_version(proton_dir))
+        mark = bring_up_to_date(proton_dir)
+        if mark is not None:
+            say("prepare done: %d redist step(s) %s" % (len(mark["steps"]), ", ".join(mark["steps"]) or "-"))
+    return 0
+
+
 def ensure(compat, proton_dir):
     if os.path.isfile(os.path.join(compat, "version")):
         return 0
     if os.environ.get("EZS_BASE_PREFIX", "1") == "0":
         return 0
-    version = proton_version(proton_dir)
-    os.makedirs(os.path.dirname(BASE), exist_ok=True)
-    # One builder at a time (two games started together wait here) / 한 번에 하나만(동시에 시작한 게임은 여기서 기다림)
-    with open(BASE + ".lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with locked():
         if os.path.isfile(os.path.join(compat, "version")):
             return 0
-        mark = read_mark()
-        if mark is None or mark.get("proton") != version or not os.path.isfile(os.path.join(BASE, "version")):
-            if mark is not None:
-                say("rebuild: Proton %s -> %s" % (mark.get("proton"), version))
-            if not build(proton_dir, version):
-                return 0
-            mark = read_mark()
-        add_redists(proton_dir, mark)
+        mark = bring_up_to_date(proton_dir)
+        if mark is None:
+            return 0
         say("copy start: %d redist step(s) %s" % (len(mark["steps"]), ", ".join(mark["steps"]) or "-"))
         copy_into(compat)
     return 0
 
 
 def main():
-    if len(sys.argv) != 4 or sys.argv[1] != "ensure":
-        print("usage: ezs-baseprefix.py ensure <compat data dir> <Proton dir>", file=sys.stderr)
+    mode = sys.argv[1] if len(sys.argv) > 1 else ""
+    if not ((mode == "ensure" and len(sys.argv) == 4) or (mode == "prepare" and len(sys.argv) in (2, 3))):
+        print("usage: ezs-baseprefix.py prepare [<Proton dir>] | ensure <compat data dir> <Proton dir>",
+              file=sys.stderr)
         return 2
     try:
+        if mode == "prepare":
+            return prepare(sys.argv[2] if len(sys.argv) == 3 else find_proton())
         return ensure(sys.argv[2], sys.argv[3])
     except Exception as e:  # never block the game: Proton makes the prefix itself then
         say("error, Proton makes the prefix itself: %r" % (e,))

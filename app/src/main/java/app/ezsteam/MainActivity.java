@@ -56,6 +56,25 @@ public class MainActivity extends Activity {
         LinearLayout start = new LinearLayout(this);
         start.setOrientation(LinearLayout.HORIZONTAL);
         root.addView(start);
+        // Progress panel under the start row while a task runs (step, moving bar, elapsed time and
+        // data received, refreshed every second) instead of only log lines
+        // 작업이 도는 동안 시작 줄 아래 진행 패널(단계, 움직이는 막대, 경과 시간과 받은 양을 1초마다 갱신).
+        // 로그 줄만 보이던 것을 대신함
+        float dp = getResources().getDisplayMetrics().density;
+        taskPanel = new LinearLayout(this);
+        taskPanel.setOrientation(LinearLayout.VERTICAL);
+        taskPanel.setPadding(0, (int) (8 * dp), 0, (int) (8 * dp));
+        taskPanel.setVisibility(View.GONE);
+        taskTitle = new TextView(this);
+        taskTitle.setTextSize(16);
+        taskPanel.addView(taskTitle);
+        taskBar = new android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        taskBar.setIndeterminate(true);
+        taskPanel.addView(taskBar, new LinearLayout.LayoutParams(-1, -2));
+        taskDetail = new TextView(this);
+        taskDetail.setTextSize(13);
+        taskPanel.addView(taskDetail);
+        root.addView(taskPanel);
         Button go = addButton(start, "Steam 시작", v -> openSteam(steamSize()[0], steamSize()[1]));
         go.setTextSize(18);
         // Everything a new device needs, in order, skipping what is already there (a tester got
@@ -611,6 +630,14 @@ public class MainActivity extends Activity {
         void run() throws Exception;
     }
 
+    /** Progress panel views / 진행 패널 뷰 */
+    private LinearLayout taskPanel;
+    private TextView taskTitle, taskDetail;
+    private android.widget.ProgressBar taskBar;
+    /** Current step shown on the panel ("[1/4] rootfs 설치" etc.) / 패널에 보이는 현재 단계("[1/4] rootfs 설치" 등) */
+    private volatile String taskStep;
+    private static final java.util.regex.Pattern STEP = java.util.regex.Pattern.compile("^\\[(\\d)/(\\d)\\] ");
+
     /** Run one task on a worker thread, logging errors / 작업 하나를 작업 스레드에서 돌리고 오류를 기록함 */
     private void runTask(String name, Task t) {
         if (busy) {
@@ -618,9 +645,11 @@ public class MainActivity extends Activity {
             return;
         }
         busy = true;
+        taskStep = TASK_NAMES.containsKey(name) ? TASK_NAMES.get(name) : name;
         log("== " + name);
         new Thread(() -> {
             Thread beat = startHeartbeat(name);
+            Thread tick = startPanel();
             try {
                 t.run();
             } catch (Throwable e) {
@@ -628,8 +657,58 @@ public class MainActivity extends Activity {
             } finally {
                 busy = false;
                 beat.interrupt();
+                tick.interrupt();
+                runOnUiThread(() -> taskPanel.setVisibility(View.GONE));
             }
         }, "ezs-" + name).start();
+    }
+
+    /** Panel titles for the task names / 작업 이름별 패널 제목 */
+    private static final java.util.Map<String, String> TASK_NAMES = new java.util.HashMap<>();
+    static {
+        TASK_NAMES.put("setup", "전체 준비");
+        TASK_NAMES.put("install", "rootfs 설치");
+        TASK_NAMES.put("driver", "드라이버 설치");
+        TASK_NAMES.put("tools", "시험 도구 설치");
+        TASK_NAMES.put("steam-install", "Steam 설치");
+        TASK_NAMES.put("prepare", "Steam 준비");
+    }
+
+    /**
+     * Shows the progress panel and refreshes it every second: step, elapsed time, data received.
+     * 진행 패널을 띄우고 1초마다 갱신함: 단계, 경과 시간, 받은 양
+     */
+    private Thread startPanel() {
+        Thread th = new Thread(() -> {
+            long t0 = android.os.SystemClock.elapsedRealtime();
+            int uid = android.os.Process.myUid();
+            long rx0 = android.net.TrafficStats.getUidRxBytes(uid);
+            try {
+                while (true) {
+                    long sec = (android.os.SystemClock.elapsedRealtime() - t0) / 1000;
+                    long rx = android.net.TrafficStats.getUidRxBytes(uid);
+                    String step = taskStep;
+                    String detail = String.format(java.util.Locale.ROOT, "경과 %d:%02d", sec / 60, sec % 60)
+                            + (rx < 0 ? "" : String.format(java.util.Locale.ROOT, "  ·  받은 양 %.1f MB", (rx - rx0) / 1e6))
+                            + "\n앱을 닫지 마십시오. 자세한 내용은 아래 로그에 있음";
+                    // Overall share for "[n/m]" steps (bar keeps moving inside a step)
+                    // "[n/m]" 단계의 전체 비율(단계 안에서는 막대가 계속 움직임)
+                    java.util.regex.Matcher m = STEP.matcher(step);
+                    int pct = m.find() ? (Integer.parseInt(m.group(1)) - 1) * 100 / Integer.parseInt(m.group(2)) : -1;
+                    runOnUiThread(() -> {
+                        taskTitle.setText(step);
+                        taskDetail.setText(pct >= 0 ? "전체 " + pct + "% 완료  ·  " + detail : detail);
+                        taskPanel.setVisibility(View.VISIBLE);
+                    });
+                    Thread.sleep(1000);
+                }
+            } catch (InterruptedException ignored) {
+                // task finished / 작업 끝남
+            }
+        }, "ezs-panel");
+        th.setDaemon(true);
+        th.start();
+        return th;
     }
 
     /**
@@ -689,6 +768,8 @@ public class MainActivity extends Activity {
 
     /** Thread-safe log append / 스레드 안전 로그 추가 */
     private void log(String line) {
+        // "[n/m] ..." step lines become the panel title / "[n/m] ..." 단계 줄은 패널 제목이 됨
+        if (STEP.matcher(line).find()) taskStep = line;
         runOnUiThread(() -> {
             logView.append(line + "\n");
             scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));

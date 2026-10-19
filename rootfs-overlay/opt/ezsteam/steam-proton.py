@@ -72,9 +72,17 @@ def main():
     if os.path.isfile(acf):
         print("INFO proton : %s 받는 중 또는 대기 (Steam 다운로드 화면 확인)" % NAME)
         return
+    # Before the client's first start there is no steamapps folder yet: it is made here, so the
+    # request is there from the first sign-in (before, Proton came only after the next app start,
+    # and a game started meanwhile found no Proton, 2026-10-19)
+    # 클라이언트 첫 시작 전에는 steamapps 폴더가 아직 없음: 여기서 만들어 첫 로그인부터 요청이 있게 함
+    # (전에는 다음 앱 시작 뒤에야 Proton을 받았고 그사이 시작한 게임은 Proton을 찾지 못했음, 2026-10-19)
     if not os.path.isdir(os.path.join(steam, "steamapps")):
-        print("INFO proton : steamapps 없음 (첫 실행 전), 다음 시작부터 %s 받기 요청" % NAME)
-        return
+        if not os.path.isdir(steam):
+            print("INFO proton : Steam 없음, 받기 요청 안 함")
+            return
+        os.makedirs(os.path.join(steam, "steamapps"), exist_ok=True)
+        print("INFO proton : steamapps 만듦 (첫 실행 전)")
     text = ('"AppState"\n{\n'
             '\t"appid"\t\t"%s"\n'
             '\t"Universe"\t\t"1"\n'

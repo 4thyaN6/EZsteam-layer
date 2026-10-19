@@ -41,6 +41,16 @@ missing=$(scan)
 
 # First Debian package apt knows for a soname, empty when none (works as any user)
 # soname에 대해 apt가 아는 첫 데비안 패키지, 없으면 빈 값(아무 사용자로나 동작)
+# A package apt can really install: known AND with an install candidate. "apt-cache show" also
+# answers for names only referenced by other packages (libavcodec62 on trixie: "has no
+# installation candidate", a fresh install failed on it, 2026-10-19)
+# apt가 실제로 설치할 수 있는 패키지: 알려져 있고 설치 후보가 있음. "apt-cache show"는 다른 패키지가
+# 언급만 하는 이름에도 답함(trixie의 libavcodec62: "설치 후보 없음". 새 설치가 이것으로 실패했음, 2026-10-19)
+installable() {
+    cand=$(apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')
+    [ -n "$cand" ] && [ "$cand" != "(none)" ]
+}
+
 pkg_for() {
     echo "$1" | python3 -c '
 import re, sys
@@ -51,7 +61,7 @@ if m:
     sep = "-" if base[-1].isdigit() else ""
     print(" ".join(dict.fromkeys([base + sep + ver, base + sep + ver + "t64", base + "-" + ver, base + "-" + ver + "t64"])))
 ' | tr ' ' '\n' | while IFS= read -r c; do
-        [ -n "$c" ] && apt-cache show "$c" >/dev/null 2>&1 && { echo "$c"; break; }
+        [ -n "$c" ] && installable "$c" && { echo "$c"; break; }
     done
 }
 # Libraries the client ships itself somewhere deeper in its folder (e.g. libcef.so and its video
@@ -113,7 +123,7 @@ for so in sys.stdin.read().split():
 ' | while read -r so cands; do
     pkg=""
     for c in $cands; do
-        if apt-cache show "$c" >/dev/null 2>&1; then pkg=$c; break; fi
+        if installable "$c"; then pkg=$c; break; fi
     done
     # No Debian package: CEF and FFmpeg 8 names come with the client's own packages (its file
     # check fetches them, steam-run.sh). Older FFmpeg names (e.g. libavcodec.so.61) do exist in

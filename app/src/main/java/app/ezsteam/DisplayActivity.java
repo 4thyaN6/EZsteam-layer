@@ -70,6 +70,15 @@ public class DisplayActivity extends Activity {
     private TextView statsView, logView;
     /** First-run preparation banner (installers running) / 첫 실행 준비 안내 띠(설치 프로그램 실행 중) */
     private TextView prepView;
+    /** Banner box: small spinner + text / 안내 띠 상자: 작은 스피너 + 글 */
+    private LinearLayout prepBox;
+    /** Centre progress card while Steam starts or updates (instead of a black screen)
+     *  Steam이 시작·갱신하는 동안 가운데 진행 카드(검은 화면 대신) */
+    private LinearLayout setupPanel;
+    private TextView setupTitle, setupDetail;
+    private android.widget.ProgressBar setupBar;
+    /** A Steam window has appeared since the last (re)start / 마지막 (재)시작 뒤 Steam 창이 나타났음 */
+    private volatile boolean steamWindowSeen;
     /** Buttons, log and status strip / 버튼·로그·상태 띠 */
     private LinearLayout overlay;
     /** [≡] corner button shown while the overlay is hidden / 겹침 표시를 숨긴 동안 보이는 [≡] 모서리 버튼 */
@@ -245,15 +254,57 @@ public class DisplayActivity extends Activity {
         prepView.setTextColor(Color.WHITE);
         prepView.setTextSize(14);
         prepView.setGravity(Gravity.CENTER);
-        prepView.setBackgroundColor(0xCC000000);
         int prepPad = (int) (10 * getResources().getDisplayMetrics().density);
         prepView.setPadding(prepPad * 2, prepPad, prepPad * 2, prepPad);
         prepView.setClickable(false);
         prepView.setFocusable(false);
-        prepView.setVisibility(View.GONE);
+        // Spinner beside the text, so a long step visibly keeps going / 글 옆 스피너: 긴 단계도 진행 중임이 보이게 함
+        prepBox = new LinearLayout(this);
+        prepBox.setOrientation(LinearLayout.HORIZONTAL);
+        prepBox.setGravity(Gravity.CENTER_VERTICAL);
+        prepBox.setBackgroundColor(0xCC000000);
+        prepBox.setPadding(prepPad, 0, 0, 0);
+        prepBox.setClickable(false);
+        prepBox.setFocusable(false);
+        prepBox.setVisibility(View.GONE);
+        prepBox.addView(new android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleSmall));
+        prepBox.addView(prepView);
         FrameLayout.LayoutParams prepLp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
         prepLp.topMargin = (int) (56 * getResources().getDisplayMetrics().density);
-        root.addView(prepView, prepLp);
+        root.addView(prepBox, prepLp);
+
+        // Centre progress card for Steam's start and self update (the X screen stays black until
+        // Steam opens its first window); hidden when that window appears
+        // Steam 시작과 자체 갱신용 가운데 진행 카드(Steam이 첫 창을 열 때까지 X 화면은 검은색임). 그 창이
+        // 나타나면 숨김
+        float dp = getResources().getDisplayMetrics().density;
+        setupPanel = new LinearLayout(this);
+        setupPanel.setOrientation(LinearLayout.VERTICAL);
+        setupPanel.setGravity(Gravity.CENTER_HORIZONTAL);
+        setupPanel.setBackgroundColor(0xE0181A1F);
+        int sp = (int) (20 * dp);
+        setupPanel.setPadding(sp, sp, sp, sp);
+        setupPanel.setClickable(false);
+        setupPanel.setFocusable(false);
+        setupPanel.setVisibility(View.GONE);
+        setupTitle = new TextView(this);
+        setupTitle.setTextColor(Color.WHITE);
+        setupTitle.setTextSize(18);
+        setupTitle.setGravity(Gravity.CENTER);
+        setupPanel.addView(setupTitle);
+        setupBar = new android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        setupBar.setMax(100);
+        setupBar.setIndeterminate(true);
+        LinearLayout.LayoutParams setupBarLp = new LinearLayout.LayoutParams((int) (320 * dp), -2);
+        setupBarLp.topMargin = (int) (12 * dp);
+        setupBarLp.bottomMargin = (int) (8 * dp);
+        setupPanel.addView(setupBar, setupBarLp);
+        setupDetail = new TextView(this);
+        setupDetail.setTextColor(0xFFB8BCC6);
+        setupDetail.setTextSize(13);
+        setupDetail.setGravity(Gravity.CENTER);
+        setupPanel.addView(setupDetail);
+        root.addView(setupPanel, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
 
         // Corner button that brings the bar back after [숨김] / [숨김] 뒤에 막대를 되돌리는 모서리 버튼
         showButton = new Button(this);
@@ -381,6 +432,12 @@ public class DisplayActivity extends Activity {
     }
 
     private void log(String s) {
+        // First Steam window after a (re)start: the centre progress card is no longer needed
+        // (re)시작 뒤 첫 Steam 창: 가운데 진행 카드가 더는 필요 없음
+        if (!steamWindowSeen && s.startsWith("X 포커스") && s.contains("(새 창)")) {
+            steamWindowSeen = true;
+            hideSetup();
+        }
         runOnUiThread(() -> {
             logLines.addLast(s);
             // Time stamp only in the saved copy / 시각은 저장용 사본에만 붙임
@@ -525,6 +582,7 @@ public class DisplayActivity extends Activity {
                     log("PAD 공유 파일 실패 (컨트롤러 없이 계속): " + e);
                 }
             }
+            sessionConfig = c;
             Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/display.sh",
                     Arrays.asList(Integer.toString(w), Integer.toString(h), mode), null, null);
             proc = p;
@@ -539,6 +597,7 @@ public class DisplayActivity extends Activity {
                     log(line);
                     if (line.startsWith("READY ")) onReady(c, line);
                     if (line.startsWith("NEED deps")) installDeps(c);
+                    onSessionLine(line);
                 }
             }
             log("exit=" + p.waitFor() + " (자식 프로세스 최대 " + procMax + "개, 여유 메모리 "
@@ -571,6 +630,7 @@ public class DisplayActivity extends Activity {
                 // (2026-10-18)
                 c.rootId = true;
                 log("DEPS 필요한 라이브러리 설치 시작 (apt, 네트워크 사용)");
+                showSetup("필요한 라이브러리 설치 중", -1, "인터넷으로 시스템 라이브러리를 받음");
                 Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/steam-deps.sh",
                         Arrays.asList("install"), null, null);
                 try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
@@ -578,6 +638,8 @@ public class DisplayActivity extends Activity {
                     while ((l = r.readLine()) != null) log("DEPS " + l);
                 }
                 log("DEPS 끝 exit=" + p.waitFor());
+                // Back to the Steam start card / Steam 시작 카드로 돌아감
+                if (!steamWindowSeen) showSetup("Steam 시작 중", -1, "");
             } catch (IOException | InterruptedException | RuntimeException e) {
                 log("DEPS 실패: " + e);
             } finally {
@@ -607,7 +669,10 @@ public class DisplayActivity extends Activity {
         } catch (IOException e) {
             log("X 입력 연결 실패: " + e);
         }
-        if ("steam".equals(mode)) startSteamLogTail(c.rootfs);
+        if ("steam".equals(mode)) {
+            showSetup("Steam 시작 중", -1, "처음 실행은 Steam이 스스로 업데이트해 몇 분 걸릴 수 있음");
+            startSteamLogTail(c.rootfs);
+        }
         // The log is hidden once the screen runs, in both modes ([로그] shows it, [로그 저장] keeps it)
         // 화면이 돌기 시작하면 두 모드 모두 로그를 숨김([로그]로 표시, [로그 저장]으로 보관)
         runOnUiThread(() -> logScroll.setVisibility(View.GONE));
@@ -1247,6 +1312,19 @@ public class DisplayActivity extends Activity {
             boolean replay = true;
             while (!finishing) {
                 for (String line : steam.poll()) {
+                    // Steam's self update writes several progress lines a second: shown on the progress
+                    // card, logged only when the stage changes (818 "Installing update" lines in one
+                    // fresh install, 2026-10-19)
+                    // Steam 자체 갱신은 초당 여러 줄의 진행 줄을 씀: 진행 카드에 보이고, 로그에는 단계가 바뀔 때만
+                    // 남김(새 설치 한 번에 "Installing update" 줄 818개, 2026-10-19)
+                    String stage = updateStage(line, replay);
+                    if (stage != null) {
+                        if (!stage.equals(lastUpdateStage)) {
+                            lastUpdateStage = stage;
+                            log("STEAM " + line);
+                        }
+                        continue;
+                    }
                     if (STEAM_KEY.matcher(line).find()) log("STEAM " + line);
                     if (!replay) {
                         // Proton creates a new prefix: the first preparation step, before any installer
@@ -1331,6 +1409,7 @@ public class DisplayActivity extends Activity {
                 updateCpu(ps, lastTicks, lastNs);
                 logCefHelpers(ps);
                 updatePrep(ps);
+                checkBasePrefix(ps);
                 lastNs = System.nanoTime();
                 java.util.Map<Integer, Float> pct = cpuPct;
                 StringBuilder list = new StringBuilder();
@@ -1594,6 +1673,89 @@ public class DisplayActivity extends Activity {
         return i >= 0 ? pr.name.substring(0, i) : pr.name;
     }
 
+    // ---- progress card / 진행 카드 ----
+
+    private String lastUpdateStage;
+    private static final java.util.regex.Pattern UPDATE_DL =
+            java.util.regex.Pattern.compile("Downloading update \\((\\d+) of (\\d+) KB\\)");
+
+    /**
+     * Steam self-update progress line → card (unless a Steam window is already up); returns the
+     * stage name for such lines (used to log each stage once), null for other lines.
+     * Steam 자체 갱신 진행 줄 → 카드(Steam 창이 이미 떠 있으면 제외). 그런 줄이면 단계 이름을, 아니면 null을 돌려줌
+     * (단계마다 한 번만 기록하는 데 씀)
+     */
+    private String updateStage(String line, boolean replay) {
+        java.util.regex.Matcher m = UPDATE_DL.matcher(line);
+        if (m.find()) {
+            if (!replay && !steamWindowSeen) {
+                long got = Long.parseLong(m.group(1)), all = Long.parseLong(m.group(2));
+                int pct = all > 0 ? (int) (got * 100 / all) : -1;
+                showSetup("Steam 업데이트 받는 중", pct, String.format(Locale.ROOT, "%.0f / %.0f MB", got / 1024f, all / 1024f));
+            }
+            return "download";
+        }
+        if (line.contains("Installing update") || line.contains("Extracting package")) {
+            if (!replay && !steamWindowSeen) showSetup("Steam 업데이트 설치 중", -1, "받은 파일을 풀고 있음");
+            return "install";
+        }
+        if (line.contains("Verifying installation")) {
+            if (!replay && !steamWindowSeen) showSetup("Steam 파일 확인 중", -1, "");
+            return "verify";
+        }
+        if (line.contains("Set status message:") || line.matches("^\\[(----|\\s*\\d+%)\\].*")) return "status";
+        return null;
+    }
+
+    /** Session script lines that change the card (restart after an update) / 카드를 바꾸는 세션 스크립트 줄(갱신 뒤 재시작) */
+    private void onSessionLine(String line) {
+        if (line.startsWith("INFO steam : 종료 rc=42")) {
+            steamWindowSeen = false;
+            showSetup("Steam 업데이트 적용 중", -1, "Steam이 스스로 다시 시작함");
+        } else if (line.startsWith("INFO steam : 시작 ") && !line.startsWith("INFO steam : 시작 1 ")) {
+            steamWindowSeen = false;
+            showSetup("Steam 다시 시작 중", -1, "업데이트한 Steam을 엶");
+        }
+    }
+
+    /** Show the centre card; percent -1 = spinning bar / 가운데 카드 표시. percent -1 = 계속 도는 막대 */
+    private void showSetup(String title, int percent, String detail) {
+        runOnUiThread(() -> {
+            setupTitle.setText(title);
+            setupBar.setIndeterminate(percent < 0);
+            if (percent >= 0) setupBar.setProgress(percent);
+            setupDetail.setText(percent >= 0 ? percent + "%  ·  " + detail : detail);
+            setupPanel.setVisibility(View.VISIBLE);
+        });
+    }
+
+    private void hideSetup() {
+        runOnUiThread(() -> setupPanel.setVisibility(View.GONE));
+    }
+
+    /**
+     * Proton download progress from its install record (appmanifest_4628740.acf: BytesDownloaded /
+     * BytesToDownload while StateFlags is not 4), or -1 when not downloading.
+     * 설치 기록으로 본 Proton 다운로드 진행(appmanifest_4628740.acf: StateFlags가 4가 아닌 동안
+     * BytesDownloaded / BytesToDownload). 받는 중이 아니면 -1
+     */
+    private int protonDownloadPercent() {
+        GlibcLauncher.Config session = sessionConfig;
+        if (session == null) return -1;
+        String acf = readText(new File(session.rootfs, "home/steam/.local/share/Steam/steamapps/appmanifest_4628740.acf"));
+        if (acf.isEmpty()) return -1;
+        java.util.regex.Matcher st = java.util.regex.Pattern.compile("\"StateFlags\"\\s+\"(\\d+)\"").matcher(acf);
+        if (!st.find() || st.group(1).equals("4")) return -1;
+        java.util.regex.Matcher a = java.util.regex.Pattern.compile("\"BytesToDownload\"\\s+\"(\\d+)\"").matcher(acf);
+        java.util.regex.Matcher b = java.util.regex.Pattern.compile("\"BytesDownloaded\"\\s+\"(\\d+)\"").matcher(acf);
+        if (!a.find() || !b.find()) return 0;
+        long all = Long.parseLong(a.group(1)), got = Long.parseLong(b.group(1));
+        return all > 0 ? (int) Math.min(100, got * 100 / all) : 0;
+    }
+
+    /** Banner shown for the Proton download / Proton 다운로드용으로 띄운 안내 띠 */
+    private boolean protonBanner;
+
     // ---- first-run preparation banner / 첫 실행 준비 안내 띠 ----
 
     /** Set when Proton logs a new prefix (log thread) / Proton이 새 prefix를 기록하면 정함(로그 스레드) */
@@ -1609,7 +1771,7 @@ public class DisplayActivity extends Activity {
      * 번호가 클수록 구체적임(먼저 보여 줌)
      */
     private static final String[] PREP_NAMES = {
-            "설치 스크립트 확인", "Wine 환경(prefix) 만들기", "설치 프로그램(msiexec)", "DirectX 설치",
+            "설치 스크립트 확인", "Wine 환경 준비", "설치 프로그램(msiexec)", "DirectX 설치",
             "Visual C++ 런타임 설치", ".NET Framework 설치", "OpenAL 설치", "PhysX 설치", "XNA 설치",
             "Unreal 필수 구성 요소 설치"};
 
@@ -1661,6 +1823,24 @@ public class DisplayActivity extends Activity {
         String base = baseStage;
         if (base != null && now - baseStageMs > 20 * 60_000) baseStage = base = null;
         if (base != null && best < 2) best = Math.max(best, 1);
+        // Proton being downloaded after the first sign-in (step 1 of the game setup)
+        // 첫 로그인 뒤 Proton을 받는 중(게임 실행 환경 준비 1단계)
+        if (best < 0 && base == null && prepKind == null) {
+            int pct = protonDownloadPercent();
+            if (pct >= 0) {
+                protonBanner = true;
+                String t = "게임 실행 환경 준비 1/2: Proton 받는 중 " + pct + "%"
+                        + "\n처음 한 번만 함. 끝나면 2/2 기본 환경을 자동으로 준비함";
+                runOnUiThread(() -> {
+                    prepView.setText(t);
+                    prepBox.setVisibility(View.VISIBLE);
+                });
+                return;
+            } else if (protonBanner) {
+                protonBanner = false;
+                runOnUiThread(() -> prepBox.setVisibility(View.GONE));
+            }
+        }
         if (best >= 0) {
             String kind = base != null ? base : PREP_NAMES[best];
             if (prepKind == null) {
@@ -1685,13 +1865,21 @@ public class DisplayActivity extends Activity {
             // The install script alone also runs at every start (about 10 s): no "first start" wording then
             // 설치 스크립트만 도는 것은 매번 시작할 때도 있음(약 10초): 그때는 "첫 실행" 문구를 쓰지 않음
             if (best >= 1) prepFirstRun = true;
-            String text = (prepFirstRun ? "게임 첫 실행 준비 중: " : "게임 실행 준비 중: ") + kind
-                    + "\n경과 " + mmss(now - prepStartMs) + " · 하위 작업 " + prepNew + "개"
-                    + (best == 3 ? "\n측정 예: DirectX 설치 약 3분" : "")
-                    + (prepFirstRun ? "\n게임마다 처음 한 번만 하며, 끝나면 게임이 자동으로 시작됨" : "");
+            String text;
+            if (basePrepRunning) {
+                // Prepared ahead of time, no game waiting / 미리 준비 중, 기다리는 게임 없음
+                text = "게임 실행 환경 준비 2/2: " + kind + "\n경과 " + mmss(now - prepStartMs)
+                        + " · 하위 작업 " + prepNew + "개"
+                        + "\n처음 한 번만 함. 그동안 Steam은 쓸 수 있고, 새 게임 첫 실행은 끝날 때까지 기다림";
+            } else {
+                text = (prepFirstRun ? "게임 첫 실행 준비 중: " : "게임 실행 준비 중: ") + kind
+                        + "\n경과 " + mmss(now - prepStartMs) + " · 하위 작업 " + prepNew + "개"
+                        + (best == 3 ? "\n측정 예: DirectX 설치 약 3분" : "")
+                        + (prepFirstRun ? "\n게임마다 처음 한 번만 하며, 끝나면 게임이 자동으로 시작됨" : "");
+            }
             runOnUiThread(() -> {
                 prepView.setText(text);
-                prepView.setVisibility(View.VISIBLE);
+                prepBox.setVisibility(View.VISIBLE);
             });
         } else if (prepKind != null && now - prepLastSeenMs >= 6_000) {
             log("첫 실행 준비 끝: 총 " + mmss(prepLastSeenMs - prepStartMs) + ", 하위 작업 " + prepNew + "개 (마지막 단계 "
@@ -1700,7 +1888,7 @@ public class DisplayActivity extends Activity {
             prepNew = 0;
             prepFirstRun = false;
             prefixHintMs = 0;
-            runOnUiThread(() -> prepView.setVisibility(View.GONE));
+            runOnUiThread(() -> prepBox.setVisibility(View.GONE));
         }
     }
 
@@ -1718,7 +1906,9 @@ public class DisplayActivity extends Activity {
     private void baseStep(String line) {
         String l = line.toLowerCase(Locale.ROOT);
         String stage = baseStage;
-        if (l.contains("base build start") || l.contains("base rebuild")) stage = "기본 환경 만들기(한 번만)";
+        if (l.contains("base prepare start")) stage = "기본 환경 준비 시작";
+        else if (l.contains("base prepare done") || l.contains("base prepare: proton")) stage = null;
+        else if (l.contains("base build start") || l.contains("base rebuild")) stage = "기본 환경 만들기(한 번만)";
         else if (l.contains("base redist start")) {
             stage = l.contains("directx") ? "기본 환경: DirectX 설치(한 번만)"
                     : l.contains("vcredist") ? "기본 환경: Visual C++ 설치(한 번만)" : "기본 환경: 재배포 설치(한 번만)";
@@ -1740,6 +1930,182 @@ public class DisplayActivity extends Activity {
     private static String mmss(long ms) {
         long s = ms / 1000;
         return (s / 60) + "분 " + String.format(Locale.ROOT, "%02d", s % 60) + "초";
+    }
+
+    // ---- base prefix prepared ahead of time / 기본 prefix 미리 준비 ----
+
+    /** The Steam session's PRoot settings (for helper runs next to it) / Steam 세션의 PRoot 설정(옆에서 돌리는 보조 실행용) */
+    private volatile GlibcLauncher.Config sessionConfig;
+    private volatile boolean basePrepRunning;
+    private long baseCheckMs;
+    /** Proton version already asked about this session / 이번 세션에 이미 물어본 Proton 버전 */
+    private volatile String baseAskedFor;
+
+    /**
+     * Every 15 s while no game runs: prepares the base prefix (clean prefix + Steam's common
+     * redistributables, ezs-baseprefix.py) ahead of the first game start, so that start only copies
+     * it. Starts on its own when Proton is there and the base is missing, or when a finished game
+     * download brought new redistributables; asks first when Proton itself was updated (the base
+     * is made again, several minutes). Reads the rootfs files directly (no process).
+     * 게임이 돌지 않는 동안 15초마다: 게임 첫 시작 전에 기본 prefix(깨끗한 prefix + Steam 공용 재배포,
+     * ezs-baseprefix.py)를 준비해 첫 시작은 복사만 하게 함. Proton이 있고 기본 prefix가 없을 때, 또는
+     * 다 받은 게임 다운로드로 새 재배포가 생겼을 때 스스로 시작함. Proton 자체가 업데이트됐으면 먼저
+     * 물어봄(기본 prefix를 다시 만들며 몇 분 걸림). rootfs 파일을 직접 읽음(프로세스 없음)
+     */
+    private void checkBasePrefix(java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps) {
+        long now = SystemClock.elapsedRealtime();
+        if (now - baseCheckMs < 15_000) return;
+        baseCheckMs = now;
+        GlibcLauncher.Config session = sessionConfig;
+        if (basePrepRunning || session == null || gameOf(ps) != null || prepKind != null) return;
+        File steam = new File(session.rootfs, "home/steam/.local/share/Steam");
+        File proton = findProton(steam);
+        if (proton == null) return;
+        String version = readText(new File(proton, "version")).trim();
+        File base = new File(session.rootfs, "home/steam/.local/share/ezsteam/base-prefix");
+        org.json.JSONObject mark = null;
+        try {
+            String m = readText(new File(base, "ezs-base.json"));
+            if (!m.isEmpty()) mark = new org.json.JSONObject(m);
+        } catch (org.json.JSONException ignored) {
+            // Unreadable mark: treated as missing / 읽을 수 없는 표식: 없는 것으로 봄
+        }
+        if (mark == null || !new File(base, "version").isFile()) {
+            startBasePrepare("처음 준비 (Proton " + version + ")");
+            return;
+        }
+        String built = mark.optString("proton", "");
+        if (!built.equals(version)) {
+            if (!version.equals(baseAskedFor)) {
+                baseAskedFor = version;
+                askBaseRebuild(built, version);
+            }
+            return;
+        }
+        int fresh = newRedists(session, mark);
+        if (fresh > 0) startBasePrepare("새 재배포 " + fresh + "개");
+    }
+
+    /** Valve ARM64 Proton folder (same rule as compat/ezproton), or null / Valve ARM64 Proton 폴더(compat/ezproton과 같은 규칙) */
+    private static File findProton(File steam) {
+        File[] dirs = new File(steam, "steamapps/common").listFiles(File::isDirectory);
+        if (dirs == null) return null;
+        Arrays.sort(dirs);
+        File found = null;
+        for (File d : dirs) {
+            if (readText(new File(d, "toolmanifest.vdf")).contains("4185400") && new File(d, "proton").isFile()) found = d;
+        }
+        return found;
+    }
+
+    /** Whole small text file, or "" / 작은 글 파일 전체, 없으면 "" */
+    private static String readText(File f) {
+        try {
+            return new String(java.nio.file.Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
+        } catch (IOException | RuntimeException e) {
+            return "";
+        }
+    }
+
+    /**
+     * Install scripts of DirectX / Visual C++ in a fully downloaded Steamworks Shared that the base
+     * has not run yet (same choice and ids as ezs-baseprefix.py: "<path under _CommonRedist>#step").
+     * 다 받은 Steamworks Shared에서 기본 prefix가 아직 실행하지 않은 DirectX / Visual C++ 설치 스크립트 수
+     * (ezs-baseprefix.py와 같은 선택과 id: "<_CommonRedist 아래 경로>#단계")
+     */
+    private int newRedists(GlibcLauncher.Config session, org.json.JSONObject mark) {
+        java.util.Set<String> done = new java.util.HashSet<>();
+        for (String key : new String[]{"steps", "failed"}) {
+            org.json.JSONArray a = mark.optJSONArray(key);
+            for (int i = 0; a != null && i < a.length(); i++) {
+                String id = a.optString(i);
+                int h = id.indexOf('#');
+                done.add(h >= 0 ? id.substring(0, h) : id);
+            }
+        }
+        java.util.List<File> libs = new java.util.ArrayList<>();
+        libs.add(new File(session.rootfs, "home/steam/.local/share/Steam/steamapps"));
+        File shared = MainActivity.sharedLibrary(this) ? app.ezsteam.runtime.SharedStorage.steamLibrary(this) : null;
+        if (shared != null) libs.add(new File(shared, "steamapps"));
+        for (File lib : libs) {
+            File redist = new File(lib, "common/Steamworks Shared/_CommonRedist");
+            if (!redist.isDirectory()) continue;
+            // Only a finished download (StateFlags 4 or no record) / 다 받은 것만(StateFlags 4 또는 기록 없음)
+            String acf = readText(new File(lib, "appmanifest_228980.acf"));
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"StateFlags\"\\s+\"(\\d+)\"").matcher(acf);
+            if (m.find() && !m.group(1).equals("4")) return 0;
+            int n = 0;
+            File[] tops = redist.listFiles(File::isDirectory);
+            for (File top : tops == null ? new File[0] : tops) {
+                String t = top.getName().toLowerCase(Locale.ROOT);
+                if (!t.equals("directx") && !t.equals("vcredist")) continue;
+                File[] vers = top.listFiles(File::isDirectory);
+                for (File v : vers == null ? new File[0] : vers) {
+                    File[] fs = v.listFiles(f -> f.getName().equalsIgnoreCase("installscript.vdf"));
+                    for (File f : fs == null ? new File[0] : fs) {
+                        String rel = top.getName() + "/" + v.getName() + "/" + f.getName();
+                        if (!done.contains(rel)) n++;
+                    }
+                }
+            }
+            // The first library holding Steamworks Shared is the one ezs-baseprefix.py uses
+            // Steamworks Shared가 있는 첫 라이브러리를 ezs-baseprefix.py가 씀
+            return n;
+        }
+        return 0;
+    }
+
+    /** Proton was updated: ask before making the base again / Proton이 업데이트됨: 기본 prefix를 다시 만들기 전에 물어봄 */
+    private void askBaseRebuild(String from, String to) {
+        log("기본 환경: Proton 업데이트 감지 " + from + " → " + to);
+        runOnUiThread(() -> new android.app.AlertDialog.Builder(this)
+                .setTitle("Proton 업데이트")
+                .setMessage("Proton이 업데이트되었습니다.\n" + from + "\n→ " + to
+                        + "\n\n게임 첫 실행에 쓰는 기본 환경을 새 Proton으로 다시 만듭니다. 몇 분 걸리며, 그동안 새 게임의 "
+                        + "첫 실행은 끝날 때까지 기다립니다. 이미 실행한 게임은 영향이 없습니다.")
+                .setPositiveButton("지금 만들기", (d, w) -> startBasePrepare("Proton 업데이트"))
+                .setNegativeButton("나중에", (d, w) -> log("기본 환경: 다시 만들기 미룸 (새 게임 첫 실행 때 만들어짐)"))
+                .show());
+    }
+
+    /** Runs ezs-baseprefix.sh in a second PRoot with the session's settings / 세션 설정으로 두 번째 PRoot에서 ezs-baseprefix.sh 실행 */
+    private void startBasePrepare(String why) {
+        GlibcLauncher.Config session = sessionConfig;
+        if (session == null || basePrepRunning) return;
+        basePrepRunning = true;
+        new Thread(() -> {
+            try {
+                GlibcLauncher.Config c = new GlibcLauncher.Config();
+                c.rootfs = session.rootfs;
+                c.nativeLibDir = session.nativeLibDir;
+                c.dataDir = session.dataDir;
+                c.guestHome = session.guestHome;
+                c.display = session.display;
+                c.binds.addAll(session.binds);
+                c.link2symlink = session.link2symlink;
+                c.sysvipc = session.sysvipc;
+                c.changeId = session.changeId;
+                c.env.putAll(session.env);
+                log("기본 환경 준비 시작: " + why);
+                Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/ezs-baseprefix.sh",
+                        java.util.Collections.emptyList(), null, null);
+                try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+                    String l;
+                    while ((l = r.readLine()) != null) {
+                        if (l.contains("ezproton: base ")) {
+                            log("BASE " + l);
+                            baseStep(l);
+                        }
+                    }
+                }
+                log("기본 환경 준비 끝 exit=" + p.waitFor());
+            } catch (IOException | InterruptedException | RuntimeException e) {
+                log("기본 환경 준비 실패: " + e);
+            } finally {
+                baseStage = null;
+                basePrepRunning = false;
+            }
+        }, "ezs-base").start();
     }
 
     /** The game: largest .exe that is not a Wine helper, or null / 게임: Wine 보조가 아닌 가장 큰 .exe, 없으면 null */
