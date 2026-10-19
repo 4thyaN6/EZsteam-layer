@@ -1240,12 +1240,21 @@ public class DisplayActivity extends Activity {
             LogFollower proton = new LogFollower();
             boolean wsLogged = false;
             int tick = 0;
+            // The first read returns the whole old steam.log: its lines are shown but not taken as
+            // things happening now (an old "Upgrading prefix" line showed the banner, 2026-10-19)
+            // 첫 읽기는 예전 steam.log 전체를 돌려줌: 줄은 보여 주지만 지금 일어나는 일로 보지 않음
+            // (예전 "Upgrading prefix" 줄 때문에 안내 띠가 떴음, 2026-10-19)
+            boolean replay = true;
             while (!finishing) {
                 for (String line : steam.poll()) {
                     if (STEAM_KEY.matcher(line).find()) log("STEAM " + line);
-                    // Proton creates a new prefix: the first preparation step, before any installer
-                    // Proton이 새 prefix를 만듦: 설치 프로그램보다 앞선 첫 준비 단계
-                    if (line.contains("Upgrading prefix from None")) prefixHintMs = SystemClock.elapsedRealtime();
+                    if (!replay) {
+                        // Proton creates a new prefix: the first preparation step, before any installer
+                        // Proton이 새 prefix를 만듦: 설치 프로그램보다 앞선 첫 준비 단계
+                        if (line.contains("Upgrading prefix from None")) prefixHintMs = SystemClock.elapsedRealtime();
+                        // Base prefix steps (ezs-baseprefix.py) / 기본 prefix 단계(ezs-baseprefix.py)
+                        if (line.contains("ezproton: base ")) baseStep(line);
+                    }
                     // A game started with Valve's Proton directly goes through the Steam Linux Runtime
                     // container (pressure-vessel), which cannot start under PRoot (/proc/self/root
                     // missing, measured); the game then ends right away. EZ Proton skips the container.
@@ -1267,6 +1276,7 @@ public class DisplayActivity extends Activity {
                         }
                     }
                 }
+                replay = false;
                 // Every 2 s look for a newer Proton log / 2초마다 더 새 Proton 로그를 찾음
                 if (tick++ % 4 == 0) {
                     File[] fs = logDir.listFiles((d, name) -> name.startsWith("steam-") && name.endsWith(".log"));
@@ -1644,8 +1654,15 @@ public class DisplayActivity extends Activity {
         // 아무것도 돌지 않는데 안내 띠가 떴음(사용자 화면, 2026-10-19)
         long hint = prefixHintMs;
         if (hint != 0 && now - hint < 60_000 && best < 1 && wine) best = 1;
+        // Base prefix step named by ezs-baseprefix.py wins (it also runs installers itself);
+        // dropped after 20 minutes without news in case its end line was missed
+        // ezs-baseprefix.py가 알린 기본 prefix 단계가 우선(설치 프로그램도 직접 돌림). 끝 줄을
+        // 놓친 경우를 위해 20분 동안 소식이 없으면 버림
+        String base = baseStage;
+        if (base != null && now - baseStageMs > 20 * 60_000) baseStage = base = null;
+        if (base != null && best < 2) best = Math.max(best, 1);
         if (best >= 0) {
-            String kind = PREP_NAMES[best];
+            String kind = base != null ? base : PREP_NAMES[best];
             if (prepKind == null) {
                 prepStartMs = now;
                 prepKindStartMs = now;
@@ -1688,6 +1705,28 @@ public class DisplayActivity extends Activity {
     }
 
     private int prepNew;
+
+    /** Current base prefix step for the banner, or null / 안내 띠용 현재 기본 prefix 단계, 없으면 null */
+    private volatile String baseStage;
+    private volatile long baseStageMs;
+
+    /**
+     * Base prefix progress from ezs-baseprefix.py lines: building it (once), installing a common
+     * redistributable into it (once), copying it into the game.
+     * ezs-baseprefix.py 줄로 본 기본 prefix 진행: 만들기(한 번만), 공용 재배포 설치(한 번만), 게임으로 복사
+     */
+    private void baseStep(String line) {
+        String l = line.toLowerCase(Locale.ROOT);
+        String stage = baseStage;
+        if (l.contains("base build start") || l.contains("base rebuild")) stage = "기본 환경 만들기(한 번만)";
+        else if (l.contains("base redist start")) {
+            stage = l.contains("directx") ? "기본 환경: DirectX 설치(한 번만)"
+                    : l.contains("vcredist") ? "기본 환경: Visual C++ 설치(한 번만)" : "기본 환경: 재배포 설치(한 번만)";
+        } else if (l.contains("base copy start")) stage = "기본 환경을 게임으로 복사";
+        else if (l.contains("base copy done") || l.contains("base error") || l.contains("base build failed")) stage = null;
+        baseStage = stage;
+        baseStageMs = SystemClock.elapsedRealtime();
+    }
 
     /** Wine side process by kernel name (Windows programs, wineserver, preloader); names are cut
      *  to 15 characters, so ".ex" also counts / 커널 이름으로 본 Wine 쪽 프로세스(윈도우 프로그램,

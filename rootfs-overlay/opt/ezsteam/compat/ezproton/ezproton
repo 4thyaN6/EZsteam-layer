@@ -113,6 +113,23 @@ if [ -n "$EZS_APPID" ] && [ -s "$PROTON_LOG_DIR/steam-$EZS_APPID.log" ]; then
     done
 fi
 
+# New game prefix from the base prefix (clean Proton prefix + Steam's common redistributables,
+# made once; /opt/ezsteam/ezs-baseprefix.py): only while the game's prefix is not finished
+# (Proton writes "version" last). EZS_BASE_PREFIX=0 turns it off; any error leaves the prefix to
+# Proton as before
+# 기본 prefix로 새 게임 prefix 만들기(깨끗한 Proton prefix + Steam 공용 재배포, 한 번 만듦,
+# /opt/ezsteam/ezs-baseprefix.py): 게임 prefix가 완성되지 않았을 때만(Proton은 "version"을 마지막에 씀).
+# EZS_BASE_PREFIX=0이면 끔. 오류가 나면 지금처럼 Proton이 prefix를 만듦
+case "${1:-}" in
+    run|waitforexitandrun)
+        if [ -n "${STEAM_COMPAT_DATA_PATH:-}" ] && [ ! -f "$STEAM_COMPAT_DATA_PATH/version" ] \
+                && [ -f /opt/ezsteam/ezs-baseprefix.py ]; then
+            mkdir -p "$STEAM_COMPAT_DATA_PATH"
+            python3 /opt/ezsteam/ezs-baseprefix.py ensure "$STEAM_COMPAT_DATA_PATH" "$PROTON_DIR" || true
+        fi
+        ;;
+esac
+
 # Valve's script is "#!/usr/bin/env python3"; under PRoot it resolves to the rootfs python3
 # Valve 스크립트는 "#!/usr/bin/env python3"이며 PRoot 안에서는 rootfs의 python3로 실행됨
 echo "ezproton: $PROTON_DIR $*" >&2

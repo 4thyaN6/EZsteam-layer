@@ -414,6 +414,9 @@ static int trace_marker(const char *path)
 }
 
 static void lookup(const char *path, int kind);
+static void ui_changed(const char *path);
+/* Opening for writing changes the file / 쓰기용 열기는 파일을 바꿈 */
+#define OPEN_WRITES(flags) (((flags) & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC)) != 0)
 
 static int after_open(int fd, uint64_t t0)
 {
@@ -431,6 +434,7 @@ int open(const char *path, int flags, ...)
     REAL(open, int (*)(const char *, int, ...));
     if (trace_marker(path)) return -1;
     lookup(path, 2);
+    if (OPEN_WRITES(flags)) ui_changed(path);
     va_list ap; va_start(ap, flags); mode_t m = mode_arg(flags, ap); va_end(ap);
     uint64_t t0 = now_ns();
     return after_open(real_open(path, flags, m), t0);
@@ -441,6 +445,7 @@ int open64(const char *path, int flags, ...)
     REAL(open64, int (*)(const char *, int, ...));
     if (trace_marker(path)) return -1;
     lookup(path, 2);
+    if (OPEN_WRITES(flags)) ui_changed(path);
     va_list ap; va_start(ap, flags); mode_t m = mode_arg(flags, ap); va_end(ap);
     uint64_t t0 = now_ns();
     return after_open(real_open64(path, flags, m), t0);
@@ -451,6 +456,7 @@ int openat(int dir, const char *path, int flags, ...)
     REAL(openat, int (*)(int, const char *, int, ...));
     if (trace_marker(path)) return -1;
     lookup(path, 2);
+    if (OPEN_WRITES(flags)) ui_changed(path);
     va_list ap; va_start(ap, flags); mode_t m = mode_arg(flags, ap); va_end(ap);
     uint64_t t0 = now_ns();
     return after_open(real_openat(dir, path, flags, m), t0);
@@ -461,6 +467,7 @@ int openat64(int dir, const char *path, int flags, ...)
     REAL(openat64, int (*)(int, const char *, int, ...));
     if (trace_marker(path)) return -1;
     lookup(path, 2);
+    if (OPEN_WRITES(flags)) ui_changed(path);
     va_list ap; va_start(ap, flags); mode_t m = mode_arg(flags, ap); va_end(ap);
     uint64_t t0 = now_ns();
     return after_open(real_openat64(dir, path, flags, m), t0);
@@ -473,6 +480,7 @@ FILE *fopen(const char *path, const char *mode)
     REAL(fopen, FILE *(*)(const char *, const char *));
     if (trace_marker(path)) return NULL;
     lookup(path, 2);
+    if (mode && (mode[0] != 'r' || strchr(mode, '+'))) ui_changed(path);
     return real_fopen(path, mode);
 }
 
@@ -481,6 +489,7 @@ FILE *fopen64(const char *path, const char *mode)
     REAL(fopen64, FILE *(*)(const char *, const char *));
     if (trace_marker(path)) return NULL;
     lookup(path, 2);
+    if (mode && (mode[0] != 'r' || strchr(mode, '+'))) ui_changed(path);
     return real_fopen64(path, mode);
 }
 
@@ -752,6 +761,41 @@ static pthread_mutex_t uilock = PTHREAD_MUTEX_INITIALIZER;
 
 static int is_ui(const char *p) { return p && p[0] == '/' && strlen(p) < 200 && strstr(p, "/Steam/steamui/") != NULL; }
 
+/*
+ * When the Steam UI cache may answer. Not in the first 120 s of a process (the client bootstraps
+ * and updates itself then, writing steamui files and checking them right after), and not for
+ * 30 s after this process changed anything under steamui (then the table is also emptied).
+ * Steam 화면 파일 캐시가 답해도 되는 때. 프로세스 시작 후 120초 동안은 쓰지 않음(그때 클라이언트가 자체
+ * 설치·갱신을 하며 steamui 파일을 쓰고 바로 확인함). 이 프로세스가 steamui 아래를 바꾼 뒤 30초 동안도
+ * 쓰지 않음(그때 표도 비움)
+ */
+static uint64_t load_ns, ui_quiet_until, ui_delay_ns = 120000000000ull;
+__attribute__((constructor)) static void ezs_iostat_loaded(void)
+{
+    load_ns = now_ns();
+    // EZS_UI_CACHE_DELAY_SEC: start delay for tests (default 120) / 시험용 시작 지연(기본 120)
+    const char *d = getenv("EZS_UI_CACHE_DELAY_SEC");
+    if (d && *d) ui_delay_ns = (uint64_t)atoi(d) * 1000000000ull;
+}
+
+static int ui_cache_ok(void)
+{
+    uint64_t now = now_ns();
+    return now - load_ns >= ui_delay_ns && now >= __atomic_load_n(&ui_quiet_until, __ATOMIC_RELAXED);
+}
+
+/* A change under steamui: forget every cached answer and pause the cache
+ * steamui 아래 변경: 캐시한 답을 모두 버리고 캐시를 잠시 멈춤 */
+static void ui_changed(const char *path)
+{
+    if (!is_ui(path)) return;
+    __atomic_store_n(&ui_quiet_until, now_ns() + 30000000000ull, __ATOMIC_RELAXED);
+    pthread_mutex_lock(&uilock);
+    if (ui_tab) memset(ui_tab, 0, UI_SLOTS * sizeof(struct ui_t));
+    ui_n = 0;
+    pthread_mutex_unlock(&uilock);
+}
+
 /* Entry for a path, created if there is room; caller holds uilock / 경로의 항목(자리가 있으면 만듦). 호출한 쪽이 uilock을 잡고 있음 */
 static struct ui_t *ui_entry(const char *path)
 {
@@ -781,7 +825,7 @@ static struct ui_t *ui_entry(const char *path)
 /* access family with the udev answer cache / udev 답 재사용이 있는 access 계열 */
 #define ACCESS_CACHED(call)                                                    \
     do {                                                                       \
-        if (cache_on() && is_ui(path)) UI_ACCESS(call);                        \
+        if (cache_on() && is_ui(path) && ui_cache_ok()) UI_ACCESS(call);                        \
         if (cache_on() && is_udev_ctl(path)) {                                 \
             if (__atomic_load_n(&udev_missing, __ATOMIC_RELAXED)) {           \
                 if (on()) __atomic_add_fetch(&hit_udev, 1, __ATOMIC_RELAXED); \
@@ -802,7 +846,7 @@ static struct ui_t *ui_entry(const char *path)
 static int dev_stat(int dir, const char *path, struct stat *b, int flags)
 {
     REAL(fstatat, int (*)(int, const char *, struct stat *, int));
-    if (cache_on() && is_ui(path)) {
+    if (cache_on() && is_ui(path) && ui_cache_ok()) {
         // Steam UI file: 10 s cache, same flags only / Steam 화면 파일: 10초 캐시, 같은 flags일 때만
         uint64_t now = now_ns();
         pthread_mutex_lock(&uilock);
@@ -1083,4 +1127,72 @@ ssize_t readlink(const char *path, char *buf, size_t n)
     // classify()가 /proc/self/fd 링크를 직접 읽으므로 그것은 클라이언트 조회가 아님
     if (strncmp(path, "/proc/self/fd/", 14) != 0) lookup(path, 1);
     return real_readlink(path, buf, n);
+}
+
+/* ---- changes under steamui pause the Steam UI cache / steamui 아래 변경은 Steam 화면 파일 캐시를 멈춤 ---- */
+
+int rename(const char *from, const char *to)
+{
+    REAL(rename, int (*)(const char *, const char *));
+    ui_changed(from);
+    ui_changed(to);
+    return real_rename(from, to);
+}
+
+int renameat(int fd1, const char *from, int fd2, const char *to)
+{
+    REAL(renameat, int (*)(int, const char *, int, const char *));
+    ui_changed(from);
+    ui_changed(to);
+    return real_renameat(fd1, from, fd2, to);
+}
+
+int renameat2(int fd1, const char *from, int fd2, const char *to, unsigned int flags)
+{
+    REAL(renameat2, int (*)(int, const char *, int, const char *, unsigned int));
+    ui_changed(from);
+    ui_changed(to);
+    return real_renameat2(fd1, from, fd2, to, flags);
+}
+
+int unlink(const char *path)
+{
+    REAL(unlink, int (*)(const char *));
+    ui_changed(path);
+    return real_unlink(path);
+}
+
+int unlinkat(int fd, const char *path, int flags)
+{
+    REAL(unlinkat, int (*)(int, const char *, int));
+    ui_changed(path);
+    return real_unlinkat(fd, path, flags);
+}
+
+int mkdir(const char *path, mode_t mode)
+{
+    REAL(mkdir, int (*)(const char *, mode_t));
+    ui_changed(path);
+    return real_mkdir(path, mode);
+}
+
+int mkdirat(int fd, const char *path, mode_t mode)
+{
+    REAL(mkdirat, int (*)(int, const char *, mode_t));
+    ui_changed(path);
+    return real_mkdirat(fd, path, mode);
+}
+
+int rmdir(const char *path)
+{
+    REAL(rmdir, int (*)(const char *));
+    ui_changed(path);
+    return real_rmdir(path);
+}
+
+int truncate(const char *path, off_t len)
+{
+    REAL(truncate, int (*)(const char *, off_t));
+    ui_changed(path);
+    return real_truncate(path, len);
 }
