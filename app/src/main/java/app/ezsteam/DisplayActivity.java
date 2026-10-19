@@ -1977,6 +1977,13 @@ public class DisplayActivity extends Activity {
             zip.putNextEntry(new java.util.zip.ZipEntry("processes.txt"));
             zip.write(scrub.scrub(procs).getBytes(StandardCharsets.UTF_8));
             zip.closeEntry();
+            // Steam install script records in each game prefix (registry keys under Valve\Steam\Apps):
+            // shows where Steam records finished redistributables, to compare with the base prefix
+            // 게임 prefix마다 Steam 설치 스크립트 기록(Valve\Steam\Apps 아래 레지스트리 키): Steam이 끝난
+            // 재배포를 어디에 기록하는지 보여 줌. 기본 prefix와 비교하기 위함
+            zip.putNextEntry(new java.util.zip.ZipEntry("prefix-redist-keys.txt"));
+            zip.write(scrub.scrub(prefixRedistKeys(rootfs)).getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
             byte[] buf = new byte[1 << 16];
             for (File f : files) {
                 zip.putNextEntry(new java.util.zip.ZipEntry("logs/" + alias.getOrDefault(f, f.getName())));
@@ -2015,6 +2022,42 @@ public class DisplayActivity extends Activity {
         // a failure was logged inside and the caller still reported the file as saved
         // 실패는 호출한 쪽으로 넘김(호출한 쪽이 알리고 파일을 지우거나 다른 방법으로 저장함). 전에는 안에서
         // 실패를 기록만 하고 호출한 쪽은 저장됐다고 알렸음
+    }
+
+    /**
+     * Registry sections under "Valve\\Steam\\Apps" (and their values) of every prefix: game
+     * prefixes in compatdata and the base prefix. Small text; nothing personal in these keys.
+     * 모든 prefix(compatdata의 게임 prefix와 기본 prefix)의 "Valve\\Steam\\Apps" 아래 레지스트리 구역과
+     * 그 값. 작은 글이며 이 키에는 개인 정보가 없음
+     */
+    private static String prefixRedistKeys(File rootfs) {
+        StringBuilder sb = new StringBuilder();
+        java.util.List<File> regs = new java.util.ArrayList<>();
+        File[] pfxs = new File(rootfs, "home/steam/.local/share/Steam/steamapps/compatdata").listFiles(File::isDirectory);
+        for (File d : pfxs == null ? new File[0] : pfxs) regs.add(new File(d, "pfx/system.reg"));
+        regs.add(new File(rootfs, "home/steam/.local/share/ezsteam/base-prefix/pfx/system.reg"));
+        for (File reg : regs) {
+            if (!reg.isFile()) continue;
+            sb.append("== ").append(reg.getParentFile().getParentFile().getName())
+                    .append(new File(reg.getParentFile().getParentFile(), "version").isFile() ? " (완성)" : " (미완성)")
+                    .append('\n');
+            try (BufferedReader r = new BufferedReader(new java.io.InputStreamReader(
+                    new java.io.FileInputStream(reg), StandardCharsets.UTF_8))) {
+                String line;
+                boolean in = false;
+                int n = 0;
+                while ((line = r.readLine()) != null && n < 400) {
+                    if (line.startsWith("[")) in = line.toLowerCase(Locale.ROOT).contains("valve\\\\steam\\\\apps");
+                    if (in && !line.isEmpty()) {
+                        sb.append(line).append('\n');
+                        n++;
+                    }
+                }
+            } catch (IOException e) {
+                sb.append("읽기 실패: ").append(e).append('\n');
+            }
+        }
+        return sb.length() == 0 ? "prefix 없음\n" : sb.toString();
     }
 
     /**
