@@ -68,6 +68,8 @@ public class DisplayActivity extends Activity {
 
     private FramebufferView view;
     private TextView statsView, logView;
+    /** First-run preparation banner (installers running) / 첫 실행 준비 안내 띠(설치 프로그램 실행 중) */
+    private TextView prepView;
     /** Buttons, log and status strip / 버튼·로그·상태 띠 */
     private LinearLayout overlay;
     /** [≡] corner button shown while the overlay is hidden / 겹침 표시를 숨긴 동안 보이는 [≡] 모서리 버튼 */
@@ -235,6 +237,23 @@ public class DisplayActivity extends Activity {
         statsView.setBackgroundColor(0x99000000);
         statsView.setText(w + "x" + h + " 시작 중");
         root.addView(statsView, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START));
+
+        // First-run preparation banner, top centre, shown only while an installer runs; it takes
+        // no touches (they reach the screen below)
+        // 첫 실행 준비 안내 띠, 위쪽 가운데. 설치 프로그램이 도는 동안만 보임. 터치는 받지 않음(아래 화면으로 감)
+        prepView = new TextView(this);
+        prepView.setTextColor(Color.WHITE);
+        prepView.setTextSize(14);
+        prepView.setGravity(Gravity.CENTER);
+        prepView.setBackgroundColor(0xCC000000);
+        int prepPad = (int) (10 * getResources().getDisplayMetrics().density);
+        prepView.setPadding(prepPad * 2, prepPad, prepPad * 2, prepPad);
+        prepView.setClickable(false);
+        prepView.setFocusable(false);
+        prepView.setVisibility(View.GONE);
+        FrameLayout.LayoutParams prepLp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        prepLp.topMargin = (int) (56 * getResources().getDisplayMetrics().density);
+        root.addView(prepView, prepLp);
 
         // Corner button that brings the bar back after [숨김] / [숨김] 뒤에 막대를 되돌리는 모서리 버튼
         showButton = new Button(this);
@@ -1224,6 +1243,9 @@ public class DisplayActivity extends Activity {
             while (!finishing) {
                 for (String line : steam.poll()) {
                     if (STEAM_KEY.matcher(line).find()) log("STEAM " + line);
+                    // Proton creates a new prefix: the first preparation step, before any installer
+                    // Proton이 새 prefix를 만듦: 설치 프로그램보다 앞선 첫 준비 단계
+                    if (line.contains("Upgrading prefix from None")) prefixHintMs = SystemClock.elapsedRealtime();
                     // A game started with Valve's Proton directly goes through the Steam Linux Runtime
                     // container (pressure-vessel), which cannot start under PRoot (/proc/self/root
                     // missing, measured); the game then ends right away. EZ Proton skips the container.
@@ -1298,6 +1320,7 @@ public class DisplayActivity extends Activity {
                 procNow = ps.size();
                 updateCpu(ps, lastTicks, lastNs);
                 logCefHelpers(ps);
+                updatePrep(ps);
                 lastNs = System.nanoTime();
                 java.util.Map<Integer, Float> pct = cpuPct;
                 StringBuilder list = new StringBuilder();
@@ -1561,13 +1584,115 @@ public class DisplayActivity extends Activity {
         return i >= 0 ? pr.name.substring(0, i) : pr.name;
     }
 
+    // ---- first-run preparation banner / 첫 실행 준비 안내 띠 ----
+
+    /** Set when Proton logs a new prefix (log thread) / Proton이 새 prefix를 기록하면 정함(로그 스레드) */
+    private volatile long prefixHintMs;
+    private String prepKind;
+    private long prepStartMs, prepKindStartMs, prepLastSeenMs;
+    private final java.util.Set<Integer> prepPids = new java.util.HashSet<>();
+
+    /**
+     * Which preparation step a process belongs to, from its kernel name (lower case, cut to 15
+     * characters by the kernel), or null. Higher index = more specific (shown first).
+     * 커널 이름(소문자, 커널이 15자로 자름)으로 프로세스가 속한 준비 단계를 정함. 없으면 null.
+     * 번호가 클수록 구체적임(먼저 보여 줌)
+     */
+    private static final String[] PREP_NAMES = {
+            "설치 스크립트 확인", "Wine 환경(prefix) 만들기", "설치 프로그램(msiexec)", "DirectX 설치",
+            "Visual C++ 런타임 설치", ".NET Framework 설치", "OpenAL 설치", "PhysX 설치", "XNA 설치",
+            "Unreal 필수 구성 요소 설치"};
+
+    private static int prepIndexOf(String comm) {
+        String n = comm.toLowerCase(Locale.ROOT);
+        if (n.startsWith("ue4prereq") || n.startsWith("ueprereq")) return 9;
+        if (n.startsWith("xnafx")) return 8;
+        if (n.startsWith("physx")) return 7;
+        if (n.startsWith("oalinst")) return 6;
+        if (n.startsWith("dotnetfx") || n.startsWith("ndp4") || n.startsWith("dotnet")) return 5;
+        if (n.startsWith("vcredist") || n.startsWith("vc_redist")) return 4;
+        if (n.startsWith("dxsetup")) return 3;
+        if (n.startsWith("msiexec")) return 2;
+        if (n.startsWith("wineboot")) return 1;
+        if (n.startsWith("iscriptevaluat")) return 0;
+        return -1;
+    }
+
+    /**
+     * Shows what the first start of a game is doing while Steam's install script, Proton's prefix
+     * creation or a redistributable installer runs (DirectX alone took about 3 minutes with 101
+     * sub-processes, 2026-10-19), with elapsed time and a sub-task count so it does not look
+     * frozen; logs start, step changes and end. Monitor thread, every 2 s.
+     * 게임 첫 시작 때 Steam 설치 스크립트, Proton prefix 만들기, 재배포 패키지 설치가 도는 동안 무엇을 하는지
+     * 경과 시간·하위 작업 수와 함께 보여 줌(DirectX만 하위 프로세스 101개로 약 3분 걸렸음, 2026-10-19).
+     * 멈춘 것처럼 보이지 않게 함. 시작·단계 변경·끝을 기록함. 감시 스레드, 2초마다
+     */
+    private void updatePrep(java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps) {
+        long now = SystemClock.elapsedRealtime();
+        int best = -1;
+        for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) best = Math.max(best, prepIndexOf(exeName(pr)));
+        // A new prefix counts as its own step for up to 60 s until an installer shows up
+        // 새 prefix는 설치 프로그램이 보이기 전까지 최대 60초 동안 따로 한 단계로 셈
+        long hint = prefixHintMs;
+        if (hint != 0 && now - hint < 60_000 && best < 1) best = 1;
+        if (best >= 0) {
+            String kind = PREP_NAMES[best];
+            if (prepKind == null) {
+                prepStartMs = now;
+                prepKindStartMs = now;
+                prepPids.clear();
+                for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) prepPids.add(pr.pid);
+                prepPids.add(-1); // marker: the set holds the processes from before / 표식: 시작 전부터 있던 프로세스
+                log("첫 실행 준비: " + kind + " 시작");
+            } else if (!kind.equals(prepKind)) {
+                log("첫 실행 준비: " + prepKind + " → " + kind + " (" + mmss(now - prepKindStartMs) + ")");
+                prepKindStartMs = now;
+            }
+            prepKind = kind;
+            prepLastSeenMs = now;
+            // Processes started since the preparation began = sub-tasks / 준비 시작 뒤 생긴 프로세스 = 하위 작업
+            int before = prepPids.size();
+            for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) prepPids.add(pr.pid);
+            prepNew += prepPids.size() - before;
+            // The install script alone also runs at every start (about 10 s): no "first start" wording then
+            // 설치 스크립트만 도는 것은 매번 시작할 때도 있음(약 10초): 그때는 "첫 실행" 문구를 쓰지 않음
+            if (best >= 1) prepFirstRun = true;
+            String text = (prepFirstRun ? "게임 첫 실행 준비 중: " : "게임 실행 준비 중: ") + kind
+                    + "\n경과 " + mmss(now - prepStartMs) + " · 하위 작업 " + prepNew + "개"
+                    + (best == 3 ? "\n측정 예: DirectX 설치 약 3분" : "")
+                    + (prepFirstRun ? "\n게임마다 처음 한 번만 하며, 끝나면 게임이 자동으로 시작됨" : "");
+            runOnUiThread(() -> {
+                prepView.setText(text);
+                prepView.setVisibility(View.VISIBLE);
+            });
+        } else if (prepKind != null && now - prepLastSeenMs >= 6_000) {
+            log("첫 실행 준비 끝: 총 " + mmss(prepLastSeenMs - prepStartMs) + ", 하위 작업 " + prepNew + "개 (마지막 단계 "
+                    + prepKind + ")");
+            prepKind = null;
+            prepNew = 0;
+            prepFirstRun = false;
+            prefixHintMs = 0;
+            runOnUiThread(() -> prepView.setVisibility(View.GONE));
+        }
+    }
+
+    private int prepNew;
+    private boolean prepFirstRun;
+
+    private static String mmss(long ms) {
+        long s = ms / 1000;
+        return (s / 60) + "분 " + String.format(Locale.ROOT, "%02d", s % 60) + "초";
+    }
+
     /** The game: largest .exe that is not a Wine helper, or null / 게임: Wine 보조가 아닌 가장 큰 .exe, 없으면 null */
     private static app.ezsteam.runtime.ChildProcessCounter.Proc gameOf(
             java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps) {
         app.ezsteam.runtime.ChildProcessCounter.Proc game = null;
         for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
             String exe = exeName(pr).toLowerCase(Locale.ROOT);
-            if (exe.endsWith(".exe") && !WINE_HELPERS.contains(exe) && (game == null || pr.rssKb > game.rssKb)) {
+            // Installers of the first start are not the game / 첫 시작의 설치 프로그램은 게임이 아님
+            if (exe.endsWith(".exe") && !WINE_HELPERS.contains(exe) && prepIndexOf(exe) < 0
+                    && (game == null || pr.rssKb > game.rssKb)) {
                 game = pr;
             }
         }

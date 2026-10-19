@@ -1,8 +1,8 @@
 diff --git a/src/syscall/syscall.c b/src/syscall/syscall.c
-index f4c2f50..d218eff 100644
+index f4c2f50..b8bfb34 100644
 --- a/src/syscall/syscall.c
 +++ b/src/syscall/syscall.c
-@@ -32,6 +32,113 @@
+@@ -32,6 +32,226 @@
  #include "tracee/reg.h"
  #include "tracee/mem.h"
  #include "cli/note.h"
@@ -33,6 +33,116 @@ index f4c2f50..d218eff 100644
 +static char sysstat_exe[SYSSTAT_EXES][32];
 +static int sysstat_nexe;
 +static uint32_t sysstat_count[SYSSTAT_EXES][PR_NB_SYSNUM];
++
++/*
++ * Busiest paths: for path calls the guest path (digit runs -> '#') is counted with the program
++ * and the call, so short-lived programs (installers start a new process every second or so) are
++ * seen too; one more "PROOT_STAT 경로" line per summary.
++ * 가장 많은 경로: 경로 호출은 게스트 경로(숫자 묶음 -> '#')를 프로그램·호출과 함께 셈. 짧게 사는
++ * 프로그램(설치 프로그램은 1초쯤마다 새 프로세스를 띄움)도 보이게 함. 요약마다 "PROOT_STAT 경로" 줄 하나 추가
++ */
++#define SYSSTAT_PATHS 2048
++#define SYSSTAT_PATH_TOP 10
++struct sysstat_path { char key[200]; uint32_t n; };
++static struct sysstat_path *sysstat_paths;
++static int sysstat_npaths;
++static uint32_t sysstat_path_overflow;
++
++/* Guest path argument of a path call, or -1 / 경로 호출의 게스트 경로 인자 위치, 없으면 -1 */
++static int sysstat_path_arg(Sysnum n)
++{
++	switch (n) {
++	case PR_openat: case PR_fstatat64: case PR_newfstatat: case PR_faccessat:
++	case PR_faccessat2: case PR_readlinkat: case PR_statx: case PR_mkdirat:
++	case PR_unlinkat: case PR_fchmodat: case PR_fchownat: case PR_utimensat:
++		return 2;
++	case PR_open: case PR_stat: case PR_lstat: case PR_access: case PR_readlink:
++	case PR_getxattr: case PR_lgetxattr: case PR_statfs: case PR_chdir: case PR_execve:
++		return 1;
++	default:
++		return -1;
++	}
++}
++
++static void sysstat_count_path(const Tracee *tracee, Sysnum n, const char *exe)
++{
++	int arg = sysstat_path_arg(n);
++	char path[PATH_MAX];
++	char key[200];
++	size_t k = 0;
++
++	if (arg < 0)
++		return;
++	if (get_sysarg_path(tracee, path, arg == 1 ? SYSARG_1 : SYSARG_2) < 0)
++		return;
++	if (sysstat_paths == NULL) {
++		sysstat_paths = calloc(SYSSTAT_PATHS, sizeof(*sysstat_paths));
++		if (sysstat_paths == NULL)
++			return;
++	}
++	/* Key "program call path", digit runs folded / 키 "프로그램 호출 경로", 숫자 묶음은 접음 */
++	k = (size_t) snprintf(key, sizeof(key), "%s %s ", exe, stringify_sysnum(n));
++	if (k >= sizeof(key))
++		k = sizeof(key) - 1;
++	for (const char *c = path; *c != '\0' && k < sizeof(key) - 1; c++) {
++		if (*c >= '0' && *c <= '9') {
++			if (key[k - 1] != '#')
++				key[k++] = '#';
++		}
++		else
++			key[k++] = *c;
++	}
++	key[k] = '\0';
++
++	uint32_t h = 2166136261u;
++	for (size_t i = 0; i < k; i++)
++		h = (h ^ (unsigned char) key[i]) * 16777619u;
++	for (int probe = 0; probe < SYSSTAT_PATHS; probe++) {
++		struct sysstat_path *e = &sysstat_paths[(h + (uint32_t) probe) & (SYSSTAT_PATHS - 1)];
++		if (e->key[0] == '\0') {
++			if (sysstat_npaths >= SYSSTAT_PATHS * 7 / 8)
++				break;
++			memcpy(e->key, key, k + 1);
++			e->n = 1;
++			sysstat_npaths++;
++			return;
++		}
++		if (strcmp(e->key, key) == 0) {
++			e->n++;
++			return;
++		}
++	}
++	sysstat_path_overflow++;
++}
++
++/* Top paths as one line, then the table starts over / 상위 경로를 한 줄로 출력한 뒤 표를 새로 시작함 */
++static void sysstat_report_paths(void)
++{
++	char line[3072];
++	int len;
++
++	if (sysstat_paths == NULL || sysstat_npaths == 0)
++		return;
++	len = snprintf(line, sizeof(line), "PROOT_STAT 경로 %d개, 상위:", sysstat_npaths);
++	for (int r = 0; r < SYSSTAT_PATH_TOP && len < (int) sizeof(line) - 240; r++) {
++		struct sysstat_path *best = NULL;
++		for (int i = 0; i < SYSSTAT_PATHS; i++)
++			if (sysstat_paths[i].n > 0 && (best == NULL || sysstat_paths[i].n > best->n))
++				best = &sysstat_paths[i];
++		if (best == NULL)
++			break;
++		len += snprintf(line + len, sizeof(line) - (size_t) len, " %s %u;", best->key, best->n);
++		best->n = 0;
++	}
++	if (sysstat_path_overflow > 0 && len < (int) sizeof(line) - 40)
++		len += snprintf(line + len, sizeof(line) - (size_t) len, " 표 넘침 %u;", sysstat_path_overflow);
++	if (len > 0 && line[len - 1] == ';')
++		line[len - 1] = '\0';
++	fprintf(stderr, "%s\n", line);
++	memset(sysstat_paths, 0, SYSSTAT_PATHS * sizeof(*sysstat_paths));
++	sysstat_npaths = 0;
++	sysstat_path_overflow = 0;
++}
 +
 +static uint64_t sysstat_now(void)
 +{
@@ -88,6 +198,7 @@ index f4c2f50..d218eff 100644
 +		line[len - 1] = '\0';
 +	fprintf(stderr, "%s\n", line);
 +	memset(sysstat_count, 0, sizeof(sysstat_count));
++	sysstat_report_paths();
 +	/* Program names start over too, so short-lived programs at start-up do not fill the table
 +	 * 프로그램 이름도 새로 시작함. 시작 때 잠깐 도는 프로그램들이 표를 채우지 않게 함 */
 +	sysstat_nexe = 0;
@@ -106,7 +217,9 @@ index f4c2f50..d218eff 100644
 +	Sysnum n = get_sysnum(tracee, CURRENT);
 +	if ((int) n < 0 || n >= PR_NB_SYSNUM)
 +		n = PR_void;
-+	sysstat_count[sysstat_slot(tracee->exe)][n]++;
++	int slot = sysstat_slot(tracee->exe);
++	sysstat_count[slot][n]++;
++	sysstat_count_path(tracee, n, sysstat_exe[slot]);
 +	uint64_t now = sysstat_now();
 +	if (now - sysstat_last_ns >= (uint64_t) sysstat_sec * 1000000000ull) {
 +		sysstat_report(now - sysstat_last_ns);
@@ -116,7 +229,7 @@ index f4c2f50..d218eff 100644
  
  /**
   * Copy in @path a C string (PATH_MAX bytes max.) from the @tracee's
-@@ -151,6 +258,8 @@ void translate_syscall(Tracee *tracee)
+@@ -151,6 +371,8 @@ void translate_syscall(Tracee *tracee)
  	int suppressed_syscall_status = 0;
  
  	if (is_enter_stage) {

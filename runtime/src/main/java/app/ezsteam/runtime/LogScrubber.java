@@ -37,6 +37,9 @@ public final class LogScrubber {
     // ("Using JWT <숫자>")
     private static final Pattern STEAM_ID3 = Pattern.compile("\\[U:1:[1-9][0-9]*\\]");
     private static final Pattern JWT_ID = Pattern.compile("(Using JWT )[0-9]+");
+    /** Account folder number in Steam paths (userdata/<account id>/...), seen in file statistics
+     *  Steam 경로의 계정 폴더 번호(userdata/<계정 id>/...). 파일 통계 줄에 나옴 */
+    private static final Pattern USERDATA_ID = Pattern.compile("(userdata/)[0-9]+");
     // E-mail addresses / 이메일 주소
     private static final Pattern EMAIL = Pattern.compile("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}");
     // Names in the client's loginusers.vdf / 클라이언트 loginusers.vdf의 이름
@@ -87,6 +90,7 @@ public final class LogScrubber {
         out = STEAM_ID64.matcher(out).replaceAll("<steamid>");
         out = STEAM_ID3.matcher(out).replaceAll("[U:1:<id>]");
         out = JWT_ID.matcher(out).replaceAll("$1<id>");
+        out = USERDATA_ID.matcher(out).replaceAll("$1<id>");
         out = EMAIL.matcher(out).replaceAll("<email>");
         return out;
     }
