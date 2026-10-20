@@ -8,6 +8,7 @@
 #
 #   python3 ezs-baseprefix.py prepare [<Proton dir>]
 #   python3 ezs-baseprefix.py ensure <game compat data dir> <Proton dir>
+#   python3 ezs-baseprefix.py directx [<Proton dir>]
 #
 # prepare: started by the app ahead of time (ezs-baseprefix.sh), right after Steam has downloaded
 # Proton and after a game download brought new redistributables, so the work is done before the
@@ -38,15 +39,18 @@
 # Not included: game installers, game data, saves; .NET (large, few games) / 넣지 않는 것: 게임
 # 설치 프로그램, 게임 데이터, 세이브, .NET(크고 쓰는 게임이 적음)
 #
-# Two phases so games can start sooner (user request, 2026-10-20): the base is usable as soon as
-# the prefix and Visual C++ are in (about 1 minute); DirectX (about 3.5 minutes) is installed
-# afterwards on a staging copy and swapped in. Games whose prefix was copied before that get the
-# DirectX record at copy time (so Steam does not run DXSETUP at their start) and are listed in
-# dx-pending.txt; the same DirectX steps are run in them later while they are not running.
-# 게임을 더 빨리 시작하도록 두 단계로 나눔(사용자 요청, 2026-10-20): prefix와 Visual C++가 들어가면(약 1분)
-# 바로 쓸 수 있음. DirectX(약 3분 30초)는 그 뒤 준비용 복사본에 설치해 바꿔 넣음. 그 전에 prefix를
-# 복사한 게임은 복사할 때 DirectX 기록을 넣고(게임 시작 때 Steam이 DXSETUP을 돌리지 않게) dx-pending.txt에
-# 올림. 그 게임이 돌지 않을 때 같은 DirectX 단계를 나중에 실행함
+# DirectX is optional (user decision, 2026-10-21): by default only its install record (HasRunKey)
+# is written into the base, so Steam does not run DXSETUP at a game's first start and games use
+# Proton's own DirectX parts. "directx" mode (the app's [DirectX 설치]) installs it for real: on a
+# staging copy of the base that is swapped in (about 3.5 minutes), then in every existing game
+# prefix while that game is not running. A prefix that has it carries the file ezs-directx.
+# Which DLLs a game then loads (Microsoft's or Proton's) is chosen at start by compat/ezproton
+# (the app's "Native" option).
+# DirectX는 선택 사항(사용자 결정, 2026-10-21): 기본은 설치 기록(HasRunKey)만 기본 prefix에 써서 게임 첫
+# 시작 때 Steam이 DXSETUP을 돌리지 않고, 게임은 Proton 자체 DirectX 부품을 씀. "directx" 모드(앱의
+# [DirectX 설치])는 실제로 설치함: 기본 prefix의 준비용 복사본에 설치해 바꿔 넣고(약 3분 30초), 이미 있는
+# 게임 prefix마다 그 게임이 돌지 않을 때 설치함. 설치된 prefix에는 ezs-directx 파일이 있음. 그 뒤 게임이
+# 어느 DLL(Microsoft 것 또는 Proton 것)을 쓸지는 시작 때 compat/ezproton이 정함(앱의 "Native" 선택)
 #
 # Nothing of Microsoft or Valve is shipped with the app: the installers are the files Steam
 # downloaded to this device. / 앱에는 Microsoft·Valve 파일이 없음. 설치 프로그램은 Steam이 이 기기에
@@ -76,7 +80,16 @@ ONLY = {"directx", "vcredist"}
 # Installed in the background after the base is usable / 기본 prefix를 쓸 수 있게 된 뒤 백그라운드로 설치
 LATE = {"directx"}
 STAGE = BASE + ".dx"
-PENDING = os.path.join(os.path.dirname(BASE), "dx-pending.txt")
+# Asked for by [DirectX 설치]; stays, so a rebuilt base (new Proton) gets DirectX again
+# [DirectX 설치]로 요청됨. 계속 남아 다시 만든 기본 prefix(새 Proton)에도 DirectX를 다시 넣음
+WANTED = os.path.join(os.path.dirname(BASE), "directx-wanted")
+# In a prefix (and the base): DirectX really installed / prefix(와 기본 prefix) 안: DirectX가 실제로 설치됨
+DX_DONE = "ezs-directx"
+COMPATDATA = os.path.join(STEAM, "steamapps", "compatdata")
+
+
+def dx_wanted():
+    return os.path.isfile(WANTED)
 
 
 def say(msg):
@@ -464,21 +477,6 @@ def late_todo(mark):
             and s["id"] not in mark["steps"] and s["id"] not in mark.get("failed", [])]
 
 
-def read_pending():
-    try:
-        with open(PENDING, encoding="utf-8") as f:
-            return [l.strip() for l in f if l.strip()]
-    except OSError:
-        return []
-
-
-def write_pending(items):
-    tmp = PENDING + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write("".join(i + "\n" for i in items))
-    os.replace(tmp, PENDING)
-
-
 def prefix_lock(compat, blocking):
     """
     Per-game lock held while DirectX is added to that prefix; the game start (ensure) waits on it.
@@ -534,15 +532,45 @@ def bring_up_to_date(proton_dir):
             return None
         mark = read_mark()
     add_redists(proton_dir, mark, False)
+    mark_late(proton_dir, mark)
+    # A base that got DirectX in the background before it became optional: mark it as installed
+    # 선택 사항이 되기 전에 백그라운드로 DirectX를 받은 기본 prefix: 설치됨으로 표시
+    if any(i.split("/")[0].lower() in LATE for i in mark["steps"]) and not os.path.isfile(os.path.join(BASE, DX_DONE)):
+        open(os.path.join(BASE, DX_DONE), "w").close()
     return mark
 
 
-def locked():
-    """Exclusive lock on the base (one builder at a time; a game start waits for a running prepare)
-    기본 prefix의 단독 잠금(한 번에 하나만. 게임 시작은 돌고 있는 prepare를 기다림)"""
+def mark_late(proton_dir, mark):
+    """
+    DirectX not installed in the base: write only its install record, so Steam skips DXSETUP in
+    games copied from it (same record Steam writes after running it)
+    기본 prefix에 DirectX가 설치되지 않음: 설치 기록만 씀. 그래서 복사한 게임에서 Steam이 DXSETUP을
+    건너뜀(Steam이 실행 뒤 쓰는 것과 같은 기록)
+    """
+    todo = [s for s in late_todo(mark) if s["id"] not in mark.get("marked", [])]
+    if not todo:
+        return
+    if write_hasrun(proton_dir, BASE, [(s["hasrun"], s["name"]) for s in todo if s["hasrun"]]):
+        mark.setdefault("marked", []).extend(s["id"] for s in todo)
+        wait_server(proton_dir, BASE)
+        write_mark(mark)
+        say("directx: record only (%d step(s)), real install with [DirectX 설치]" % len(todo))
+
+
+def locked(waiting=None):
+    """Exclusive lock on the base (one builder at a time; a game start waits for a running prepare).
+    With waiting, that line is printed when the lock is taken by someone else (the app then tells
+    the user the game is being prepared)
+    기본 prefix의 단독 잠금(한 번에 하나만. 게임 시작은 돌고 있는 prepare를 기다림). waiting이 있으면 잠금을
+    다른 쪽이 잡고 있을 때 그 줄을 출력함(앱이 게임 준비 중이라고 알림)"""
     os.makedirs(os.path.dirname(BASE), exist_ok=True)
     lock = open(BASE + ".lock", "w")
-    fcntl.flock(lock, fcntl.LOCK_EX)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        if waiting:
+            say(waiting)
+        fcntl.flock(lock, fcntl.LOCK_EX)
     return lock
 
 
@@ -584,6 +612,7 @@ def late(proton_dir):
             os.replace(BASE, old)
             os.replace(STAGE, BASE)
             fix_paths(BASE, STAGE, False)
+            open(os.path.join(BASE, DX_DONE), "w").close()
             write_mark(mark)
             shutil.rmtree(old, ignore_errors=True)
         say("late done: base now has DirectX (%.0f s)" % (time.time() - t0))
@@ -591,30 +620,32 @@ def late(proton_dir):
 
 
 def backfill(proton_dir):
-    """DirectX into game prefixes copied before the base had it / 기본 prefix에 DirectX가 들기 전에 복사한 게임 prefix에 DirectX를 넣음"""
+    """
+    DirectX into every game prefix that does not have it yet, once the base has it; a game that
+    is running is left for a later run
+    기본 prefix에 DirectX가 들어간 뒤, 아직 없는 모든 게임 prefix에 넣음. 실행 중인 게임은 다음 실행으로 미룸
+    """
     mark = read_mark()
-    pending = read_pending()
-    if mark is None or not pending:
+    if mark is None or not os.path.isfile(os.path.join(BASE, DX_DONE)):
         return
     steps = [s for s in redist_steps() if is_late(s) and s["id"] in mark["steps"]]
-    left = []
-    for compat in pending:
-        if not os.path.isfile(os.path.join(compat, "version")):
-            continue
-        # DirectX failed in the base: nothing to add, the entry is dropped
-        # 기본 prefix에서 DirectX가 실패함: 더할 것이 없어 항목을 지움
-        if not steps:
-            continue
+    if not steps:
+        return
+    try:
+        games = sorted(os.path.join(COMPATDATA, n) for n in os.listdir(COMPATDATA))
+    except OSError:
+        games = []
+    games = [g for g in games if os.path.isfile(os.path.join(g, "version"))
+             and not os.path.isfile(os.path.join(g, DX_DONE))]
+    for i, compat in enumerate(games, 1):
         if prefix_busy(compat):
             say("backfill later (게임 실행 중): " + compat)
-            left.append(compat)
             continue
         lock = prefix_lock(compat, False)
         if lock is None:
-            left.append(compat)
             continue
         with lock:
-            say("backfill start: " + compat)
+            say("backfill start (%d/%d): %s" % (i, len(games), compat))
             t0 = time.time()
             ok = True
             for s in steps:
@@ -624,10 +655,9 @@ def backfill(proton_dir):
                         ok = False
                         break
             wait_server(proton_dir, compat)
-            # A failure is not retried: the game already runs without it (its record is there)
-            # 실패해도 다시 하지 않음: 게임은 이미 이것 없이 돎(기록은 있음)
+            if ok:
+                open(os.path.join(compat, DX_DONE), "w").close()
             say("backfill %s: %s (%.0f s)" % ("done" if ok else "failed", compat, time.time() - t0))
-    write_pending(left)
 
 
 def prepare(proton_dir):
@@ -640,24 +670,44 @@ def prepare(proton_dir):
         if mark is None:
             return 0
         say("prepare done: %d redist step(s) %s" % (len(mark["steps"]), ", ".join(mark["steps"]) or "-"))
+    if dx_wanted():
+        late(proton_dir)
+    return 0
+
+
+def directx(proton_dir):
+    """[DirectX 설치]: remember the choice, make the base current, install DirectX, add it to games
+    [DirectX 설치]: 선택을 기억하고 기본 prefix를 맞춘 뒤 DirectX를 설치하고 게임에 더함"""
+    if not proton_dir or not os.path.isfile(os.path.join(proton_dir, "proton")):
+        say("dx: Proton not installed yet (sign in to Steam first)")
+        return 0
+    os.makedirs(os.path.dirname(WANTED), exist_ok=True)
+    open(WANTED, "w").close()
+    with locked():
+        mark = bring_up_to_date(proton_dir)
+    if mark is None:
+        return 0
+    if not [s for s in redist_steps() if is_late(s)]:
+        say("dx: no DirectX installer yet (Steamworks Shared comes with the first game download)")
+        return 0
     late(proton_dir)
+    say("dx: finished")
     return 0
 
 
 def ensure(compat, proton_dir):
     # DirectX being added to this prefix in the background: wait for it
     # 이 prefix에 백그라운드로 DirectX를 넣는 중이면 기다림
-    if compat in read_pending():
-        lock = prefix_lock(compat, False)
-        if lock is None:
-            say("waiting: DirectX being added to this game")
-            lock = prefix_lock(compat, True)
-        lock.close()
+    lock = prefix_lock(compat, False)
+    if lock is None:
+        say("waiting: DirectX being added to this game")
+        lock = prefix_lock(compat, True)
+    lock.close()
     if os.path.isfile(os.path.join(compat, "version")):
         return 0
     if os.environ.get("EZS_BASE_PREFIX", "1") == "0":
         return 0
-    with locked():
+    with locked("waiting: game start waits for the base prefix"):
         if os.path.isfile(os.path.join(compat, "version")):
             return 0
         mark = bring_up_to_date(proton_dir)
@@ -665,28 +715,28 @@ def ensure(compat, proton_dir):
             return 0
         say("copy start: %d redist step(s) %s" % (len(mark["steps"]), ", ".join(mark["steps"]) or "-"))
         copy_into(compat)
-        # DirectX not in the base yet: record it as done for Steam now, add it later
-        # 기본 prefix에 아직 DirectX가 없음: Steam용 기록은 지금 쓰고, 설치는 나중에 함
-        todo = late_todo(mark)
+        # DirectX neither installed nor recorded in the base (a base from an older version):
+        # record it in the game now / 기본 prefix에 DirectX 설치도 기록도 없음(이전 버전의 기본
+        # prefix): 지금 게임에 기록함
+        todo = [s for s in late_todo(mark) if s["id"] not in mark.get("marked", [])]
         if todo:
             write_hasrun(proton_dir, compat, [(s["hasrun"], s["name"]) for s in todo if s["hasrun"]])
             wait_server(proton_dir, compat)
-            pending = read_pending()
-            if compat not in pending:
-                write_pending(pending + [compat])
-            say("copy: DirectX later in the background (%d step(s))" % len(todo))
+            say("copy: DirectX recorded (%d step(s))" % len(todo))
     return 0
 
 
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else ""
-    if not ((mode == "ensure" and len(sys.argv) == 4) or (mode == "prepare" and len(sys.argv) in (2, 3))):
-        print("usage: ezs-baseprefix.py prepare [<Proton dir>] | ensure <compat data dir> <Proton dir>",
+    if not ((mode == "ensure" and len(sys.argv) == 4) or (mode in ("prepare", "directx") and len(sys.argv) in (2, 3))):
+        print("usage: ezs-baseprefix.py prepare|directx [<Proton dir>] | ensure <compat data dir> <Proton dir>",
               file=sys.stderr)
         return 2
     try:
         if mode == "prepare":
             return prepare(sys.argv[2] if len(sys.argv) == 3 else find_proton())
+        if mode == "directx":
+            return directx(sys.argv[2] if len(sys.argv) == 3 else find_proton())
         return ensure(sys.argv[2], sys.argv[3])
     except Exception as e:  # never block the game: Proton makes the prefix itself then
         say("error, Proton makes the prefix itself: %r" % (e,))

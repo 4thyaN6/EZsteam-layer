@@ -2029,7 +2029,9 @@ public class DisplayActivity extends Activity {
         if (base != null && best < 2) best = Math.max(best, 1);
         // Proton being downloaded after the first sign-in (step 1 of the game setup)
         // 첫 로그인 뒤 Proton을 받는 중(게임 실행 환경 준비 1단계)
-        if (best < 0 && base == null && prepKind == null) {
+        // Proton download: no banner at Steam start (user request 2026-10-20); Steam's own download
+        // page shows it / Proton 받기: Steam 시작 때 안내 띠 없음(사용자 요청 2026-10-20). Steam 다운로드 화면에 보임
+        if (best < 0 && base == null && prepKind == null && SHOW_SETUP_BANNERS) {
             int pct = protonDownloadPercent();
             if (pct >= 0) {
                 protonBanner = true;
@@ -2051,6 +2053,17 @@ public class DisplayActivity extends Activity {
         boolean background = base != null && (base.equals(BG_DIRECTX) || base.equals(BG_BACKFILL));
         if (background && gameOf(ps) != null) {
             runOnUiThread(() -> prepBox.setVisibility(View.GONE));
+            return;
+        }
+        // Preparation ahead of time is shown only while a game start waits for it ("game being
+        // prepared"); otherwise it runs quietly (user request 2026-10-20)
+        // 미리 하는 준비는 게임 시작이 그것을 기다릴 때만 보여 줌("게임 준비 중"). 그 밖에는 조용히 돎
+        // (사용자 요청 2026-10-20)
+        if (basePrepRunning && !gameWaiting && !SHOW_SETUP_BANNERS) {
+            if (prepKind != null) {
+                prepKind = null;
+                runOnUiThread(() -> prepBox.setVisibility(View.GONE));
+            }
             return;
         }
         if (best >= 0) {
@@ -2078,7 +2091,9 @@ public class DisplayActivity extends Activity {
             // 설치 스크립트만 도는 것은 매번 시작할 때도 있음(약 10초): 그때는 "첫 실행" 문구를 쓰지 않음
             if (best >= 1) prepFirstRun = true;
             String text;
-            if (basePrepRunning && background) {
+            if (basePrepRunning && gameWaiting) {
+                text = "게임 준비 중: " + kind + " · " + mmss(now - prepStartMs) + "\n다음: 게임 시작";
+            } else if (basePrepRunning && background) {
                 // Games can start now / 이제 게임을 시작할 수 있음
                 text = "게임 실행 환경 준비 3/3: " + kind + " · " + mmss(now - prepKindStartMs)
                         + "\n게임은 지금 실행할 수 있음";
@@ -2108,7 +2123,14 @@ public class DisplayActivity extends Activity {
 
     private int prepNew;
 
+    /** A game start is waiting for the base prefix (only then the banner shows its steps)
+     *  게임 시작이 기본 prefix를 기다리는 중(그때만 안내 띠에 단계를 보여 줌) */
+    private volatile boolean gameWaiting;
+
     /** Background base steps (games can start meanwhile) / 백그라운드 기본 prefix 단계(그동안 게임 시작 가능) */
+    /** Show the setup steps (Proton download, base prefix) even with no game waiting; off
+     *  게임이 기다리지 않아도 준비 단계(Proton 받기, 기본 prefix)를 보여 줄지. 끔 */
+    private static final boolean SHOW_SETUP_BANNERS = false;
     private static final String BG_DIRECTX = "DirectX 설치(백그라운드)", BG_BACKFILL = "게임에 DirectX 추가(백그라운드)";
 
     /** Current base prefix step for the banner, or null / 안내 띠용 현재 기본 prefix 단계, 없으면 null */
@@ -2131,11 +2153,21 @@ public class DisplayActivity extends Activity {
                     : l.contains("vcredist") ? "기본 환경: Visual C++ 설치(한 번만)" : "기본 환경: 재배포 설치(한 번만)";
         } else if (l.contains("base late start")) stage = BG_DIRECTX;
         else if (l.contains("base backfill start")) stage = BG_BACKFILL;
-        else if (l.contains("base waiting: directx")) stage = "이 게임에 DirectX 추가가 끝날 때까지 기다림";
-        else if (l.contains("base copy start")) stage = "기본 환경을 게임으로 복사";
+        else if (l.contains("base waiting: directx")) {
+            stage = "이 게임에 DirectX 추가";
+            gameWaiting = true;
+        } else if (l.contains("base waiting: game start")) {
+            stage = "기본 환경";
+            gameWaiting = true;
+        }
+        else if (l.contains("base copy start")) {
+            stage = "기본 환경을 게임으로 복사";
+            gameWaiting = true;
+        }
         else if (l.contains("base copy done") || l.contains("base error") || l.contains("base build failed")
                 || l.contains("base late done") || l.contains("base late retry")
                 || l.contains("base backfill done") || l.contains("base backfill failed")) stage = null;
+        if (l.contains("base copy done") || l.contains("base error") || l.contains("base copy: directx later")) gameWaiting = false;
         baseStage = stage;
         baseStageMs = SystemClock.elapsedRealtime();
     }
@@ -2244,7 +2276,8 @@ public class DisplayActivity extends Activity {
      */
     private int newRedists(GlibcLauncher.Config session, org.json.JSONObject mark) {
         java.util.Set<String> done = new java.util.HashSet<>();
-        for (String key : new String[]{"steps", "failed"}) {
+        // "marked" = DirectX recorded without installing (optional install) / "marked" = 설치 없이 기록만 한 DirectX(선택 설치)
+        for (String key : new String[]{"steps", "failed", "marked"}) {
             org.json.JSONArray a = mark.optJSONArray(key);
             for (int i = 0; a != null && i < a.length(); i++) {
                 String id = a.optString(i);
@@ -2432,24 +2465,40 @@ public class DisplayActivity extends Activity {
             new Thread(() -> {
                 try {
                     File dir = app.ezsteam.runtime.SharedStorage.reports();
-                    app.ezsteam.runtime.SharedStorage.trimReports(dir, 5);
+                    java.util.List<String> gone = app.ezsteam.runtime.SharedStorage.trimReports(dir, 5);
                     File zip = new File(dir, app.ezsteam.runtime.SharedStorage.REPORT_PREFIX + stamp + ".zip");
-                    try (java.io.OutputStream os = new java.io.FileOutputStream(zip)) {
+                    // Written as ".part" and renamed when complete: a report copied to a computer
+                    // while still being written arrived cut off (8 KB, 2026-10-20)
+                    // ".part"로 쓰고 다 쓰면 이름을 바꿈: 쓰는 중에 컴퓨터로 복사한 제보가 잘린 채
+                    // 도착했음(8 KB, 2026-10-20)
+                    File part = new File(dir, zip.getName() + ".part");
+                    File[] stale = dir.listFiles((d, n) -> n.endsWith(".zip.part"));
+                    for (File f : stale == null ? new File[0] : stale) {
+                        //noinspection ResultOfMethodCallIgnored
+                        f.delete();
+                    }
+                    notice("로그 저장 중… (게임 폴더 검사 포함, 끝나면 알림)");
+                    try (java.io.OutputStream os = new java.io.FileOutputStream(part)) {
                         writeLogZip(os, appLog, procs);
                     } catch (IOException | RuntimeException e) {
                         // No half-written report left behind / 반쯤 쓴 제보 파일을 남기지 않음
                         //noinspection ResultOfMethodCallIgnored
-                        zip.delete();
+                        part.delete();
                         throw e;
                     }
+                    if (!part.renameTo(zip)) throw new IOException("이름 바꾸기 실패: " + part);
                     log("로그 저장 위치: " + zip.getAbsolutePath());
                     // Make the new file visible over USB (MTP) right away: a computer lists files from
                     // Android's media index, which did not know new reports yet (user report: the
                     // computer and the device showed different report files)
                     // USB(MTP)에서 새 파일이 바로 보이게 함: 컴퓨터는 안드로이드 미디어 목록으로 파일을 보는데,
                     // 그 목록이 새 제보를 아직 몰랐음(사용자 보고: 컴퓨터와 기기에서 보이는 제보 파일이 달랐음)
-                    android.media.MediaScannerConnection.scanFile(this, new String[]{zip.getAbsolutePath()},
-                            new String[]{"application/zip"}, null);
+                    // Removed old reports are scanned too, which takes them out of that list
+                    // 지운 옛 제보도 함께 검사해 그 목록에서 빠지게 함
+                    gone.add(0, zip.getAbsolutePath());
+                    android.media.MediaScannerConnection.scanFile(this, gone.toArray(new String[0]), null,
+                            (path, uri) -> log("미디어 목록 갱신: " + new File(path).getName()
+                                    + (uri != null ? "" : (new File(path).exists() ? " (등록 안 됨)" : " (지운 파일 제거)"))));
                     notice("로그 저장됨: Download/.EZlator/Reports/" + zip.getName());
                 } catch (IOException | RuntimeException e) {
                     log("공용 폴더 저장 실패, 파일 선택 창으로 저장: " + e);
@@ -2601,6 +2650,14 @@ public class DisplayActivity extends Activity {
             libs.add(new File(rootfs, "home/steam/.local/share/Steam/steamapps"));
             File shared = MainActivity.sharedLibrary(this) ? app.ezsteam.runtime.SharedStorage.steamLibrary(this) : null;
             if (shared != null) libs.add(new File(shared, "steamapps"));
+            // Which DLLs are Proton's (and for which CPU) or Microsoft's, and what games loaded
+            // 어느 DLL이 Proton 것(어느 CPU용)이고 어느 것이 Microsoft 것인지, 게임이 무엇을 불러왔는지
+            zip.putNextEntry(new java.util.zip.ZipEntry("dll-check.txt"));
+            zip.write(scrub.scrub(app.ezsteam.runtime.ReportScan.dllCheck(
+                    new File(rootfs, "home/steam/.local/share/Steam"),
+                    new File(rootfs, "home/steam/.local/share/ezsteam/base-prefix"),
+                    new File(rootfs, "home/steam/ezs-logs"))).getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
             zip.putNextEntry(new java.util.zip.ZipEntry("dx-usage.txt"));
             zip.write(scrub.scrub(app.ezsteam.runtime.ReportScan.dxUsage(libs)).getBytes(StandardCharsets.UTF_8));
             zip.closeEntry();

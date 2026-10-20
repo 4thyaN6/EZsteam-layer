@@ -17,6 +17,7 @@ import app.ezsteam.runtime.RootfsInstaller;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
@@ -75,6 +76,11 @@ public class MainActivity extends Activity {
         taskDetail.setTextSize(13);
         taskPanel.addView(taskDetail);
         root.addView(taskPanel);
+        // DirectX (optional): bold button under the start row, progress in place, then the
+        // "Native" choice with a (?) help (user design, 2026-10-21)
+        // DirectX(선택): 시작 줄 아래 굵은 버튼, 그 자리에서 진행 표시, 끝나면 "Native" 선택과 (?) 도움말
+        // (사용자 설계, 2026-10-21)
+        root.addView(buildDirectXRow());
         // One start button: installs whatever is missing first (with the progress panel), then
         // opens Steam; when everything is there it opens Steam at once (user request, 2026-10-20)
         // 시작 버튼 하나: 빠진 것이 있으면 먼저 설치하고(진행 패널 표시) Steam을 엶. 다 있으면 바로 엶
@@ -675,6 +681,191 @@ public class MainActivity extends Activity {
     /** Body of a background task / 백그라운드 작업 본체 */
     private interface Task {
         void run() throws Exception;
+    }
+
+    // ---- DirectX (optional) / DirectX(선택) ----
+
+    static final String KEY_DX_NATIVE = "dx.native";
+    private Button dxButton;
+    private android.widget.ProgressBar dxBar;
+    private TextView dxStatus;
+    private android.widget.CheckBox dxNative;
+    private android.widget.LinearLayout dxNativeBox;
+    private volatile boolean dxRunning;
+
+    /** DirectX files really installed in the base prefix / 기본 prefix에 DirectX가 실제로 설치됨 */
+    private boolean dxInstalled() {
+        return new File(RootfsInstaller.rootfsDir(this), "home/steam/.local/share/ezsteam/base-prefix/ezs-directx").isFile();
+    }
+
+    /** The file compat/ezproton reads for the Native choice / compat/ezproton이 Native 선택으로 읽는 파일 */
+    private File dxNativeFile() {
+        return new File(RootfsInstaller.rootfsDir(this), "home/steam/.local/share/ezsteam/dx-native");
+    }
+
+    private View buildDirectXRow() {
+        float dp = getResources().getDisplayMetrics().density;
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        row.setPadding(0, (int) (4 * dp), 0, (int) (4 * dp));
+        dxButton = new Button(this);
+        dxButton.setText("DirectX 설치");
+        dxButton.setTypeface(Typeface.DEFAULT_BOLD);
+        dxButton.setOnClickListener(v -> installDirectX());
+        row.addView(dxButton);
+        // Progress next to the button (no separate screen) / 버튼 옆 진행 표시(별도 화면 없음)
+        dxBar = new android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        dxBar.setIndeterminate(true);
+        dxBar.setVisibility(View.GONE);
+        LinearLayout.LayoutParams barLp = new LinearLayout.LayoutParams((int) (160 * dp), -2);
+        barLp.leftMargin = (int) (8 * dp);
+        row.addView(dxBar, barLp);
+        dxStatus = new TextView(this);
+        dxStatus.setPadding((int) (8 * dp), 0, 0, 0);
+        row.addView(dxStatus);
+        // After installing: Native choice + (?) / 설치 후: Native 선택 + (?)
+        dxNativeBox = new LinearLayout(this);
+        dxNativeBox.setOrientation(LinearLayout.HORIZONTAL);
+        dxNativeBox.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        dxNative = new android.widget.CheckBox(this);
+        dxNative.setText("Native 실행");
+        dxNative.setChecked(getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_DX_NATIVE, false));
+        dxNative.setOnCheckedChangeListener((b, on) -> setDxNative(on));
+        dxNativeBox.addView(dxNative);
+        TextView help = new TextView(this);
+        help.setText("?");
+        help.setTypeface(Typeface.DEFAULT_BOLD);
+        help.setGravity(android.view.Gravity.CENTER);
+        int hs = (int) (24 * dp);
+        android.graphics.drawable.GradientDrawable circle = new android.graphics.drawable.GradientDrawable();
+        circle.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+        circle.setStroke((int) (1.5f * dp), 0xFF888888);
+        help.setBackground(circle);
+        String tip = "켜면 [DirectX 설치]로 넣은 Microsoft DirectX 파일(d3dx9, XAudio2 2.7, XInput 1.3 등)을 씀. "
+                + "끄면 Proton에 들어 있는 같은 기능을 씀(기본). 오래된 일부 게임에서 소리·입력·화면이 이상할 때만 켜 보기. "
+                + "다음 게임 시작부터 적용";
+        // Hover or long press shows the short help; a tap shows it in a dialog
+        // 커서를 대거나 길게 누르면 짧은 도움말, 누르면 대화 상자로 보여 줌
+        help.setTooltipText(tip);
+        help.setOnClickListener(v -> new android.app.AlertDialog.Builder(this)
+                .setTitle("Native 실행").setMessage(tip).setPositiveButton("확인", null).show());
+        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(hs, hs);
+        hp.leftMargin = (int) (4 * dp);
+        dxNativeBox.addView(help, hp);
+        LinearLayout.LayoutParams nb = new LinearLayout.LayoutParams(-2, -2);
+        nb.leftMargin = (int) (12 * dp);
+        row.addView(dxNativeBox, nb);
+        refreshDirectXRow();
+        return row;
+    }
+
+    private void refreshDirectXRow() {
+        boolean done = dxInstalled();
+        dxButton.setEnabled(!dxRunning && !done);
+        dxButton.setText(done ? "DirectX 설치됨" : "DirectX 설치");
+        dxNativeBox.setVisibility(done ? View.VISIBLE : View.GONE);
+        if (done) setDxNative(dxNative.isChecked());
+    }
+
+    /** Save the choice and write or remove the file ezproton reads / 선택을 저장하고 ezproton이 읽는 파일을 쓰거나 지움 */
+    private void setDxNative(boolean on) {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_DX_NATIVE, on).apply();
+        File f = dxNativeFile();
+        try {
+            if (on) {
+                File d = f.getParentFile();
+                if (d != null && !d.isDirectory() && !d.mkdirs()) throw new IOException("폴더 없음");
+                if (!f.isFile() && !f.createNewFile()) throw new IOException("만들 수 없음");
+            } else if (f.isFile() && !f.delete()) {
+                throw new IOException("지울 수 없음");
+            }
+        } catch (IOException e) {
+            log("DirectX Native 설정 실패: " + e.getMessage());
+        }
+    }
+
+    /**
+     * [DirectX 설치]: runs ezs-baseprefix.sh directx in its own PRoot as the Steam user (Steam does
+     * not need to be open). Needs Proton (after the first Steam sign-in) and Steamworks Shared
+     * (comes with a game download). Progress stays next to the button.
+     * [DirectX 설치]: Steam 사용자로 별도 PRoot에서 ezs-baseprefix.sh directx를 돌림(Steam이 열려 있을
+     * 필요 없음). Proton(첫 Steam 로그인 뒤)과 Steamworks Shared(게임 다운로드와 함께 옴)가 필요함.
+     * 진행 표시는 버튼 옆에 둠
+     */
+    private void installDirectX() {
+        if (dxRunning) return;
+        if (!notReady().isEmpty()) {
+            dxStatus.setText("먼저 [Steam 시작]으로 설치");
+            return;
+        }
+        dxRunning = true;
+        dxButton.setEnabled(false);
+        dxBar.setVisibility(View.VISIBLE);
+        dxStatus.setText("준비 중");
+        long t0 = android.os.SystemClock.elapsedRealtime();
+        final String[] stage = {"준비 중"};
+        // Elapsed time every second / 1초마다 경과 시간
+        Runnable tick = new Runnable() {
+            @Override
+            public void run() {
+                if (!dxRunning) return;
+                long s = (android.os.SystemClock.elapsedRealtime() - t0) / 1000;
+                dxStatus.setText(stage[0] + String.format(java.util.Locale.ROOT, " · %d:%02d", s / 60, s % 60));
+                dxStatus.postDelayed(this, 1000);
+            }
+        };
+        dxStatus.post(tick);
+        new Thread(() -> {
+            String result = null;
+            try {
+                GlibcLauncher.Config c = config();
+                c.changeId = "1000:1000";
+                File sharedLib = sharedLibrary(this) ? app.ezsteam.runtime.SharedStorage.steamLibrary(this) : null;
+                if (sharedLib != null) {
+                    c.binds.add(new String[]{sharedLib.getAbsolutePath(), app.ezsteam.runtime.SharedStorage.GUEST_LIBRARY});
+                    c.env.put("EZS_SHARED_LIBRARY", app.ezsteam.runtime.SharedStorage.GUEST_LIBRARY);
+                }
+                log("== DirectX 설치");
+                Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/ezs-baseprefix.sh",
+                        java.util.Collections.singletonList("directx"), null, null);
+                try (java.io.BufferedReader r = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+                    String l;
+                    while ((l = r.readLine()) != null) {
+                        if (!l.contains("ezproton: base ")) continue;
+                        log(l);
+                        String m = l.substring(l.indexOf("ezproton: base ") + 15);
+                        if (m.startsWith("build start") || m.startsWith("rebuild")) stage[0] = "기본 환경 만드는 중";
+                        else if (m.startsWith("redist start") && m.toLowerCase(java.util.Locale.ROOT).contains("directx")) stage[0] = "DirectX 설치 중";
+                        else if (m.startsWith("redist start")) stage[0] = "Visual C++ 설치 중";
+                        else if (m.startsWith("backfill start")) {
+                            int a = m.indexOf('('), b = m.indexOf(')');
+                            stage[0] = "게임에 추가 " + (a >= 0 && b > a ? m.substring(a + 1, b) : "");
+                        } else if (m.startsWith("dx: proton not installed") || m.startsWith("dx: Proton not installed")) {
+                            result = "Steam에 로그인해 Proton을 받은 뒤 가능";
+                        } else if (m.startsWith("dx: no DirectX installer")) {
+                            result = "DirectX 설치 파일 없음 (게임을 하나 받으면 생김)";
+                        } else if (m.startsWith("redist failed") || m.startsWith("late retry") || m.startsWith("error")) {
+                            result = "실패 (로그 확인)";
+                        }
+                    }
+                }
+                int rc = p.waitFor();
+                log("DirectX 설치 끝 exit=" + rc);
+            } catch (IOException | InterruptedException | RuntimeException e) {
+                result = "실패: " + e.getMessage();
+                log("DirectX 설치 실패: " + e);
+            }
+            final String msg = result;
+            runOnUiThread(() -> {
+                dxRunning = false;
+                dxBar.setVisibility(View.GONE);
+                boolean done = dxInstalled();
+                dxStatus.setText(done ? "설치 완료" : (msg != null ? msg : "설치되지 않음 (로그 확인)"));
+                refreshDirectXRow();
+            });
+        }, "ezs-directx").start();
     }
 
     /** Progress panel views / 진행 패널 뷰 */

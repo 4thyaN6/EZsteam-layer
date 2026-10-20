@@ -73,15 +73,19 @@ public final class SharedStorage {
      * Remove this layer's oldest reports so that, with the one about to be written, at most keep
      * remain. Only files named ezsteam_report_*.zip.
      * 곧 쓸 하나를 포함해 최대 keep개만 남도록 이 레이어의 오래된 제보를 지움. ezsteam_report_*.zip만 대상
+     * Returns the removed paths, so the media index can drop them too (a computer over USB kept
+     * listing removed reports) / 지운 경로를 돌려줌. 미디어 목록에서도 빼기 위함(USB로 연결한 컴퓨터에
+     * 지운 제보가 계속 보였음)
      */
-    public static void trimReports(File dir, int keep) {
+    public static java.util.List<String> trimReports(File dir, int keep) {
+        java.util.List<String> gone = new java.util.ArrayList<>();
         File[] fs = dir.listFiles((d, n) -> n.startsWith(REPORT_PREFIX) && n.endsWith(".zip"));
-        if (fs == null || fs.length < keep) return;
+        if (fs == null || fs.length < keep) return gone;
         java.util.Arrays.sort(fs, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
         for (int i = keep - 1; i < fs.length; i++) {
-            //noinspection ResultOfMethodCallIgnored
-            fs[i].delete();
+            if (fs[i].delete()) gone.add(fs[i].getAbsolutePath());
         }
+        return gone;
     }
 
     /**

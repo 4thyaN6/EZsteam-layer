@@ -72,6 +72,23 @@ export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}tabtip.exe=d"
 # 소리는 ALSA로 냄(앱 플러그인, steam-run.sh 참고): 여기에는 없는 PulseAudio 서버를 Wine이 먼저
 # 찾지 않도록 PulseAudio 드라이버를 끔
 export WINEDLLOVERRIDES="$WINEDLLOVERRIDES;winepulse.drv=d"
+# DirectX June 2010 runtime DLLs: Proton's own (builtin) unless the app's "Native" option is on
+# (file ~/.local/share/ezsteam/dx-native written by the app, or EZS_DX_NATIVE=1). Once
+# [DirectX 설치] put Microsoft's files into the prefix, Wine would load those (as it did with
+# Visual C++: MSVCP140 "native", 2026-10-19). The user chooses; read at every start.
+# DirectX 2010년 6월 런타임 DLL: 앱의 "Native" 선택이 꺼져 있으면 Proton 자체(builtin)를 씀(앱이 쓰는
+# ~/.local/share/ezsteam/dx-native 파일 또는 EZS_DX_NATIVE=1). [DirectX 설치]로 Microsoft 파일이
+# prefix에 들어가면 Wine은 그것을 불러옴(Visual C++에서 MSVCP140이 "native"였던 것처럼, 2026-10-19).
+# 사용자가 고르며 시작할 때마다 읽음
+if [ "${EZS_DX_NATIVE:-0}" != 1 ] && [ ! -f "$HOME/.local/share/ezsteam/dx-native" ]; then
+    DXB=""
+    for v in 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43; do DXB="$DXB,d3dx9_$v"; done
+    for v in 33 34 35 36 37 38 39 40 41 42 43; do DXB="$DXB,d3dx10_$v,d3dcompiler_$v"; done
+    DXB="$DXB,d3dx10,d3dx11_42,d3dx11_43,xinput1_1,xinput1_2,xinput1_3"
+    for v in 0 1 2 3 4 5 6 7; do DXB="$DXB,xaudio2_$v,x3daudio1_$v,xactengine3_$v"; done
+    for v in 1 2 3 4 5; do DXB="$DXB,xapofx1_$v"; done
+    export WINEDLLOVERRIDES="$WINEDLLOVERRIDES;${DXB#,}=b"
+fi
 # Game controller: preload library that attaches a virtual Xbox 360 pad fed by the app (only acts
 # in winedevice.exe, the process running Wine's winebus; see native/ezspad/ezs_pad.c). Wine passes
 # LD_PRELOAD on to the processes it starts. Skipped when the file is missing

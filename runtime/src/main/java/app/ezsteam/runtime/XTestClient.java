@@ -48,6 +48,8 @@ public final class XTestClient implements Closeable {
     /** Atoms WM_STATE and _EZS_TIME (property used to read the X server time)
      *  아톰 WM_STATE와 _EZS_TIME(X 서버 시각을 읽는 데 쓰는 속성) */
     private final int atomWmState, atomTime;
+    /** Atoms _NET_WM_STATE and _NET_WM_STATE_FULLSCREEN / 아톰 _NET_WM_STATE, _NET_WM_STATE_FULLSCREEN */
+    private int atomNetState, atomFullscreen;
     /** Top-level windows given WM_STATE by this client / 이 클라이언트가 WM_STATE를 준 최상위 창 */
     private final java.util.Set<Integer> managed = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** Focus requests waiting for a server timestamp, in request order
@@ -158,12 +160,16 @@ public final class XTestClient implements Closeable {
             // 4b. WM_STATE, _EZS_TIME (sequences 5, 6) / 4b. WM_STATE, _EZS_TIME(순번 5, 6)
             int aState = internAtom(out, in, "WM_STATE");
             int aTime = internAtom(out, in, "_EZS_TIME");
+            // 4c. _NET_WM_STATE, _NET_WM_STATE_FULLSCREEN (sequences 7, 8), for windows asking for
+            //     full screen / 4c. 전체 화면을 요청하는 창용(순번 7, 8)
+            int aNet = internAtom(out, in, "_NET_WM_STATE");
+            int aFull = internAtom(out, in, "_NET_WM_STATE_FULLSCREEN");
 
-            // 5. Watch top-level windows appearing (SubstructureNotify on the root, sequence 7), so a
+            // 5. Watch top-level windows appearing (SubstructureNotify on the root, sequence 9), so a
             //    newly shown window gets the focus like under a window manager. Measured: a game
             //    window shown while the focus was still on the Steam window stayed black on its
             //    movie and took no keys until it was clicked.
-            // 5. 최상위 창이 나타나는 것을 지켜봄(루트에 SubstructureNotify, 순번 5). 창 관리자처럼 새로
+            // 5. 최상위 창이 나타나는 것을 지켜봄(루트에 SubstructureNotify, 순번 9). 창 관리자처럼 새로
             //    보인 창에 포커스를 주기 위함. 실측: 포커스가 Steam 창에 남은 채 뜬 게임 창이 동영상에서
             //    검은 화면으로 멈추고, 클릭하기 전까지 키를 받지 않았음
             ByteBuffer cw = le(16);
@@ -173,7 +179,9 @@ public final class XTestClient implements Closeable {
             out.write(cw.array());
             out.flush();
 
-            XTestClient c = new XTestClient(s, out, op, w, h, vendor, vmaj, vmin, rootWin, aProt, aTake, aState, aTime, 7);
+            XTestClient c = new XTestClient(s, out, op, w, h, vendor, vmaj, vmin, rootWin, aProt, aTake, aState, aTime, 9);
+            c.atomNetState = aNet;
+            c.atomFullscreen = aFull;
             c.log = log;
             c.startReader(in, log);
             return c;
@@ -300,6 +308,51 @@ public final class XTestClient implements Closeable {
         send(c.array(), null);
     }
 
+    /**
+     * New top-level window: its size goes to the log, and a window that asks for full screen
+     * (_NET_WM_STATE_FULLSCREEN, set before mapping as EWMH says) is given the whole screen, the
+     * way a window manager does; there is none here. Steam in Big Picture (-gamepadui) started,
+     * played its sound and showed nothing (2026-10-20); its window size was not known.
+     * 새 최상위 창: 크기를 로그에 남기고, 전체 화면을 요청한 창(_NET_WM_STATE_FULLSCREEN, EWMH대로 매핑 전에
+     * 둠)은 창 관리자처럼 화면 전체 크기로 맞춤(여기에는 창 관리자가 없음). 빅픽처(-gamepadui)의 Steam이
+     * 시작해 소리는 냈지만 아무것도 보이지 않았음(2026-10-20). 그 창 크기는 알 수 없었음
+     */
+    private void checkNewWindow(int win) {
+        // GetGeometry: depth byte 1, x 12, y 14, width 16, height 18
+        // GetGeometry: 깊이 1바이트째, x 12, y 14, 너비 16, 높이 18
+        ByteBuffer g = le(8);
+        g.put((byte) 14).put((byte) 0).putShort((short) 2).putInt(win);
+        send(g.array(), r -> {
+            ByteBuffer b = ByteBuffer.wrap(r).order(ByteOrder.LITTLE_ENDIAN);
+            int x = b.getShort(12), y = b.getShort(14), w = b.getShort(16) & 0xffff, h = b.getShort(18) & 0xffff;
+            Log l = log;
+            if (l != null) l.line(String.format(java.util.Locale.ROOT, "X 새 창 0x%x: %dx%d 위치 %d,%d 깊이 %d",
+                    win, w, h, x, y, r[1] & 0xff));
+        });
+        if (atomNetState == 0 || atomFullscreen == 0) return;
+        // GetProperty(win, _NET_WM_STATE, ATOM, offset 0, 32 values)
+        ByteBuffer q = le(24);
+        q.put((byte) 20).put((byte) 0).putShort((short) 6).putInt(win).putInt(atomNetState).putInt(4)
+                .putInt(0).putInt(32);
+        send(q.array(), r -> {
+            ByteBuffer b = ByteBuffer.wrap(r).order(ByteOrder.LITTLE_ENDIAN);
+            int n = b.getInt(16);
+            boolean full = false;
+            for (int i = 0; i < n && 32 + i * 4 + 4 <= r.length; i++) {
+                if (b.getInt(32 + i * 4) == atomFullscreen) full = true;
+            }
+            if (!full) return;
+            // ConfigureWindow x, y, width, height = the screen / ConfigureWindow x, y, 너비, 높이 = 화면
+            ByteBuffer c = le(28);
+            c.put((byte) 12).put((byte) 0).putShort((short) 7).putInt(win).putShort((short) 0xF).putShort((short) 0)
+                    .putInt(0).putInt(0).putInt(screenWidth).putInt(screenHeight);
+            send(c.array(), null);
+            Log l = log;
+            if (l != null) l.line(String.format(java.util.Locale.ROOT, "X 창 0x%x 전체 화면 요청 → %dx%d로 맞춤",
+                    win, screenWidth, screenHeight));
+        });
+    }
+
     /** SetInputFocus(window, RevertToParent, time) + ClientMessage WM_PROTOCOLS/WM_TAKE_FOCUS(time)
      *  SetInputFocus(창, RevertToParent, 시각) + 그 창에 ClientMessage WM_PROTOCOLS/WM_TAKE_FOCUS(시각) */
     private void giveFocus(int window, int time) {
@@ -387,9 +440,18 @@ public final class XTestClient implements Closeable {
                         if (log != null && !benign) log.line("X error code=" + (p[1] & 0xff) + " major=" + major
                                 + " minor=" + (pb.getShort(8) & 0xffff));
                     } else if (p[0] == 1) {
-                        skip(in, pb.getInt(4) * 4);
+                        // Reply: the handler gets the 32 bytes plus any extra data (GetProperty values)
+                        // 응답: 처리기는 32바이트와 추가 데이터(GetProperty 값)를 함께 받음
+                        int extra = pb.getInt(4) * 4;
                         Consumer<byte[]> h = pending.remove(sq);
-                        if (h != null) h.accept(p);
+                        if (h != null) {
+                            byte[] full = new byte[32 + extra];
+                            System.arraycopy(p, 0, full, 0, 32);
+                            in.readFully(full, 32, extra);
+                            h.accept(full);
+                        } else {
+                            skip(in, extra);
+                        }
                     } else if ((p[0] & 0x7f) == 35) {
                         skip(in, pb.getInt(4) * 4);
                     } else if ((p[0] & 0x7f) == 19) {
@@ -401,6 +463,7 @@ public final class XTestClient implements Closeable {
                             managed.add(win);
                             setWmState(win, 1);
                             focused = win;
+                            checkNewWindow(win);
                             // After WM_STATE (Wine accepts focus only once it has seen it), and again
                             // later in case the program was still showing the window; skipped when the
                             // focus has moved on meanwhile

@@ -287,9 +287,20 @@ while :; do
     [ "${EZS_STEAM_GPU:-0}" = 1 ] && GPUARG=
     # Big Picture (the controller-friendly full screen UI) when the app asks for it
     # 앱이 요청하면 빅픽처(컨트롤러용 전체 화면 UI)로 시작
+    # Only once an account signs in by itself (remembered sign-in, AllowAutoLogin "1" in
+    # config/loginusers.vdf): before that the normal window opens for the first sign-in, because
+    # Big Picture without a signed-in account was of no use (user report 2026-10-20)
+    # 계정이 스스로 로그인할 수 있을 때만(로그인 기억, config/loginusers.vdf의 AllowAutoLogin "1"). 그
+    # 전에는 첫 로그인을 위해 일반 창을 엶. 로그인된 계정 없이 빅픽처로는 쓸 수 없었음(사용자 보고 2026-10-20)
     BPARG=
-    [ "${EZS_STEAM_BIGPICTURE:-0}" = 1 ] && BPARG=-gamepadui
-    echo "INFO steam : 시작 $n ($(date +%H:%M:%S)) 화면 GPU=${EZS_STEAM_GPU:-0} 빅픽처=${EZS_STEAM_BIGPICTURE:-0}"
+    if [ "${EZS_STEAM_BIGPICTURE:-0}" = 1 ]; then
+        if grep -Eq '"AllowAutoLogin"[[:space:]]+"1"' "$STEAM_DIR/config/loginusers.vdf" 2>/dev/null; then
+            BPARG=-gamepadui
+        else
+            echo "INFO steam : 빅픽처는 첫 로그인 뒤부터 (로그인 기억 계정 없음, 이번에는 일반 창)"
+        fi
+    fi
+    echo "INFO steam : 시작 $n ($(date +%H:%M:%S)) 화면 GPU=${EZS_STEAM_GPU:-0} 빅픽처=$([ -n "$BPARG" ] && echo 1 || echo 0)"
     LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_CLIENT_PRELOAD" \
         "$BIN" -no-cef-sandbox $GPUARG $BPARG -chromeosnopreallocate $VERIFY ${EZS_STEAM_EXTRA:-} >>"$LOG" 2>&1
     rc=$?

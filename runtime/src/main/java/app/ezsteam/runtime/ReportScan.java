@@ -249,4 +249,127 @@ public final class ReportScan {
             while (m.find()) named.add(m.group(1).toLowerCase(Locale.ROOT) + ".dll");
         }
     }
+
+    // ---- which DLLs are whose, and what games loaded / 어느 DLL이 누구 것이고 게임이 무엇을 불러왔는지 ----
+
+    /** DLLs checked: DirectX 2010 parts, Windows 10 ones, Visual C++, Direct3D
+     *  확인하는 DLL: DirectX 2010 부품, Windows 10 기본 것, Visual C++, Direct3D */
+    private static final String[] CHECK = {"d3dx9_43.dll", "xinput1_3.dll", "xaudio2_7.dll", "d3dcompiler_43.dll",
+            "xinput1_4.dll", "xaudio2_9.dll", "msvcp140.dll", "vcruntime140.dll", "d3d11.dll", "dxgi.dll"};
+
+    /**
+     * CPU of a Windows DLL file from its PE header, and whether it is Wine's own (builtin or
+     * placeholder text in the DOS stub area): checks that Proton's parts are built for ARM and
+     * that DXSETUP/Visual C++ files are Microsoft's x86 code (run through FEX)
+     * PE 헤더로 본 Windows DLL 파일의 CPU와 Wine 자체 파일인지(DOS 스텁 자리의 builtin/placeholder 글).
+     * Proton 부품이 ARM용인지, DXSETUP/Visual C++ 파일이 Microsoft x86 코드(FEX로 실행)인지 확인함
+     */
+    static String peInfo(File f) {
+        byte[] b = new byte[4096];
+        int n;
+        try (InputStream in = new java.io.FileInputStream(f)) {
+            n = in.read(b);
+        } catch (IOException e) {
+            return "읽기 실패";
+        }
+        if (n < 0x40 || b[0] != 'M' || b[1] != 'Z') return "PE 아님 (" + f.length() + " B)";
+        String head = new String(b, 0, Math.min(n, 512), java.nio.charset.StandardCharsets.ISO_8859_1);
+        String who = head.contains("Wine builtin DLL") ? "Wine builtin" : head.contains("Wine placeholder DLL") ? "Wine 자리표시" : "Wine 아님";
+        int pe = (b[0x3c] & 0xff) | (b[0x3d] & 0xff) << 8 | (b[0x3e] & 0xff) << 16;
+        if (pe <= 0 || pe + 6 > n) return who;
+        int m = (b[pe + 4] & 0xff) | (b[pe + 5] & 0xff) << 8;
+        String cpu;
+        switch (m) {
+            case 0x14c: cpu = "x86"; break;
+            case 0x8664: cpu = "x86-64"; break;
+            case 0xaa64: cpu = "ARM64"; break;
+            case 0xa641: cpu = "ARM64EC"; break;
+            case 0xa64e: cpu = "ARM64X"; break;
+            default: cpu = String.format(Locale.ROOT, "0x%x", m);
+        }
+        return cpu + ", " + who + ", " + f.length() + " B";
+    }
+
+    private static File find(File dir, String name) {
+        File[] fs = dir.listFiles();
+        if (fs == null) return null;
+        for (File f : fs) if (f.getName().equalsIgnoreCase(name)) return f;
+        return null;
+    }
+
+    private static void dllTable(StringBuilder out, String title, File dir) {
+        if (!dir.isDirectory()) return;
+        out.append("\n## ").append(title).append("  (").append(dir).append(")\n");
+        for (String d : CHECK) {
+            File f = find(dir, d);
+            out.append("  ").append(String.format(Locale.ROOT, "%-20s", d)).append(f == null ? "없음" : peInfo(f)).append('\n');
+        }
+    }
+
+    private static final Pattern LOADDLL = Pattern.compile(
+            "trace:loaddll:\\S+ Loaded L\"([^\"]+)\" at \\S+: (native|builtin)", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * DLL check report: Proton's DLL folders, the base prefix and up to 4 game prefixes (CPU and
+     * owner of each checked DLL), then per Proton log which of them were loaded native or builtin
+     * DLL 확인 제보: Proton DLL 폴더, 기본 prefix, 게임 prefix 최대 4개(확인 DLL마다 CPU와 출처), 이어서
+     * Proton 로그마다 그중 무엇을 native/builtin으로 불러왔는지
+     */
+    public static String dllCheck(File steam, File baseprefix, File logDir) {
+        StringBuilder out = new StringBuilder("# DLL 확인 (Proton 부품의 CPU, Microsoft 파일 여부, 게임이 실제로 불러온 것)\n");
+        File[] commons = new File(steam, "steamapps/common").listFiles(File::isDirectory);
+        for (File c : commons == null ? new File[0] : commons) {
+            if (!new File(c, "proton").isFile()) continue;
+            File wine = new File(c, "files/lib/wine");
+            File[] arch = wine.listFiles(File::isDirectory);
+            out.append("\n# ").append(c.getName()).append(": files/lib/wine 아래 ");
+            if (arch != null) {
+                Arrays.sort(arch);
+                for (File a : arch) out.append(a.getName()).append(' ');
+            }
+            out.append('\n');
+            for (File a : arch == null ? new File[0] : arch) {
+                if (a.getName().endsWith("-windows")) dllTable(out, c.getName() + " " + a.getName(), a);
+            }
+        }
+        dllTable(out, "기본 prefix system32", new File(baseprefix, "pfx/drive_c/windows/system32"));
+        dllTable(out, "기본 prefix syswow64", new File(baseprefix, "pfx/drive_c/windows/syswow64"));
+        File[] games = new File(steam, "steamapps/compatdata").listFiles(File::isDirectory);
+        if (games != null) {
+            Arrays.sort(games, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+            for (int i = 0; i < Math.min(4, games.length); i++) {
+                String tag = games[i].getName() + (new File(games[i], "ezs-directx").isFile() ? " (DirectX 설치됨)" : "");
+                dllTable(out, "게임 " + tag + " system32", new File(games[i], "pfx/drive_c/windows/system32"));
+                dllTable(out, "게임 " + tag + " syswow64", new File(games[i], "pfx/drive_c/windows/syswow64"));
+            }
+        }
+        out.append("\n# Proton 로그에서 불러온 것 (native = prefix 안 파일, builtin = Proton 자체)\n");
+        File[] logs = logDir.listFiles((d, nm) -> nm.endsWith(".log") && nm.contains("steam-"));
+        if (logs != null) {
+            Arrays.sort(logs, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+            Set<String> want = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+            want.addAll(Arrays.asList(CHECK));
+            for (File lf : logs) {
+                Set<String> seen = new TreeSet<>();
+                try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(lf))) {
+                    String line;
+                    while ((line = r.readLine()) != null) {
+                        if (!line.contains("loaddll")) continue;
+                        Matcher m = LOADDLL.matcher(line);
+                        if (!m.find()) continue;
+                        String path = m.group(1).replace("\\\\", "\\");
+                        String nm = path.substring(path.lastIndexOf('\\') + 1);
+                        if (want.contains(nm) || DX2010.matcher(nm.toLowerCase(Locale.ROOT)).matches()) {
+                            seen.add(nm.toLowerCase(Locale.ROOT) + " " + m.group(2).toLowerCase(Locale.ROOT)
+                                    + (path.toLowerCase(Locale.ROOT).contains("\\windows\\") ? "" : " (게임 폴더)"));
+                        }
+                    }
+                } catch (IOException e) {
+                    continue;
+                }
+                out.append(lf.getName()).append(": ").append(seen.isEmpty() ? "해당 DLL 없음" : String.join(", ", seen)).append('\n');
+            }
+        }
+        return out.toString();
+    }
 }

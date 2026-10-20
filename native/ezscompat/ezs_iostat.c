@@ -199,7 +199,7 @@ static void path_add(int fd, uint64_t bytes)
 static void report(uint64_t t);
 static int build_lookups(char *out, size_t size);
 /* Same-answer cache use, inotify results (see the cache section below) / 같은 답 재사용 횟수, inotify 결과(아래 캐시 부분 참고) */
-static uint64_t hit_udev, hit_dev, hit_uevent, uevent_ok, hit_ui;
+static uint64_t hit_udev, hit_dev, hit_uevent, uevent_ok, hit_ui, hit_usb;
 static char ino_fail_path[160];
 static int ui_n;              /* Steam UI cache entries / Steam 화면 파일 캐시 항목 수 */
 static int uevent_errno;          /* errno of the refused socket, 0 = none / 거부된 소켓의 errno, 0 = 없음 */
@@ -343,6 +343,8 @@ static void report(uint64_t span)
         uint64_t he = __atomic_exchange_n(&hit_uevent, 0, __ATOMIC_RELAXED);
         uint64_t uo = __atomic_exchange_n(&uevent_ok, 0, __ATOMIC_RELAXED);
         uint64_t hui = __atomic_exchange_n(&hit_ui, 0, __ATOMIC_RELAXED);
+        uint64_t hus = __atomic_exchange_n(&hit_usb, 0, __ATOMIC_RELAXED);
+        if (hus) fprintf(stderr, "ezs-io: libusb 불러오기 거절 %llu회\n", (unsigned long long)hus);
         uint64_t io = __atomic_exchange_n(&ino_init_ok, 0, __ATOMIC_RELAXED);
         uint64_t ifl = __atomic_exchange_n(&ino_init_fail, 0, __ATOMIC_RELAXED);
         uint64_t ao = __atomic_exchange_n(&ino_add_ok, 0, __ATOMIC_RELAXED);
@@ -897,6 +899,63 @@ static int dev_stat(int dir, const char *path, struct stat *b, int flags)
         errno = save;
     }
     return r;
+}
+
+/*
+ * libusb refused in the Steam client: its USB device scan (DetectUsbEntities) loads libusb about
+ * 28 times a second while idle, searching two folders, then opens /dev/bus/usb and checks /sys
+ * (1668 rounds a minute, PROOT_STAT 2026-10-20). Android gives an app no USB devices there, so
+ * every round fails; each attempt only stopped the PRoot tracer. Refusing the load (as when
+ * libusb is not installed) ends the round at once without a system call. Only in the "steam"
+ * process; EZS_LIBUSB=1 leaves it alone.
+ * Steam 클라이언트의 libusb 거절: 클라이언트의 USB 장치 검사(DetectUsbEntities)가 대기 중 초당 약
+ * 28번 libusb를 불러오며(폴더 두 곳 검색) /dev/bus/usb를 열고 /sys를 확인함(분당 1668회, PROOT_STAT
+ * 2026-10-20). 안드로이드는 앱에 그곳의 USB 장치를 주지 않으므로 매번 실패하고, 시도마다 PRoot 추적기만
+ * 멈췄음. 불러오기를 거절하면(libusb가 설치되지 않은 것과 같음) 시스템 호출 없이 바로 끝남. "steam"
+ * 프로세스에서만. EZS_LIBUSB=1이면 건드리지 않음
+ */
+static __thread int usb_refused;
+
+static int refuse_usb(const char *file)
+{
+    static int keep = -1;
+    if (!file) return 0;
+    const char *b = strrchr(file, '/');
+    b = b ? b + 1 : file;
+    if (strncmp(b, "libusb-1.0.so", 13) != 0) return 0;
+    if (keep < 0) {
+        const char *e = getenv("EZS_LIBUSB");
+        keep = (e && strcmp(e, "1") == 0) || strcmp(program_invocation_short_name, "steam") != 0;
+    }
+    if (keep) return 0;
+    usb_refused = 1;
+    if (on()) __atomic_add_fetch(&hit_usb, 1, __ATOMIC_RELAXED);
+    return 1;
+}
+
+void *dlopen(const char *file, int flags)
+{
+    REAL(dlopen, void *(*)(const char *, int));
+    if (refuse_usb(file)) return NULL;
+    return real_dlopen(file, flags);
+}
+
+void *dlmopen(Lmid_t lmid, const char *file, int flags)
+{
+    REAL(dlmopen, void *(*)(Lmid_t, const char *, int));
+    if (refuse_usb(file)) return NULL;
+    return real_dlmopen(lmid, file, flags);
+}
+
+/* The refusal reads like a missing library / 거절은 라이브러리가 없는 것처럼 읽힘 */
+char *dlerror(void)
+{
+    REAL(dlerror, char *(*)(void));
+    if (usb_refused) {
+        usb_refused = 0;
+        return (char *)"libusb-1.0.so.0: cannot open shared object file: No such file or directory";
+    }
+    return real_dlerror();
 }
 
 int access(const char *path, int mode)

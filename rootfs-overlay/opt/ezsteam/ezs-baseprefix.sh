@@ -38,7 +38,14 @@ if command -v Xvfb >/dev/null 2>&1; then
         echo "ezproton: base hidden screen not ready, installers use the Steam screen" >&2
     fi
 fi
-python3 /opt/ezsteam/ezs-baseprefix.py prepare "$@"
+# "directx" = the app's [DirectX 설치]; anything else prepares the base
+# "directx" = 앱의 [DirectX 설치]. 그 밖에는 기본 prefix 준비
+if [ "${1:-}" = directx ]; then
+    shift
+    python3 /opt/ezsteam/ezs-baseprefix.py directx "$@"
+else
+    python3 /opt/ezsteam/ezs-baseprefix.py prepare "$@"
+fi
 rc=$?
 [ -n "$XPID" ] && kill "$XPID" 2>/dev/null
 exit $rc
