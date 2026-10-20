@@ -5,116 +5,104 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
-import android.os.SystemClock;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.MotionEvent;
 import android.view.View;
 
+import app.ezsteam.runtime.IcpLayout;
 import app.ezsteam.runtime.PadFile;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
- * On-screen touch game pad (Xbox layout) drawn over the game. It feeds the same virtual Xbox 360 pad
- * as a physical controller (PadFile touch source -> native/ezspad -> Wine). Own design, no code from
- * other projects.
- * 게임 위에 그리는 화면 터치 게임패드(Xbox 배치). 실제 컨트롤러와 같은 가상 Xbox 360 패드로 들어감
- * (PadFile 터치 입력원 -> native/ezspad -> Wine). 자체 설계, 다른 프로젝트 코드 없음.
+ * On-screen touch controls laid out from an input controls profile (.icp, IcpLayout): buttons,
+ * d-pads and sticks at the positions and sizes the file gives, so a layout made in EZlator looks
+ * and works the same here. Game pad bindings feed the virtual Xbox 360 pad (PadFile touch source),
+ * keyboard and mouse bindings go to the X server through Input.
+ * 입력 컨트롤 프로필(.icp, IcpLayout)대로 배치하는 화면 터치 조작: 파일이 정한 위치·크기의 버튼, 십자키,
+ * 스틱. 그래서 EZlator에서 만든 배치가 여기서도 같은 모양·동작이 됨. 게임패드 바인딩은 가상 Xbox 360
+ * 패드(PadFile 터치 입력원)로, 키보드·마우스 바인딩은 Input을 거쳐 X 서버로 감
  *
- * - Size: one scale (hand size) for every control and its distance from the screen edge
- *   크기: 모든 조작부의 크기와 화면 가장자리에서의 거리를 함께 바꾸는 배율 하나(손 크기)
- * - Opacity: how strongly the controls are drawn / 투명도: 조작부를 얼마나 진하게 그릴지
- * - Multi-touch: every finger stays with the control it first touched (the face buttons and the
- *   d-pad follow a finger that slides); the pad state is rebuilt from all fingers on each event
- *   멀티 터치: 손가락마다 처음 닿은 조작부를 유지함(ABXY와 십자키는 밀어도 따라감). 이벤트마다 모든
- *   손가락으로 패드 상태를 다시 만듦
- * - Stick double tap (tap, then touch again within 300 ms) holds L3/R3 while the finger stays
- *   스틱 두 번 탭(탭 후 300 ms 안에 다시 닿음)하면 손가락을 떼기 전까지 L3/R3을 누름
- * - A touch that starts away from every control passes through to the screen below (pointer,
- *   clicks): with the pad left on, the Steam client screen took no touches at all (user report)
- *   조작부 밖에서 시작한 터치는 아래 화면으로 넘어감(포인터, 클릭): 패드를 켜 둔 채로는 Steam 클라이언트
- *   화면이 터치를 전혀 받지 못했음(사용자 보고)
+ * - Every finger stays with the element it first touched / 손가락마다 처음 닿은 요소를 유지함
+ * - A touch that starts away from every element passes through to the screen below
+ *   요소 밖에서 시작한 터치는 아래 화면으로 넘어감
+ * - Size: one scale on top of each element's own scale; opacity: how strongly they are drawn
+ *   크기: 요소마다의 배율 위에 곱하는 배율 하나, 진하기: 얼마나 진하게 그릴지
  */
 public final class TouchPadView extends View {
 
-    /** Kinds of controls / 조작부 종류 */
-    private static final int STICK = 0, DPAD = 1, FACE = 2, BUTTON = 3, TRIGGER = 4;
+    /** Keyboard and mouse output (X server) / 키보드·마우스 출력(X 서버) */
+    public interface Input {
+        void key(int xKeycode, boolean down);
 
-    /** One control: kind, centre and size in dp before scaling, and which pad input it drives
-     *  조작부 하나: 종류, 배율 적용 전 dp 중심·크기, 움직이는 패드 입력 */
-    private static final class Control {
-        final int kind;
+        void mouseButton(int xButton, boolean down);
+
+        void mouseMove(int dx, int dy);
+    }
+
+    /** Stick dead zone (fraction of the radius) / 스틱 무감 범위(반지름 비율) */
+    private static final float STICK_DEAD = 0.15f;
+    /** Push needed before a d-pad or stick direction counts as pressed / 십자키·스틱 방향이 눌림이 되는 기울기 */
+    private static final float DIRECTION_ON = 0.3f;
+    /** Pointer speed for mouse-move bindings, px per frame at full push / 마우스 이동 바인딩 속도, 끝까지 밀었을 때 프레임당 px */
+    private static final float MOUSE_SPEED = 14f;
+
+    /** One element on screen / 화면의 요소 하나 */
+    private static final class Item {
+        final IcpLayout.Element e;
+        final IcpLayout.Target[] targets;
         final String label;
-        /** Anchor: centre measured from the left (x >= 0) or right (x < 0) edge, and from the
-         *  bottom (y >= 0) or top (y < 0) edge, in dp
-         *  기준점: 왼쪽(x >= 0) 또는 오른쪽(x < 0) 가장자리, 아래(y >= 0) 또는 위(y < 0) 가장자리로부터
-         *  잰 중심, dp 단위 */
-        final float ax, ay, rDp;
-        /** Pad input: button index, stick number (0 left, 1 right) or trigger (0 left, 1 right)
-         *  패드 입력: 버튼 번호, 스틱 번호(0 왼쪽, 1 오른쪽), 트리거(0 왼쪽, 1 오른쪽) */
-        final int target;
-        float cx, cy, r;  // on screen, px / 화면 위치, px
-        boolean drawnPressed;
+        final RectF box = new RectF();
+        float cx, cy, unit;
+        boolean toggledOn;
+        /** Finger holding it and its push (-1..1, sticks and d-pads) / 잡은 손가락과 기울기(-1..1, 스틱·십자키) */
+        int pointer = -1;
+        float dx, dy;
 
-        Control(int kind, String label, float ax, float ay, float rDp, int target) {
-            this.kind = kind;
-            this.label = label;
-            this.ax = ax;
-            this.ay = ay;
-            this.rDp = rDp;
-            this.target = target;
+        Item(IcpLayout.Element e) {
+            this.e = e;
+            targets = new IcpLayout.Target[e.bindings.length];
+            String first = "";
+            for (int i = 0; i < targets.length; i++) {
+                targets[i] = IcpLayout.target(e.bindings[i]);
+                if (first.isEmpty()) first = targets[i].label;
+            }
+            label = e.text != null && !e.text.isEmpty() ? e.text : first;
+        }
+
+        boolean held() {
+            return pointer >= 0 || toggledOn;
         }
     }
 
-    /** What one finger is doing / 손가락 하나가 하는 일 */
-    private static final class Finger {
-        Control control;
-        float x, y;
-        boolean stickClick;  // L3/R3 held by a double tap / 두 번 탭으로 누른 L3/R3
-    }
-
-    private final List<Control> controls = new ArrayList<>();
-    private final Map<Integer, Finger> fingers = new HashMap<>();
-    /** Last time each stick was released, for the double tap / 두 번 탭용 스틱별 마지막 뗀 시각 */
-    private final long[] stickUpAt = {0, 0};
-    private final long[] stickDownAt = {0, 0};
+    private final List<Item> items = new ArrayList<>();
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final RectF rect = new RectF();
-    private final float density;
+    private final RectF tmp = new RectF();
+    private final Handler ui = new Handler(Looper.getMainLooper());
 
     private PadFile pad;
+    private Input input;
     private float scale = 1f;
     private float opacity = 0.45f;
+    /** Keys and mouse buttons currently held by the pad / 패드가 지금 누르고 있는 키·마우스 버튼 */
+    private final Set<Integer> keysDown = new HashSet<>(), buttonsDown = new HashSet<>();
+    private final Map<Item, Boolean> scrollSent = new HashMap<>();
+    private float moveX, moveY;
+    private boolean moving;
 
     public TouchPadView(Context ctx) {
         super(ctx);
-        density = ctx.getResources().getDisplayMetrics().density;
         line.setStyle(Paint.Style.STROKE);
         text.setTextAlign(Paint.Align.CENTER);
         text.setFakeBoldText(true);
-        // Triggers/shoulders start below the app's button row (about 48 dp) and the corner [≡]
-        // 트리거·숄더는 앱 버튼 줄(약 48 dp)과 모서리 [≡] 아래에서 시작함
-        // Left side / 왼쪽
-        controls.add(new Control(STICK, "", 120, 130, 62, 0));
-        controls.add(new Control(DPAD, "", 250, 70, 50, 0));
-        controls.add(new Control(TRIGGER, "LT", 70, -100, 34, 0));
-        controls.add(new Control(BUTTON, "LB", 70, -175, 34, PadFile.LEFT_SHOULDER));
-        // Right side / 오른쪽
-        controls.add(new Control(FACE, "A", -120, 70, 30, PadFile.A));
-        controls.add(new Control(FACE, "B", -60, 130, 30, PadFile.B));
-        controls.add(new Control(FACE, "X", -180, 130, 30, PadFile.X));
-        controls.add(new Control(FACE, "Y", -120, 190, 30, PadFile.Y));
-        controls.add(new Control(STICK, "", -300, 90, 55, 1));
-        controls.add(new Control(TRIGGER, "RT", -70, -100, 34, 1));
-        controls.add(new Control(BUTTON, "RB", -70, -175, 34, PadFile.RIGHT_SHOULDER));
-        // Middle row (placed from the centre in onLayout) / 가운데 줄(onLayout에서 가운데 기준 배치)
-        controls.add(new Control(BUTTON, "BACK", 0, 40, 26, PadFile.BACK));
-        controls.add(new Control(BUTTON, "≡", 0, 40, 26, PadFile.START));
-        controls.add(new Control(BUTTON, "⌂", 0, 40, 22, PadFile.GUIDE));
     }
 
     /** Pad to drive (null: draw only) / 움직일 패드(null이면 그리기만) */
@@ -122,7 +110,25 @@ public final class TouchPadView extends View {
         this.pad = pad;
     }
 
-    /** Hand size 0.5..1.8 and opacity 0.15..0.9 / 손 크기 0.5..1.8, 투명도 0.15..0.9 */
+    /** Keyboard and mouse output / 키보드·마우스 출력 */
+    public void setInput(Input input) {
+        this.input = input;
+    }
+
+    /** Layout to show; replaces the current one / 보여 줄 배치. 지금 배치를 바꿈 */
+    public void setLayout(IcpLayout layout) {
+        releaseAll();
+        items.clear();
+        for (IcpLayout.Element e : layout.elements) {
+            // Range buttons (scrolling key strips) are not supported yet / 범위 버튼(스크롤 키 줄)은 아직 지원 안 함
+            if (IcpLayout.RANGE_BUTTON.equals(e.type)) continue;
+            items.add(new Item(e));
+        }
+        place();
+        invalidate();
+    }
+
+    /** Size 0.5..1.8 and opacity 0.15..0.9 / 크기 0.5..1.8, 진하기 0.15..0.9 */
     public void setLook(float scale, float opacity) {
         this.scale = Math.max(0.5f, Math.min(1.8f, scale));
         this.opacity = Math.max(0.15f, Math.min(0.9f, opacity));
@@ -132,7 +138,11 @@ public final class TouchPadView extends View {
 
     /** Release everything (hidden, focus lost) / 모두 뗌(숨김, 포커스 잃음) */
     public void releaseAll() {
-        fingers.clear();
+        for (Item it : items) {
+            it.pointer = -1;
+            it.toggledOn = false;
+            it.dx = it.dy = 0;
+        }
         apply();
     }
 
@@ -142,83 +152,65 @@ public final class TouchPadView extends View {
         place();
     }
 
-    /** Screen position of every control from its anchor, scale and the view size
-     *  기준점, 배율, 뷰 크기로 모든 조작부의 화면 위치를 정함 */
+    /** Screen box of every element: centre from x/y, size in 1/100 of the width
+     *  모든 요소의 화면 상자: 중심은 x/y, 크기는 너비의 1/100 단위 */
     private void place() {
-        float k = density * scale;
         int w = getWidth(), h = getHeight();
-        int middle = 0;
-        for (Control c : controls) {
-            c.r = c.rDp * k;
-            if (c.ax == 0 && c.kind == BUTTON) {
-                // BACK, START, GUIDE: a row around the centre / BACK, START, GUIDE: 가운데 주변 한 줄
-                float dx = (middle == 0 ? -80 : middle == 1 ? 80 : 0) * k;
-                c.cx = w / 2f + dx;
-                c.cy = h - c.ay * k;
-                middle++;
-                continue;
-            }
-            c.cx = c.ax >= 0 ? c.ax * k : w + c.ax * k;
-            c.cy = c.ay >= 0 ? h - c.ay * k : -c.ay * k;
+        float grid = w / 100f;
+        for (Item it : items) {
+            float[] half = it.e.halfSize();
+            it.unit = grid * it.e.scale * scale;
+            it.cx = it.e.x * w;
+            it.cy = it.e.y * h;
+            it.box.set(it.cx - half[0] * it.unit, it.cy - half[1] * it.unit,
+                    it.cx + half[0] * it.unit, it.cy + half[1] * it.unit);
         }
     }
 
     // ---- touch / 터치
 
     @Override
-    public boolean onTouchEvent(MotionEvent e) {
-        int action = e.getActionMasked();
-        int idx = e.getActionIndex();
+    public boolean onTouchEvent(MotionEvent ev) {
+        int action = ev.getActionMasked();
+        int idx = ev.getActionIndex();
         switch (action) {
             case MotionEvent.ACTION_DOWN:
             case MotionEvent.ACTION_POINTER_DOWN: {
-                Finger f = new Finger();
-                f.x = e.getX(idx);
-                f.y = e.getY(idx);
-                f.control = hit(f.x, f.y);
-                // First finger away from every control: not ours, Android hands the whole gesture
-                // to the screen view below
-                // 첫 손가락이 조작부 밖: 패드 몫이 아님. 안드로이드가 이 동작 전체를 아래 화면 뷰에 넘김
-                if (action == MotionEvent.ACTION_DOWN && f.control == null) {
-                    fingers.clear();
-                    apply();
+                Item it = hit(ev.getX(idx), ev.getY(idx));
+                // First finger away from every element: Android hands the gesture to the view below
+                // 첫 손가락이 요소 밖: 안드로이드가 이 동작을 아래 뷰에 넘김
+                if (action == MotionEvent.ACTION_DOWN && it == null) {
+                    releaseAll();
                     return false;
                 }
-                if (f.control != null && f.control.kind == STICK) {
-                    int s = f.control.target;
-                    long now = SystemClock.uptimeMillis();
-                    // Double tap: the last touch of this stick was a short tap ending < 300 ms ago
-                    // 두 번 탭: 이 스틱의 마지막 터치가 300 ms 안에 끝난 짧은 탭
-                    f.stickClick = now - stickUpAt[s] < 300 && stickUpAt[s] - stickDownAt[s] < 250;
-                    stickDownAt[s] = now;
+                if (it != null && it.pointer < 0) {
+                    if (it.e.toggle) it.toggledOn = !it.toggledOn;
+                    it.pointer = ev.getPointerId(idx);
+                    track(it, ev.getX(idx), ev.getY(idx));
                 }
-                fingers.put(e.getPointerId(idx), f);
                 break;
             }
             case MotionEvent.ACTION_MOVE:
-                for (int i = 0; i < e.getPointerCount(); i++) {
-                    Finger f = fingers.get(e.getPointerId(i));
-                    if (f == null) continue;
-                    f.x = e.getX(i);
-                    f.y = e.getY(i);
-                    // Face buttons: the finger may slide to another face button
-                    // ABXY: 손가락을 밀어 다른 버튼으로 옮길 수 있음
-                    if (f.control != null && f.control.kind == FACE) {
-                        Control c = hit(f.x, f.y);
-                        if (c != null && c.kind == FACE) f.control = c;
-                    }
+                for (int i = 0; i < ev.getPointerCount(); i++) {
+                    int id = ev.getPointerId(i);
+                    for (Item it : items) if (it.pointer == id) track(it, ev.getX(i), ev.getY(i));
                 }
                 break;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_POINTER_UP: {
-                Finger f = fingers.remove(e.getPointerId(idx));
-                if (f != null && f.control != null && f.control.kind == STICK) {
-                    stickUpAt[f.control.target] = SystemClock.uptimeMillis();
+                int id = ev.getPointerId(idx);
+                for (Item it : items) {
+                    if (it.pointer != id) continue;
+                    it.pointer = -1;
+                    it.dx = it.dy = 0;
                 }
                 break;
             }
             case MotionEvent.ACTION_CANCEL:
-                fingers.clear();
+                for (Item it : items) {
+                    it.pointer = -1;
+                    it.dx = it.dy = 0;
+                }
                 break;
             default:
                 break;
@@ -227,133 +219,231 @@ public final class TouchPadView extends View {
         return true;
     }
 
-    /** Control under a point; sticks and the d-pad catch a wider ring
-     *  점 아래의 조작부. 스틱과 십자키는 더 넓은 범위를 받음 */
-    private Control hit(float x, float y) {
-        Control best = null;
-        float bestD = Float.MAX_VALUE;
-        for (Control c : controls) {
-            float reach = c.r * (c.kind == STICK || c.kind == DPAD ? 1.6f : 1.25f);
-            float dx = x - c.cx, dy = y - c.cy;
-            float d = dx * dx + dy * dy;
-            if (d <= reach * reach && d < bestD) {
-                best = c;
-                bestD = d;
-            }
+    /** Push of a stick, d-pad or trackpad from the finger position / 손가락 위치로 스틱·십자키·트랙패드 기울기 */
+    private void track(Item it, float x, float y) {
+        if (IcpLayout.BUTTON.equals(it.e.type)) return;
+        float r = it.box.width() / 2f;
+        float dx = (x - it.cx) / r, dy = (y - it.cy) / r;
+        float len = (float) Math.sqrt(dx * dx + dy * dy);
+        if (len > 1f) {
+            dx /= len;
+            dy /= len;
         }
-        return best;
+        it.dx = dx;
+        it.dy = dy;
     }
 
-    /** Rebuild the touch source from all fingers and write the pad file
-     *  모든 손가락으로 터치 입력원을 다시 만들고 패드 파일에 씀 */
+    /** Topmost element whose box holds the point / 점이 상자 안에 드는 맨 위 요소 */
+    private Item hit(float x, float y) {
+        for (int i = items.size() - 1; i >= 0; i--) {
+            if (items.get(i).box.contains(x, y)) return items.get(i);
+        }
+        return null;
+    }
+
+    /**
+     * Rebuild every output from all elements: pad state (written once), keys and mouse buttons
+     * (only changes are sent), mouse movement (a repeating step while held)
+     * 모든 요소로 출력을 다시 만듦: 패드 상태(한 번에 씀), 키·마우스 버튼(바뀐 것만 보냄), 마우스 이동(누르는
+     * 동안 반복)
+     */
     private void apply() {
-        for (Control c : controls) c.drawnPressed = false;
         PadFile p = pad;
         PadFile.State st = p != null ? p.touch : null;
         if (st != null) st.clear();
+        float[] axes = new float[4];
         float lt = 0f, rt = 0f;
-        for (Finger f : fingers.values()) {
-            Control c = f.control;
-            if (c == null) continue;
-            c.drawnPressed = true;
-            if (st == null) continue;
-            float dx = (f.x - c.cx) / c.r, dy = (f.y - c.cy) / c.r;
-            switch (c.kind) {
-                case STICK: {
-                    float len = (float) Math.sqrt(dx * dx + dy * dy);
-                    if (len > 1f) {
-                        dx /= len;
-                        dy /= len;
-                    }
-                    st.setAxis(c.target * 2, dx);
-                    st.setAxis(c.target * 2 + 1, dy);
-                    if (f.stickClick) st.setButton(c.target == 0 ? PadFile.LEFT_STICK : PadFile.RIGHT_STICK, true);
-                    break;
+        Set<Integer> keys = new HashSet<>(), buttons = new HashSet<>();
+        float mx = 0f, my = 0f;
+        for (Item it : items) {
+            if (!it.held()) {
+                scrollSent.remove(it);
+                continue;
+            }
+            boolean directional = !IcpLayout.BUTTON.equals(it.e.type);
+            float sx = it.dx, sy = it.dy;
+            if (IcpLayout.STICK.equals(it.e.type) && sx * sx + sy * sy < STICK_DEAD * STICK_DEAD) sx = sy = 0;
+            for (int i = 0; i < it.targets.length; i++) {
+                IcpLayout.Target t = it.targets[i];
+                // Strength of this binding: direction i of a stick/d-pad (0 up, 1 right, 2 down,
+                // 3 left), or 1 for a held button
+                // 이 바인딩의 세기: 스틱·십자키의 i번 방향(0 위, 1 오른쪽, 2 아래, 3 왼쪽), 버튼은 누르면 1
+                float s = 1f;
+                if (directional) {
+                    s = i == 0 ? -sy : i == 1 ? sx : i == 2 ? sy : -sx;
+                    if (s < 0) s = 0;
+                    // D-pads are digital / 십자키는 켜고 끄기만 함
+                    if (IcpLayout.D_PAD.equals(it.e.type)) s = s > DIRECTION_ON ? 1f : 0f;
                 }
-                case DPAD:
-                    // 8 directions; the centre third is neutral / 8방향, 가운데 1/3은 중립
-                    if (dx * dx + dy * dy > 0.11f) {
-                        double a = Math.toDegrees(Math.atan2(dy, dx));
-                        if (a > -67.5 && a < 67.5) st.setButton(PadFile.DPAD_RIGHT, true);
-                        if (a > 22.5 && a < 157.5) st.setButton(PadFile.DPAD_DOWN, true);
-                        if (a > 112.5 || a < -112.5) st.setButton(PadFile.DPAD_LEFT, true);
-                        if (a > -157.5 && a < -22.5) st.setButton(PadFile.DPAD_UP, true);
-                    }
-                    break;
-                case TRIGGER:
-                    if (c.target == 0) lt = 1f;
-                    else rt = 1f;
-                    break;
-                default:
-                    st.setButton(c.target, true);
-                    break;
+                if (s <= 0f) continue;
+                boolean on = s > DIRECTION_ON || !directional;
+                switch (t.kind) {
+                    case IcpLayout.PAD_BUTTON:
+                        if (st != null && on) st.setButton(t.value, true);
+                        break;
+                    case IcpLayout.PAD_TRIGGER:
+                        if (t.value == 0) lt = Math.max(lt, s);
+                        else rt = Math.max(rt, s);
+                        break;
+                    case IcpLayout.PAD_AXIS:
+                        axes[t.value] += t.sign * s;
+                        break;
+                    case IcpLayout.KEY:
+                        if (on) keys.add(t.value);
+                        break;
+                    case IcpLayout.MOUSE_BUTTON:
+                        if (on) buttons.add(t.value);
+                        break;
+                    case IcpLayout.MOUSE_SCROLL:
+                        // One wheel click per press / 누를 때마다 휠 한 칸
+                        if (on && scrollSent.get(it) == null && input != null) {
+                            input.mouseButton(t.value, true);
+                            input.mouseButton(t.value, false);
+                            scrollSent.put(it, Boolean.TRUE);
+                        }
+                        break;
+                    case IcpLayout.MOUSE_MOVE:
+                        if (t.value == 0) my -= s;
+                        else if (t.value == 1) mx += s;
+                        else if (t.value == 2) my += s;
+                        else mx -= s;
+                        break;
+                    default:
+                        break;
+                }
+            }
+            // Trackpads move the mouse by their push / 트랙패드는 기울기만큼 마우스를 움직임
+            if (IcpLayout.TRACKPAD.equals(it.e.type)) {
+                mx += sx;
+                my += sy;
             }
         }
         if (st != null) {
-            st.setTriggers(lt, rt);
+            for (int a = 0; a < 4; a++) st.setAxis(a, Math.max(-1f, Math.min(1f, axes[a])));
+            st.setTriggers(Math.min(1f, lt), Math.min(1f, rt));
             p.write();
+        }
+        Input in = input;
+        if (in != null) {
+            for (Integer k : keysDown) if (!keys.contains(k)) in.key(k, false);
+            for (Integer k : keys) if (!keysDown.contains(k)) in.key(k, true);
+            for (Integer b : buttonsDown) if (!buttons.contains(b)) in.mouseButton(b, false);
+            for (Integer b : buttons) if (!buttonsDown.contains(b)) in.mouseButton(b, true);
+        }
+        keysDown.clear();
+        keysDown.addAll(keys);
+        buttonsDown.clear();
+        buttonsDown.addAll(buttons);
+        moveX = mx;
+        moveY = my;
+        if ((mx != 0 || my != 0) && !moving) {
+            moving = true;
+            ui.post(mover);
         }
         invalidate();
     }
+
+    /** Repeating mouse step while a mouse-move binding is held / 마우스 이동 바인딩을 누르는 동안 반복하는 이동 */
+    private final Runnable mover = new Runnable() {
+        @Override
+        public void run() {
+            Input in = input;
+            if (moveX == 0 && moveY == 0) {
+                moving = false;
+                return;
+            }
+            if (in != null) in.mouseMove(Math.round(moveX * MOUSE_SPEED), Math.round(moveY * MOUSE_SPEED));
+            ui.postDelayed(this, 16);
+        }
+    };
 
     // ---- drawing / 그리기
 
     @Override
     protected void onDraw(Canvas canvas) {
         int a = Math.round(opacity * 255);
-        line.setStrokeWidth(2f * density);
-        for (Control c : controls) {
-            int base = c.drawnPressed ? Math.min(255, a + 70) : a;
-            fill.setColor(Color.argb(c.drawnPressed ? base / 2 : base / 4, 255, 255, 255));
+        for (Item it : items) {
+            boolean pressed = it.held();
+            int base = pressed ? Math.min(255, a + 70) : a;
+            float stroke = Math.max(1f, it.unit * 0.25f);
+            line.setStrokeWidth(stroke);
+            fill.setColor(Color.argb(pressed ? base / 2 : base / 5, 255, 255, 255));
             line.setColor(Color.argb(base, 255, 255, 255));
             text.setColor(Color.argb(Math.min(255, base + 40), 255, 255, 255));
-            text.setTextSize(c.r * (c.label.length() > 2 ? 0.45f : 0.8f));
-            switch (c.kind) {
-                case STICK: {
-                    canvas.drawCircle(c.cx, c.cy, c.r, fill);
-                    canvas.drawCircle(c.cx, c.cy, c.r, line);
-                    // Knob follows the finger / 손잡이가 손가락을 따라감
-                    float kx = c.cx, ky = c.cy;
-                    for (Finger f : fingers.values()) {
-                        if (f.control != c) continue;
-                        float dx = f.x - c.cx, dy = f.y - c.cy;
-                        float len = (float) Math.sqrt(dx * dx + dy * dy);
-                        float max = c.r * 0.6f;
-                        if (len > max) {
-                            dx = dx / len * max;
-                            dy = dy / len * max;
-                        }
-                        kx += dx;
-                        ky += dy;
-                    }
-                    canvas.drawCircle(kx, ky, c.r * 0.42f, fill);
-                    canvas.drawCircle(kx, ky, c.r * 0.42f, line);
+            RectF b = it.box;
+            switch (it.e.type) {
+                case IcpLayout.STICK: {
+                    float r = b.width() / 2f;
+                    canvas.drawCircle(it.cx, it.cy, r, fill);
+                    canvas.drawCircle(it.cx, it.cy, r, line);
+                    // Knob follows the push / 손잡이가 기울기를 따라감
+                    float knob = it.unit * 3.5f;
+                    float kx = it.cx + it.dx * (r - knob * 0.5f), ky = it.cy + it.dy * (r - knob * 0.5f);
+                    canvas.drawCircle(kx, ky, knob, fill);
+                    canvas.drawCircle(kx, ky, knob, line);
                     break;
                 }
-                case DPAD: {
-                    float t = c.r * 0.36f;
-                    rect.set(c.cx - c.r, c.cy - t, c.cx + c.r, c.cy + t);
-                    canvas.drawRoundRect(rect, t * 0.4f, t * 0.4f, fill);
-                    canvas.drawRoundRect(rect, t * 0.4f, t * 0.4f, line);
-                    rect.set(c.cx - t, c.cy - c.r, c.cx + t, c.cy + c.r);
-                    canvas.drawRoundRect(rect, t * 0.4f, t * 0.4f, fill);
-                    canvas.drawRoundRect(rect, t * 0.4f, t * 0.4f, line);
+                case IcpLayout.D_PAD:
+                    drawDpad(canvas, it);
                     break;
-                }
-                case BUTTON:
-                case TRIGGER: {
-                    rect.set(c.cx - c.r * 1.3f, c.cy - c.r * 0.7f, c.cx + c.r * 1.3f, c.cy + c.r * 0.7f);
-                    canvas.drawRoundRect(rect, c.r * 0.35f, c.r * 0.35f, fill);
-                    canvas.drawRoundRect(rect, c.r * 0.35f, c.r * 0.35f, line);
-                    canvas.drawText(c.label, c.cx, c.cy - (text.ascent() + text.descent()) / 2, text);
+                case IcpLayout.TRACKPAD: {
+                    float r = b.height() * 0.15f;
+                    canvas.drawRoundRect(b, r, r, fill);
+                    canvas.drawRoundRect(b, r, r, line);
                     break;
                 }
                 default: {
-                    canvas.drawCircle(c.cx, c.cy, c.r, fill);
-                    canvas.drawCircle(c.cx, c.cy, c.r, line);
-                    canvas.drawText(c.label, c.cx, c.cy - (text.ascent() + text.descent()) / 2, text);
+                    if ("RECT".equals(it.e.shape)) {
+                        canvas.drawRect(b, fill);
+                        canvas.drawRect(b, line);
+                    } else if ("ROUND_RECT".equals(it.e.shape)) {
+                        float r = b.height() / 2f;
+                        canvas.drawRoundRect(b, r, r, fill);
+                        canvas.drawRoundRect(b, r, r, line);
+                    } else if ("SQUARE".equals(it.e.shape)) {
+                        float r = it.unit * 0.75f;
+                        canvas.drawRoundRect(b, r, r, fill);
+                        canvas.drawRoundRect(b, r, r, line);
+                    } else {
+                        canvas.drawCircle(it.cx, it.cy, b.width() / 2f, fill);
+                        canvas.drawCircle(it.cx, it.cy, b.width() / 2f, line);
+                    }
+                    if (!it.label.isEmpty()) {
+                        float size = it.unit * 2f;
+                        text.setTextSize(size);
+                        float wText = text.measureText(it.label);
+                        float room = b.width() - stroke * 4;
+                        if (wText > room && wText > 0) text.setTextSize(size * room / wText);
+                        canvas.drawText(it.label, it.cx, it.cy - (text.ascent() + text.descent()) / 2, text);
+                    }
                     break;
                 }
+            }
+        }
+    }
+
+    /** Cross with the pressed arms filled / 눌린 방향을 채운 십자 */
+    private void drawDpad(Canvas canvas, Item it) {
+        float arm = it.unit * 2.2f;      // half thickness of an arm / 팔 반두께
+        float reach = it.box.width() / 2f;
+        float[][] arms = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
+        int base = Math.round(opacity * 255);
+        for (int i = 0; i < 4; i++) {
+            float ax = arms[i][0], ay = arms[i][1];
+            float s = i == 0 ? -it.dy : i == 1 ? it.dx : i == 2 ? it.dy : -it.dx;
+            boolean on = it.pointer >= 0 && s > DIRECTION_ON;
+            if (ax == 0) tmp.set(it.cx - arm, ay < 0 ? it.cy - reach : it.cy + arm * 0.6f,
+                    it.cx + arm, ay < 0 ? it.cy - arm * 0.6f : it.cy + reach);
+            else tmp.set(ax < 0 ? it.cx - reach : it.cx + arm * 0.6f, it.cy - arm,
+                    ax < 0 ? it.cx - arm * 0.6f : it.cx + reach, it.cy + arm);
+            fill.setColor(Color.argb(on ? Math.min(255, base + 70) / 2 : base / 5, 255, 255, 255));
+            canvas.drawRoundRect(tmp, arm * 0.4f, arm * 0.4f, fill);
+            canvas.drawRoundRect(tmp, arm * 0.4f, arm * 0.4f, line);
+            IcpLayout.Target t = i < it.targets.length ? it.targets[i] : null;
+            if (t != null && !t.label.isEmpty()) {
+                text.setTextSize(it.unit * 1.6f);
+                float tx = (tmp.left + tmp.right) / 2f, ty = (tmp.top + tmp.bottom) / 2f;
+                canvas.drawText(t.label, tx, ty - (text.ascent() + text.descent()) / 2, text);
             }
         }
     }

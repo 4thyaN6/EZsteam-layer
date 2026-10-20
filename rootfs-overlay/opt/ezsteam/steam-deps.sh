@@ -93,9 +93,18 @@ if [ "$MODE" != install ]; then
             [ -n "$so" ] && [ -n "$(pkg_for "$so")" ] && echo "$so"
         done | tr '\n' ' ')
     else
-        # No package lists (removed by a cleanup): let install mode refresh them and decide
-        # 패키지 목록 없음(정리로 지워짐): install 모드가 목록을 새로 받고 판단하게 함
-        req=$(echo "$missing" | tr '\n' ' ')
+        # No package lists (removed by a cleanup): let install mode refresh them and decide.
+        # CEF and FFmpeg names are left out: before the client's first self update they are the
+        # client's own parts that its file check fetches; asking apt for them cost about 18 s and
+        # ended in a confusing warning (fresh install, 2026-10-20). The FFmpeg libraries Debian
+        # does provide are installed by steam-install.sh beforehand.
+        # 패키지 목록 없음(정리로 지워짐): install 모드가 목록을 새로 받고 판단하게 함.
+        # CEF와 FFmpeg 이름은 뺌: 클라이언트 첫 자체 갱신 전에는 그 파일 검사가 받아오는 클라이언트 자체
+        # 부품임. apt에 물어보느라 약 18초가 걸렸고 헷갈리는 경고로 끝났음(새 설치, 2026-10-20). 데비안이
+        # 주는 FFmpeg 라이브러리는 steam-install.sh가 미리 설치함
+        client=$(echo "$missing" | grep -E '^(libcef\.so|libav[a-z]*\.so|libsw[a-z]*\.so)' || true)
+        [ -n "$client" ] && echo "INFO deps : 클라이언트 파일 검사가 받을 라이브러리: $(echo "$client" | tr '\n' ' ')"
+        req=$(echo "$missing" | grep -vE '^(libcef\.so|libav[a-z]*\.so|libsw[a-z]*\.so)' | tr '\n' ' ')
     fi
     if [ -n "$req" ] && [ -n "${EZS_DEPS_REQUEST:-}" ]; then
         : > "$EZS_DEPS_REQUEST"

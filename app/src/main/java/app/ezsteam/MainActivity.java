@@ -75,13 +75,12 @@ public class MainActivity extends Activity {
         taskDetail.setTextSize(13);
         taskPanel.addView(taskDetail);
         root.addView(taskPanel);
-        Button go = addButton(start, "Steam 시작", v -> openSteam(steamSize()[0], steamSize()[1]));
+        // One start button: installs whatever is missing first (with the progress panel), then
+        // opens Steam; when everything is there it opens Steam at once (user request, 2026-10-20)
+        // 시작 버튼 하나: 빠진 것이 있으면 먼저 설치하고(진행 패널 표시) Steam을 엶. 다 있으면 바로 엶
+        // (사용자 요청, 2026-10-20)
+        Button go = addButton(start, "Steam 시작", v -> startSteam());
         go.setTextSize(18);
-        // Everything a new device needs, in order, skipping what is already there (a tester got
-        // "FAIL tools : Xvfb 없음" after installing only rootfs, driver and Steam)
-        // 새 기기에 필요한 것을 순서대로, 이미 있는 것은 건너뜀(테스터가 rootfs·드라이버·Steam만 설치한 뒤
-        // "FAIL tools : Xvfb 없음"을 받았음)
-        addButton(start, "전체 준비", v -> runTask("setup", this::doSetupAll));
         Button size = addButton(start, sizeLabel(), null);
         size.setOnClickListener(v -> {
             boolean big = !prefs.getBoolean(KEY_BIG_SCREEN, false);
@@ -109,6 +108,13 @@ public class MainActivity extends Activity {
         Button admin = addButton(start, "관리자 모드", null);
         admin.setOnClickListener(v -> setAdminShown(adminBox.getVisibility() != View.VISIBLE));
         root.addView(adminBox);
+        // Install everything without starting Steam (kept for tests): rootfs, driver, tools, Steam,
+        // skipping what is already there
+        // Steam을 시작하지 않고 모두 설치(시험용으로 남김): rootfs, 드라이버, 도구, Steam. 이미 있는 것은 건너뜀
+        LinearLayout row0 = new LinearLayout(this);
+        row0.setOrientation(LinearLayout.HORIZONTAL);
+        adminBox.addView(row0);
+        addButton(row0, "전체 준비만", v -> runTask("setup", this::doSetupAll));
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -228,9 +234,9 @@ public class MainActivity extends Activity {
             log("APK 안 rootfs가 설치본과 다름: [rootfs 설치]로 갱신");
         }
         String missing = notReady();
-        setAdminShown(prefs.getBoolean(KEY_ADMIN, false) || !missing.isEmpty());
+        setAdminShown(prefs.getBoolean(KEY_ADMIN, false));
         if (!missing.isEmpty()) {
-            log("Steam 바로 시작 불가: " + missing + " → [전체 준비]를 누르십시오");
+            log("설치 필요: " + missing + " → [Steam 시작]을 누르면 설치한 뒤 시작함 (인터넷 사용)");
         } else if (savedInstanceState == null && prefs.getBoolean(KEY_AUTOSTART, true)) {
             // Only on a fresh launch: coming back from the Steam screen must not start it again
             // 새로 실행했을 때만: Steam 화면에서 돌아왔을 때 다시 시작하면 안 됨
@@ -260,6 +266,28 @@ public class MainActivity extends Activity {
                 ? "저장소 권한 있음: 제보는 Download/.EZlator/Reports, EZlator Steam 라이브러리 공유"
                 : "저장소 권한 없음: 제보는 파일 선택 창으로 저장, Steam 라이브러리 공유 안 함");
         maybeAutoStart();
+    }
+
+    /**
+     * Start button: Steam at once when everything is installed, otherwise the installation first
+     * (same steps as [전체 준비만]) and Steam right after it succeeds
+     * 시작 버튼: 다 설치돼 있으면 바로 Steam, 아니면 먼저 설치([전체 준비만]과 같은 단계)하고 성공하면 바로 Steam
+     */
+    private void startSteam() {
+        if (busy) {
+            log("다른 작업 진행 중");
+            return;
+        }
+        String missing = notReady();
+        if (missing.isEmpty()) {
+            openSteam(steamSize()[0], steamSize()[1]);
+            return;
+        }
+        log("설치 필요: " + missing + " → 설치 후 Steam 시작");
+        runTask("setup", this::doSetupAll, () -> {
+            if (notReady().isEmpty()) openSteam(steamSize()[0], steamSize()[1]);
+            else log("설치가 끝나지 않아 Steam을 열지 않음 (위 로그 확인 후 [Steam 시작]을 다시 누르십시오)");
+        });
     }
 
     private void maybeAutoStart() {
@@ -361,7 +389,7 @@ public class MainActivity extends Activity {
         } else {
             log("[4/4] Steam 있음");
         }
-        log("준비 끝: [Steam 시작]을 누르십시오 (첫 실행은 Steam이 스스로 갱신해 몇 분 걸릴 수 있음)");
+        log("준비 끝 (첫 실행은 Steam이 스스로 갱신해 몇 분 걸릴 수 있음)");
     }
 
     /**
@@ -427,7 +455,7 @@ public class MainActivity extends Activity {
         // 화면을 열기 전에 모두 확인함(테스터가 "FAIL tools : Xvfb 없음"만 뜬 검은 화면을 받았음)
         String missing = notReady();
         if (!missing.isEmpty()) {
-            log("Steam 시작 불가: " + missing + " → [전체 준비]를 누르십시오");
+            log("Steam 시작 불가: " + missing + " → [Steam 시작]으로 설치하십시오");
             return;
         }
         log("== steam " + w + "x" + h);
@@ -640,6 +668,11 @@ public class MainActivity extends Activity {
 
     /** Run one task on a worker thread, logging errors / 작업 하나를 작업 스레드에서 돌리고 오류를 기록함 */
     private void runTask(String name, Task t) {
+        runTask(name, t, null);
+    }
+
+    /** Same, then "after" on the UI thread once the task has ended / 같음. 작업이 끝나면 UI 스레드에서 "after" 실행 */
+    private void runTask(String name, Task t, Runnable after) {
         if (busy) {
             log("다른 작업 진행 중");
             return;
@@ -658,7 +691,10 @@ public class MainActivity extends Activity {
                 busy = false;
                 beat.interrupt();
                 tick.interrupt();
-                runOnUiThread(() -> taskPanel.setVisibility(View.GONE));
+                runOnUiThread(() -> {
+                    taskPanel.setVisibility(View.GONE);
+                    if (after != null) after.run();
+                });
             }
         }, "ezs-" + name).start();
     }
@@ -666,7 +702,7 @@ public class MainActivity extends Activity {
     /** Panel titles for the task names / 작업 이름별 패널 제목 */
     private static final java.util.Map<String, String> TASK_NAMES = new java.util.HashMap<>();
     static {
-        TASK_NAMES.put("setup", "전체 준비");
+        TASK_NAMES.put("setup", "설치");
         TASK_NAMES.put("install", "rootfs 설치");
         TASK_NAMES.put("driver", "드라이버 설치");
         TASK_NAMES.put("tools", "시험 도구 설치");

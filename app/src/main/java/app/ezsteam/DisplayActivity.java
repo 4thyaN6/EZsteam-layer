@@ -178,6 +178,29 @@ public class DisplayActivity extends Activity {
         touchPad.setVisibility(View.GONE);
         android.content.SharedPreferences pp = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE);
         touchPad.setLook(pp.getFloat(PREF_PAD_SCALE, 1f), pp.getFloat(PREF_PAD_OPACITY, 0.45f));
+        // After the log view exists (the layout load writes a log line) / 로그 뷰가 생긴 뒤(배치 읽기가 로그를 남김)
+        root.post(this::loadPadLayout);
+        // Keyboard and mouse bindings of the layout go to the X server
+        // 배치의 키보드·마우스 바인딩은 X 서버로 감
+        touchPad.setInput(new TouchPadView.Input() {
+            @Override
+            public void key(int xKeycode, boolean down) {
+                XTestClient x = xtest;
+                if (x != null) x.key(xKeycode, down);
+            }
+
+            @Override
+            public void mouseButton(int xButton, boolean down) {
+                XTestClient x = xtest;
+                if (x != null) x.button(xButton, down);
+            }
+
+            @Override
+            public void mouseMove(int dx, int dy) {
+                XTestClient x = xtest;
+                if (x != null) x.motionRelative(dx, dy);
+            }
+        });
         root.addView(touchPad, new FrameLayout.LayoutParams(-1, -1));
 
         overlay = new LinearLayout(this);
@@ -509,6 +532,9 @@ public class DisplayActivity extends Activity {
                     log("Steam 화면 GPU(시험) " + MainActivity.STEAM_GPU_MODES[gpuMode][0] + ": " + cefFlags);
                 }
                 if (!cefFlags.isEmpty()) c.env.put("EZS_CEF_FLAGS", cefFlags);
+                // Phone language for the Steam client language (steam-language.py)
+                // Steam 클라이언트 언어용 휴대폰 언어(steam-language.py)
+                c.env.put("EZS_LANG", Locale.getDefault().toLanguageTag());
                 // Client file I/O statistics (admin option) / 클라이언트 파일 입출력 통계(관리자 옵션)
                 // plus PRoot's own count of the system calls it stops for (PROOT_STAT lines)
                 // PRoot가 멈춰 처리하는 시스템 호출 집계도 함께 켬(PROOT_STAT 줄)
@@ -875,6 +901,75 @@ public class DisplayActivity extends Activity {
     // ---- on-screen touch pad / 화면 터치 패드
 
     private static final String PREF_PAD_SCALE = "pad.scale", PREF_PAD_OPACITY = "pad.opacity";
+    private static final int REQ_PAD_LAYOUT = 7302;
+
+    /** Imported layout (.icp) kept inside the app / 앱 안에 보관한 불러온 배치(.icp) */
+    private File padLayoutFile() {
+        return new File(getFilesDir(), "ezs-data/pads/current.icp");
+    }
+
+    /**
+     * Touch pad layout: the imported .icp when there is one, otherwise the bundled default layout
+     * 터치 패드 배치: 불러온 .icp가 있으면 그것, 없으면 앱에 든 기본 배치
+     */
+    private void loadPadLayout() {
+        File f = padLayoutFile();
+        String json = f.isFile() ? readText(f) : "";
+        try {
+            if (json.isEmpty()) {
+                try (java.io.InputStream in = getAssets().open("pads/default.icp")) {
+                    json = new String(readAll(in), java.nio.charset.StandardCharsets.UTF_8);
+                }
+            }
+            app.ezsteam.runtime.IcpLayout layout = app.ezsteam.runtime.IcpLayout.parse(json);
+            touchPad.setLayout(layout);
+            log("PAD 배치 " + (f.isFile() ? "불러온 파일" : "기본") + ": " + layout.name + " (요소 " + layout.elements.size() + "개)");
+        } catch (IOException | org.json.JSONException e) {
+            log("PAD 배치를 읽지 못함: " + e);
+        }
+    }
+
+    private static byte[] readAll(java.io.InputStream in) throws IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        return out.toByteArray();
+    }
+
+    /** Pick a .icp file (exported from EZlator/Winlator) / .icp 파일 고르기(EZlator·Winlator에서 내보낸 것) */
+    private void pickPadLayout() {
+        android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        try {
+            startActivityForResult(i, REQ_PAD_LAYOUT);
+        } catch (RuntimeException e) {
+            log("PAD 파일 선택 창을 열지 못함: " + e);
+        }
+    }
+
+    /** Check and keep the picked layout, then show it / 고른 배치를 확인·보관한 뒤 보여 줌 */
+    private void importPadLayout(android.net.Uri uri) {
+        try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new IOException("열 수 없음");
+            byte[] data = readAll(in);
+            if (data.length > 1 << 20) throw new IOException("파일이 너무 큼");
+            // Must parse before it replaces the current layout / 지금 배치를 바꾸기 전에 읽히는지 확인
+            app.ezsteam.runtime.IcpLayout.parse(new String(data, java.nio.charset.StandardCharsets.UTF_8));
+            File f = padLayoutFile();
+            File dir = f.getParentFile();
+            if (dir != null && !dir.isDirectory() && !dir.mkdirs()) throw new IOException("폴더를 만들지 못함");
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(f)) {
+                out.write(data);
+            }
+            loadPadLayout();
+            notice("패드 배치를 불러옴");
+        } catch (IOException | org.json.JSONException | RuntimeException e) {
+            log("PAD 배치 불러오기 실패: " + e);
+            notice("패드 배치 파일이 아님: " + e.getMessage());
+        }
+    }
 
     /** Show or hide the touch pad; hiding releases every touch button
      *  터치 패드를 보이거나 숨김. 숨기면 터치로 누른 버튼을 모두 뗌 */
@@ -943,14 +1038,38 @@ public class DisplayActivity extends Activity {
                 .setView(box)
                 .setPositiveButton("저장", (d, w) -> pp.edit()
                         .putFloat(PREF_PAD_SCALE, cur[0]).putFloat(PREF_PAD_OPACITY, cur[1]).apply())
-                .setNeutralButton("기본값", (d, w) -> {
-                    pp.edit().remove(PREF_PAD_SCALE).remove(PREF_PAD_OPACITY).apply();
-                    touchPad.setLook(1f, 0.45f);
+                .setNeutralButton("배치 파일…", (d, w) -> {
+                    // Keep the size and opacity being tried, then choose the layout
+                    // 시험 중인 크기·진하기를 저장한 뒤 배치를 고름
+                    pp.edit().putFloat(PREF_PAD_SCALE, cur[0]).putFloat(PREF_PAD_OPACITY, cur[1]).apply();
+                    showPadLayoutMenu();
                 })
                 .setNegativeButton("취소", (d, w) -> touchPad.setLook(
                         pp.getFloat(PREF_PAD_SCALE, 1f), pp.getFloat(PREF_PAD_OPACITY, 0.45f)))
                 .setOnCancelListener(d -> touchPad.setLook(
                         pp.getFloat(PREF_PAD_SCALE, 1f), pp.getFloat(PREF_PAD_OPACITY, 0.45f)))
+                .show();
+    }
+
+    /** Layout choices: import a .icp, back to the default, or default size and opacity
+     *  배치 선택: .icp 불러오기, 기본 배치로, 크기·진하기 기본값 */
+    private void showPadLayoutMenu() {
+        String[] items = {"배치 파일(.icp) 불러오기", "기본 배치로 되돌리기", "크기·진하기 기본값"};
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("터치 패드 배치")
+                .setItems(items, (d, which) -> {
+                    if (which == 0) {
+                        pickPadLayout();
+                    } else if (which == 1) {
+                        File f = padLayoutFile();
+                        if (f.isFile() && !f.delete()) log("PAD 불러온 배치를 지우지 못함: " + f);
+                        loadPadLayout();
+                    } else {
+                        getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit()
+                                .remove(PREF_PAD_SCALE).remove(PREF_PAD_OPACITY).apply();
+                        touchPad.setLook(1f, 0.45f);
+                    }
+                })
                 .show();
     }
 
@@ -1829,8 +1948,8 @@ public class DisplayActivity extends Activity {
             int pct = protonDownloadPercent();
             if (pct >= 0) {
                 protonBanner = true;
-                String t = "게임 실행 환경 준비 1/2: Proton 받는 중 " + pct + "%"
-                        + "\n처음 한 번만 함. 끝나면 2/2 기본 환경을 자동으로 준비함";
+                String t = "게임 실행 환경 준비 1/3: Proton 받는 중 " + pct + "%"
+                        + "\n처음 한 번만 함. 끝나면 기본 환경을 자동으로 준비함";
                 runOnUiThread(() -> {
                     prepView.setText(t);
                     prepBox.setVisibility(View.VISIBLE);
@@ -1840,6 +1959,13 @@ public class DisplayActivity extends Activity {
                 protonBanner = false;
                 runOnUiThread(() -> prepBox.setVisibility(View.GONE));
             }
+        }
+        // Background DirectX while a game is being played: no banner over the game
+        // 게임을 하는 동안의 백그라운드 DirectX: 게임 위에 안내 띠를 띄우지 않음
+        boolean background = base != null && (base.equals(BG_DIRECTX) || base.equals(BG_BACKFILL));
+        if (background && gameOf(ps) != null) {
+            runOnUiThread(() -> prepBox.setVisibility(View.GONE));
+            return;
         }
         if (best >= 0) {
             String kind = base != null ? base : PREP_NAMES[best];
@@ -1866,11 +1992,15 @@ public class DisplayActivity extends Activity {
             // 설치 스크립트만 도는 것은 매번 시작할 때도 있음(약 10초): 그때는 "첫 실행" 문구를 쓰지 않음
             if (best >= 1) prepFirstRun = true;
             String text;
-            if (basePrepRunning) {
+            if (basePrepRunning && background) {
+                // Games can start now / 이제 게임을 시작할 수 있음
+                text = "게임 실행 환경 준비 3/3: " + kind + "\n경과 " + mmss(now - prepKindStartMs)
+                        + "\n게임은 지금 바로 실행할 수 있음. 오래된 일부 게임용 구성 요소이며 처음 한 번만 함";
+            } else if (basePrepRunning) {
                 // Prepared ahead of time, no game waiting / 미리 준비 중, 기다리는 게임 없음
-                text = "게임 실행 환경 준비 2/2: " + kind + "\n경과 " + mmss(now - prepStartMs)
+                text = "게임 실행 환경 준비 2/3: " + kind + "\n경과 " + mmss(now - prepStartMs)
                         + " · 하위 작업 " + prepNew + "개"
-                        + "\n처음 한 번만 함. 그동안 Steam은 쓸 수 있고, 새 게임 첫 실행은 끝날 때까지 기다림";
+                        + "\n처음 한 번만 함(약 1분). 그동안 Steam은 쓸 수 있고, 새 게임 첫 실행은 끝날 때까지 기다림";
             } else {
                 text = (prepFirstRun ? "게임 첫 실행 준비 중: " : "게임 실행 준비 중: ") + kind
                         + "\n경과 " + mmss(now - prepStartMs) + " · 하위 작업 " + prepNew + "개"
@@ -1894,6 +2024,9 @@ public class DisplayActivity extends Activity {
 
     private int prepNew;
 
+    /** Background base steps (games can start meanwhile) / 백그라운드 기본 prefix 단계(그동안 게임 시작 가능) */
+    private static final String BG_DIRECTX = "DirectX 설치(백그라운드)", BG_BACKFILL = "게임에 DirectX 추가(백그라운드)";
+
     /** Current base prefix step for the banner, or null / 안내 띠용 현재 기본 prefix 단계, 없으면 null */
     private volatile String baseStage;
     private volatile long baseStageMs;
@@ -1910,10 +2043,15 @@ public class DisplayActivity extends Activity {
         else if (l.contains("base prepare done") || l.contains("base prepare: proton")) stage = null;
         else if (l.contains("base build start") || l.contains("base rebuild")) stage = "기본 환경 만들기(한 번만)";
         else if (l.contains("base redist start")) {
-            stage = l.contains("directx") ? "기본 환경: DirectX 설치(한 번만)"
+            stage = l.contains("directx") ? BG_DIRECTX
                     : l.contains("vcredist") ? "기본 환경: Visual C++ 설치(한 번만)" : "기본 환경: 재배포 설치(한 번만)";
-        } else if (l.contains("base copy start")) stage = "기본 환경을 게임으로 복사";
-        else if (l.contains("base copy done") || l.contains("base error") || l.contains("base build failed")) stage = null;
+        } else if (l.contains("base late start")) stage = BG_DIRECTX;
+        else if (l.contains("base backfill start")) stage = BG_BACKFILL;
+        else if (l.contains("base waiting: directx")) stage = "이 게임에 DirectX 추가가 끝날 때까지 기다림";
+        else if (l.contains("base copy start")) stage = "기본 환경을 게임으로 복사";
+        else if (l.contains("base copy done") || l.contains("base error") || l.contains("base build failed")
+                || l.contains("base late done") || l.contains("base late retry")
+                || l.contains("base backfill done") || l.contains("base backfill failed")) stage = null;
         baseStage = stage;
         baseStageMs = SystemClock.elapsedRealtime();
     }
@@ -1983,7 +2121,14 @@ public class DisplayActivity extends Activity {
             return;
         }
         int fresh = newRedists(session, mark);
-        if (fresh > 0) startBasePrepare("새 재배포 " + fresh + "개");
+        if (fresh > 0) {
+            startBasePrepare("새 재배포 " + fresh + "개");
+            return;
+        }
+        // Game prefixes still waiting for DirectX (copied while it was being installed)
+        // 아직 DirectX를 기다리는 게임 prefix(설치 중에 복사된 것)
+        String pending = readText(new File(session.rootfs, "home/steam/.local/share/ezsteam/dx-pending.txt")).trim();
+        if (!pending.isEmpty()) startBasePrepare("DirectX 추가 대기 게임 " + pending.split("\n").length + "개");
     }
 
     /** Valve ARM64 Proton folder (same rule as compat/ezproton), or null / Valve ARM64 Proton 폴더(compat/ezproton과 같은 규칙) */
@@ -2243,6 +2388,10 @@ public class DisplayActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, android.content.Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_PAD_LAYOUT) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) importPadLayout(data.getData());
+            return;
+        }
         if (requestCode != REQ_SAVE_LOGS) return;
         if (resultCode != RESULT_OK || data == null || data.getData() == null) {
             log("로그 저장 취소");
@@ -2349,6 +2498,21 @@ public class DisplayActivity extends Activity {
             // 재배포를 어디에 기록하는지 보여 줌. 기본 prefix와 비교하기 위함
             zip.putNextEntry(new java.util.zip.ZipEntry("prefix-redist-keys.txt"));
             zip.write(scrub.scrub(prefixRedistKeys(rootfs)).getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+            // Where the app's storage goes (user report: about 6 GB of app data, 2026-10-20)
+            // 앱 저장 공간이 어디에 쓰이는지(사용자 보고: 앱 데이터 약 6 GB, 2026-10-20)
+            zip.putNextEntry(new java.util.zip.ZipEntry("storage-usage.txt"));
+            zip.write(scrub.scrub(app.ezsteam.runtime.ReportScan.storageUsage(getFilesDir(), getCacheDir(), rootfs))
+                    .getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+            // Installed games that name a DLL of the DirectX June 2010 runtime (is DXSETUP needed?)
+            // DirectX 2010년 6월 런타임 DLL 이름을 가진 설치된 게임(DXSETUP이 필요한지)
+            java.util.List<File> libs = new java.util.ArrayList<>();
+            libs.add(new File(rootfs, "home/steam/.local/share/Steam/steamapps"));
+            File shared = MainActivity.sharedLibrary(this) ? app.ezsteam.runtime.SharedStorage.steamLibrary(this) : null;
+            if (shared != null) libs.add(new File(shared, "steamapps"));
+            zip.putNextEntry(new java.util.zip.ZipEntry("dx-usage.txt"));
+            zip.write(scrub.scrub(app.ezsteam.runtime.ReportScan.dxUsage(libs)).getBytes(StandardCharsets.UTF_8));
             zip.closeEntry();
             byte[] buf = new byte[1 << 16];
             for (File f : files) {

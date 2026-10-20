@@ -35,7 +35,15 @@ if [ -z "$PROTON_DIR" ]; then
 fi
 
 if [ -z "$PROTON_DIR" ] || [ ! -f "$PROTON_DIR/proton" ]; then
-    echo "ezproton: Valve ARM64 Proton not found (install Proton from the Steam library tools)" >&2
+    # Right after the first sign-in Steam asks the tool before its Proton download has finished:
+    # say so instead of "not found" (report 2026-10-20)
+    # 첫 로그인 직후 Proton 다운로드가 끝나기 전에 Steam이 이 도구를 부름: "없음" 대신 받는 중이라고 알림
+    # (2026-10-20 제보)
+    if [ -f "$STEAM_DIR/steamapps/appmanifest_4628740.acf" ]; then
+        echo "ezproton: Valve ARM64 Proton still downloading (Steam downloads), not ready yet" >&2
+    else
+        echo "ezproton: Valve ARM64 Proton not found (install Proton from the Steam library tools)" >&2
+    fi
     exit 1
 fi
 

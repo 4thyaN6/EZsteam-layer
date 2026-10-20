@@ -38,6 +38,16 @@
 # Not included: game installers, game data, saves; .NET (large, few games) / 넣지 않는 것: 게임
 # 설치 프로그램, 게임 데이터, 세이브, .NET(크고 쓰는 게임이 적음)
 #
+# Two phases so games can start sooner (user request, 2026-10-20): the base is usable as soon as
+# the prefix and Visual C++ are in (about 1 minute); DirectX (about 3.5 minutes) is installed
+# afterwards on a staging copy and swapped in. Games whose prefix was copied before that get the
+# DirectX record at copy time (so Steam does not run DXSETUP at their start) and are listed in
+# dx-pending.txt; the same DirectX steps are run in them later while they are not running.
+# 게임을 더 빨리 시작하도록 두 단계로 나눔(사용자 요청, 2026-10-20): prefix와 Visual C++가 들어가면(약 1분)
+# 바로 쓸 수 있음. DirectX(약 3분 30초)는 그 뒤 준비용 복사본에 설치해 바꿔 넣음. 그 전에 prefix를
+# 복사한 게임은 복사할 때 DirectX 기록을 넣고(게임 시작 때 Steam이 DXSETUP을 돌리지 않게) dx-pending.txt에
+# 올림. 그 게임이 돌지 않을 때 같은 DirectX 단계를 나중에 실행함
+#
 # Nothing of Microsoft or Valve is shipped with the app: the installers are the files Steam
 # downloaded to this device. / 앱에는 Microsoft·Valve 파일이 없음. 설치 프로그램은 Steam이 이 기기에
 # 받은 파일임
@@ -63,6 +73,10 @@ LIBRARIES = [os.path.join(STEAM, "steamapps"), "/mnt/ezlator-library/steamapps"]
 # Redistributables put into the base (folder names under _CommonRedist, lower case)
 # 기본 prefix에 넣는 재배포(_CommonRedist 아래 폴더 이름, 소문자)
 ONLY = {"directx", "vcredist"}
+# Installed in the background after the base is usable / 기본 prefix를 쓸 수 있게 된 뒤 백그라운드로 설치
+LATE = {"directx"}
+STAGE = BASE + ".dx"
+PENDING = os.path.join(os.path.dirname(BASE), "dx-pending.txt")
 
 
 def say(msg):
@@ -90,6 +104,11 @@ def child(d, name):
         if k.lower() == name.lower():
             return v
     return None
+
+
+def is_late(step):
+    """DirectX step (installed in the background) / DirectX 단계(백그라운드 설치)"""
+    return step["id"].split("/")[0].split(os.sep)[0].lower() in LATE
 
 
 def proton_version(proton_dir):
@@ -296,16 +315,23 @@ def build(proton_dir, version):
         return False
     shutil.rmtree(BASE, ignore_errors=True)
     os.replace(tmp, BASE)
+    fix_paths(BASE, tmp, False)
     write_mark({"proton": version, "steps": [], "failed": [], "built": time.strftime("%Y-%m-%d %H:%M:%S")})
     say("prefix ready")
     return True
 
 
-def add_redists(proton_dir, mark):
-    """Run the redistributable steps the base does not have yet / 기본 prefix에 아직 없는 재배포 단계를 실행함"""
+def add_redists(proton_dir, mark, late, target=BASE):
+    """
+    Run the redistributable steps of one phase (late = DirectX) that the base does not have yet,
+    in <target> (the base, or its staging copy for DirectX)
+    한 단계(late = DirectX)의 재배포 중 기본 prefix에 아직 없는 것을 <target>(기본 prefix, DirectX는
+    그 준비용 복사본)에 실행함
+    """
     steps = redist_steps()
-    todo = [s for s in steps if s["id"] not in mark["steps"] and s["id"] not in mark.get("failed", [])]
-    if not steps:
+    todo = [s for s in steps if is_late(s) == late
+            and s["id"] not in mark["steps"] and s["id"] not in mark.get("failed", [])]
+    if not steps and not late:
         say("redist: Steamworks Shared 없음 (재배포 없이 사용)")
     for s in todo:
         t0 = time.time()
@@ -317,30 +343,30 @@ def add_redists(proton_dir, mark):
                 say("redist skip: file not found " + exe)
                 ok = False
                 break
-            rc = proton_run(proton_dir, BASE, [path] + args.split())
+            rc = proton_run(proton_dir, target, [path] + args.split())
             # Same rule as Steam: exit code 0 = done / Steam과 같은 규칙: exit 코드 0 = 완료
             if rc != 0:
                 say("redist failed: %s rc %d" % (exe, rc))
                 ok = False
                 break
-        if ok and (not s["hasrun"] or write_hasrun(proton_dir, BASE, [(s["hasrun"], s["name"])])):
+        if ok and (not s["hasrun"] or write_hasrun(proton_dir, target, [(s["hasrun"], s["name"])])):
             mark["steps"].append(s["id"])
             say("redist done: %s (%.0f s, %s \\ %s = 1)" % (s["id"], time.time() - t0, s["hasrun"] or "-", s["name"]))
         else:
             # Failed steps are left to Steam's own install in each game, as before
             # 실패한 단계는 지금처럼 게임마다 Steam이 설치하게 둠
             mark.setdefault("failed", []).append(s["id"])
-        wait_server(proton_dir, BASE)
-        write_mark(mark)
+        wait_server(proton_dir, target)
+        # The staging copy's mark is written when it is swapped in / 준비용 복사본의 표식은 바꿔 넣을 때 씀
+        if target == BASE:
+            write_mark(mark)
+    return todo
 
 
-def copy_into(compat):
-    """Copy the base into the game's compat data folder / 기본 prefix를 게임 compat data 폴더로 복사함"""
-    t0 = time.time()
-    # Unfinished prefix (no version file): nothing of the game can be in it yet
-    # 완성되지 않은 prefix(version 파일 없음): 게임 것이 아직 있을 수 없음
-    for name in os.listdir(compat):
-        p = os.path.join(compat, name)
+def clear_dir(path):
+    """Remove everything inside path / path 안의 것을 모두 지움"""
+    for name in os.listdir(path):
+        p = os.path.join(path, name)
         if os.path.isdir(p) and not os.path.islink(p):
             shutil.rmtree(p, ignore_errors=True)
         else:
@@ -348,31 +374,57 @@ def copy_into(compat):
                 os.unlink(p)
             except OSError:
                 pass
-    for name in os.listdir(BASE):
+
+
+def copy_prefix(src, dst, new_machine):
+    """
+    Copy a prefix folder (symbolic links kept, the base's mark left out) and point the paths that
+    Proton wrote in its own files at the new place; new_machine gives it its own machine id
+    prefix 폴더를 복사함(심볼릭 링크 유지, 기본 prefix 표식은 빼고). Proton이 자체 파일에 적은 경로를 새
+    위치로 바꿈. new_machine이면 새 기기 id를 줌
+    """
+    os.makedirs(dst, exist_ok=True)
+    for name in os.listdir(src):
         if name == MARK or name.endswith(".lock"):
             continue
-        src, dst = os.path.join(BASE, name), os.path.join(compat, name)
-        if os.path.isdir(src) and not os.path.islink(src):
-            shutil.copytree(src, dst, symlinks=True)
+        s, d = os.path.join(src, name), os.path.join(dst, name)
+        if os.path.isdir(s) and not os.path.islink(s):
+            shutil.copytree(s, d, symlinks=True)
         else:
-            shutil.copy2(src, dst, follow_symlinks=False)
-    # Paths of the base written in Proton's own files point to the game folder instead
-    # Proton 자체 파일에 적힌 기본 prefix 경로를 게임 폴더로 바꿈
+            shutil.copy2(s, d, follow_symlinks=False)
+    fix_paths(dst, src, new_machine)
+
+
+def fix_paths(prefix, old, new_machine):
+    """Replace the old folder path in Proton's own files / Proton 자체 파일의 옛 폴더 경로를 바꿈"""
     for name in ("tracked_files", "config_info", "pfx/system.reg", "pfx/user.reg", "pfx/userdef.reg"):
-        p = os.path.join(compat, name)
+        p = os.path.join(prefix, name)
         try:
             with open(p, encoding="utf-8", errors="surrogateescape") as f:
                 text = f.read()
         except OSError:
             continue
-        new = text.replace(BASE, compat)
+        # The base is built in "<base>.tmp" and renamed, so its files may still name that folder
+        # (copies before this fix carried it as "<game>.tmp"); both spellings are replaced
+        # 기본 prefix는 "<base>.tmp"에서 만든 뒤 이름을 바꾸므로 파일에 그 폴더 이름이 남아 있을 수 있음
+        # (이 수정 전 복사본에는 "<게임>.tmp"로 들어갔음). 두 가지 모두 바꿈
+        new = text.replace(old + ".tmp", prefix).replace(old, prefix)
         # New machine id per prefix, as Proton makes for each new prefix
         # Proton이 새 prefix마다 만드는 것처럼 prefix마다 새 기기 id
-        if name == "pfx/system.reg":
+        if name == "pfx/system.reg" and new_machine:
             new = re.sub(r'("MachineGuid"=")[0-9a-fA-F-]{36}(")', lambda m: m.group(1) + str(uuid.uuid4()) + m.group(2), new)
         if new != text:
             with open(p, "w", encoding="utf-8", errors="surrogateescape") as f:
                 f.write(new)
+
+
+def copy_into(compat):
+    """Copy the base into the game's compat data folder / 기본 prefix를 게임 compat data 폴더로 복사함"""
+    t0 = time.time()
+    # Unfinished prefix (no version file): nothing of the game can be in it yet
+    # 완성되지 않은 prefix(version 파일 없음): 게임 것이 아직 있을 수 없음
+    clear_dir(compat)
+    copy_prefix(BASE, compat, True)
     # Recorded redistributable keys now in the game prefix (check that Steam can see them)
     # 게임 prefix에 들어간 재배포 기록 키 수(Steam이 볼 수 있는지 확인용)
     keys = 0
@@ -382,6 +434,68 @@ def copy_into(compat):
     except OSError:
         pass
     say("copy done: %s (%.1f s, CommonRedist keys %d)" % (compat, time.time() - t0, keys))
+
+
+def late_todo(mark):
+    """DirectX steps the base does not have yet / 기본 prefix에 아직 없는 DirectX 단계"""
+    return [s for s in redist_steps() if is_late(s)
+            and s["id"] not in mark["steps"] and s["id"] not in mark.get("failed", [])]
+
+
+def read_pending():
+    try:
+        with open(PENDING, encoding="utf-8") as f:
+            return [l.strip() for l in f if l.strip()]
+    except OSError:
+        return []
+
+
+def write_pending(items):
+    tmp = PENDING + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("".join(i + "\n" for i in items))
+    os.replace(tmp, PENDING)
+
+
+def prefix_lock(compat, blocking):
+    """
+    Per-game lock held while DirectX is added to that prefix; the game start (ensure) waits on it.
+    Returns the open lock file, or None when not blocking and it is taken.
+    그 prefix에 DirectX를 더하는 동안 잡는 게임별 잠금. 게임 시작(ensure)이 이것을 기다림. 열린 잠금 파일을
+    돌려줌. 기다리지 않을 때 이미 잡혀 있으면 None
+    """
+    d = os.path.join(os.path.dirname(BASE), "prefix-locks")
+    os.makedirs(d, exist_ok=True)
+    lock = open(os.path.join(d, re.sub(r"[^A-Za-z0-9]+", "_", compat).strip("_") + ".lock"), "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+    except OSError:
+        lock.close()
+        return None
+    return lock
+
+
+def prefix_busy(compat):
+    """
+    The prefix's wineserver is running (its game is open): Wine keeps a lock on
+    /tmp/.wine-<uid>/server-<dev>-<inode of the prefix>/lock while the server runs
+    prefix의 wineserver가 도는 중(게임이 열려 있음): 서버가 도는 동안 Wine이
+    /tmp/.wine-<uid>/server-<장치>-<prefix의 inode>/lock을 잠가 둠
+    """
+    try:
+        st = os.stat(os.path.join(compat, "pfx"))
+    except OSError:
+        return False
+    lockfile = "/tmp/.wine-%d/server-%x-%x/lock" % (os.getuid(), st.st_dev, st.st_ino)
+    if not os.path.exists(lockfile):
+        return False
+    try:
+        with open(lockfile, "r+") as f:
+            fcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.lockf(f, fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
 
 
 def bring_up_to_date(proton_dir):
@@ -397,7 +511,7 @@ def bring_up_to_date(proton_dir):
         if not build(proton_dir, version):
             return None
         mark = read_mark()
-    add_redists(proton_dir, mark)
+    add_redists(proton_dir, mark, False)
     return mark
 
 
@@ -410,6 +524,90 @@ def locked():
     return lock
 
 
+def late(proton_dir):
+    """
+    Background phase: DirectX into a staging copy of the base, swapped in when done; then the
+    same steps in game prefixes copied before (dx-pending.txt) that are not running. Runs without
+    the base lock except for the short copy and swap, so game starts are not held up.
+    백그라운드 단계: 기본 prefix의 준비용 복사본에 DirectX를 넣고 끝나면 바꿔 넣음. 그다음 그 전에 복사한
+    게임 prefix(dx-pending.txt) 중 돌지 않는 것에 같은 단계를 실행함. 짧은 복사·교체 때만 기본 prefix
+    잠금을 잡아 게임 시작을 막지 않음
+    """
+    todo, before = [], []
+    with locked():
+        mark = read_mark()
+        if mark is None or not os.path.isfile(os.path.join(BASE, "version")):
+            return
+        todo = late_todo(mark)
+        if todo:
+            shutil.rmtree(STAGE, ignore_errors=True)
+            copy_prefix(BASE, STAGE, False)
+            before = list(mark["steps"])
+    if todo:
+        say("late start (백그라운드, 게임 바로 실행 가능): " + ", ".join(s["id"] for s in todo))
+        t0 = time.time()
+        add_redists(proton_dir, mark, True, STAGE)
+        with locked():
+            now = read_mark()
+            # The base changed meanwhile (rebuilt, or new steps): drop the copy, next run retries
+            # 그사이 기본 prefix가 바뀜(다시 만들었거나 새 단계): 복사본을 버리고 다음 실행 때 다시 함
+            if now is None or now.get("proton") != mark.get("proton") or now["steps"] != before:
+                say("late retry: base changed meanwhile")
+                shutil.rmtree(STAGE, ignore_errors=True)
+                return
+            # Swap in and point Proton's files back at the base path
+            # 바꿔 넣고 Proton 파일의 경로를 기본 prefix 경로로 되돌림
+            old = BASE + ".old"
+            shutil.rmtree(old, ignore_errors=True)
+            os.replace(BASE, old)
+            os.replace(STAGE, BASE)
+            fix_paths(BASE, STAGE, False)
+            write_mark(mark)
+            shutil.rmtree(old, ignore_errors=True)
+        say("late done: base now has DirectX (%.0f s)" % (time.time() - t0))
+    backfill(proton_dir)
+
+
+def backfill(proton_dir):
+    """DirectX into game prefixes copied before the base had it / 기본 prefix에 DirectX가 들기 전에 복사한 게임 prefix에 DirectX를 넣음"""
+    mark = read_mark()
+    pending = read_pending()
+    if mark is None or not pending:
+        return
+    steps = [s for s in redist_steps() if is_late(s) and s["id"] in mark["steps"]]
+    left = []
+    for compat in pending:
+        if not os.path.isfile(os.path.join(compat, "version")):
+            continue
+        # DirectX failed in the base: nothing to add, the entry is dropped
+        # 기본 prefix에서 DirectX가 실패함: 더할 것이 없어 항목을 지움
+        if not steps:
+            continue
+        if prefix_busy(compat):
+            say("backfill later (게임 실행 중): " + compat)
+            left.append(compat)
+            continue
+        lock = prefix_lock(compat, False)
+        if lock is None:
+            left.append(compat)
+            continue
+        with lock:
+            say("backfill start: " + compat)
+            t0 = time.time()
+            ok = True
+            for s in steps:
+                for exe, args in s["processes"]:
+                    path = unix_exe(s["installdir"], exe)
+                    if path is None or proton_run(proton_dir, compat, [path] + args.split()) != 0:
+                        ok = False
+                        break
+            wait_server(proton_dir, compat)
+            # A failure is not retried: the game already runs without it (its record is there)
+            # 실패해도 다시 하지 않음: 게임은 이미 이것 없이 돎(기록은 있음)
+            say("backfill %s: %s (%.0f s)" % ("done" if ok else "failed", compat, time.time() - t0))
+    write_pending(left)
+
+
 def prepare(proton_dir):
     if not proton_dir or not os.path.isfile(os.path.join(proton_dir, "proton")):
         say("prepare: Proton not installed yet")
@@ -417,12 +615,22 @@ def prepare(proton_dir):
     with locked():
         say("prepare start: Proton " + proton_version(proton_dir))
         mark = bring_up_to_date(proton_dir)
-        if mark is not None:
-            say("prepare done: %d redist step(s) %s" % (len(mark["steps"]), ", ".join(mark["steps"]) or "-"))
+        if mark is None:
+            return 0
+        say("prepare done: %d redist step(s) %s" % (len(mark["steps"]), ", ".join(mark["steps"]) or "-"))
+    late(proton_dir)
     return 0
 
 
 def ensure(compat, proton_dir):
+    # DirectX being added to this prefix in the background: wait for it
+    # 이 prefix에 백그라운드로 DirectX를 넣는 중이면 기다림
+    if compat in read_pending():
+        lock = prefix_lock(compat, False)
+        if lock is None:
+            say("waiting: DirectX being added to this game")
+            lock = prefix_lock(compat, True)
+        lock.close()
     if os.path.isfile(os.path.join(compat, "version")):
         return 0
     if os.environ.get("EZS_BASE_PREFIX", "1") == "0":
@@ -435,6 +643,16 @@ def ensure(compat, proton_dir):
             return 0
         say("copy start: %d redist step(s) %s" % (len(mark["steps"]), ", ".join(mark["steps"]) or "-"))
         copy_into(compat)
+        # DirectX not in the base yet: record it as done for Steam now, add it later
+        # 기본 prefix에 아직 DirectX가 없음: Steam용 기록은 지금 쓰고, 설치는 나중에 함
+        todo = late_todo(mark)
+        if todo:
+            write_hasrun(proton_dir, compat, [(s["hasrun"], s["name"]) for s in todo if s["hasrun"]])
+            wait_server(proton_dir, compat)
+            pending = read_pending()
+            if compat not in pending:
+                write_pending(pending + [compat])
+            say("copy: DirectX later in the background (%d step(s))" % len(todo))
     return 0
 
 

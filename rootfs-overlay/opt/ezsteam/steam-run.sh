@@ -114,6 +114,15 @@ rm -f "$HOME/ezs-logs/steam-input-probe.log" "$HOME/ezs-logs/steam-input-scan.tx
 # 전에도 다시 실행함: 새 설치의 첫 시작은 클라이언트를 갱신하고(exit 42) 그 뒤에야 설정 파일이 생기므로,
 # 한 번만 등록하면 라이브러리가 다음 앱 시작 때 나타났음(사용자 보고 2026-10-19)
 client_settings() {
+    # Proton request first: it makes steamapps on a fresh install, where steam-library.py then
+    # writes the library list before the first sign-in
+    # Proton 요청을 먼저 함: 새 설치에서 steamapps를 만들고, 그 안에 steam-library.py가 첫 로그인 전에
+    # 라이브러리 목록을 씀
+    # Valve's ARM64 Proton requested from the client when missing (steam-proton.py; downloaded by the
+    # client from Valve's servers, nothing shipped)
+    # 없으면 클라이언트에 Valve ARM64 Proton 받기를 요청함(steam-proton.py. 클라이언트가 Valve 서버에서 받음,
+    # 앱에 넣어 배포하지 않음)
+    python3 /opt/ezsteam/steam-proton.py "$STEAM_DIR" 2>&1 || echo "WARN proton : Proton 받기 요청 실패"
     if [ -n "${EZS_SHARED_LIBRARY:-}" ] && [ -d "$EZS_SHARED_LIBRARY" ]; then
         python3 /opt/ezsteam/steam-library.py "$STEAM_DIR" "$EZS_SHARED_LIBRARY" 2>&1 \
             || echo "WARN library : $EZS_SHARED_LIBRARY 등록 실패"
@@ -124,11 +133,9 @@ client_settings() {
     # 모든 Windows 게임을 EZ Proton으로(Valve Proton 컨테이너는 PRoot에서 못 돎, steam-compat.py 참고),
     # 라이브러리별 설치된 게임 목록도 남김(진단)
     python3 /opt/ezsteam/steam-compat.py "$STEAM_DIR" 2>&1 || echo "WARN compat : 호환성 도구 설정 실패"
-    # Valve's ARM64 Proton requested from the client when missing (steam-proton.py; downloaded by the
-    # client from Valve's servers, nothing shipped)
-    # 없으면 클라이언트에 Valve ARM64 Proton 받기를 요청함(steam-proton.py. 클라이언트가 Valve 서버에서 받음,
-    # 앱에 넣어 배포하지 않음)
-    python3 /opt/ezsteam/steam-proton.py "$STEAM_DIR" 2>&1 || echo "WARN proton : Proton 받기 요청 실패"
+    # Client language from the phone's language (EZS_LANG from the app, steam-language.py)
+    # 휴대폰 언어로 클라이언트 언어를 정함(앱이 준 EZS_LANG, steam-language.py)
+    python3 /opt/ezsteam/steam-language.py 2>&1 || echo "WARN lang : Steam 언어 설정 실패"
 }
 client_settings
 

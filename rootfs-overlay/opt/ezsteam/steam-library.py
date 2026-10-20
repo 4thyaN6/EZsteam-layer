@@ -15,9 +15,15 @@
 #   from the appmanifest_*.acf files already in <library>/steamapps
 #   (둘 중 있는 것) "path"가 <library>인 항목이 없으면 하나 추가. "apps" 목록은 <library>/steamapps에
 #   이미 있는 appmanifest_*.acf로 채움
-# The client rewrites these files itself; before its first run they do not exist and nothing is
-# added (registered from the next start).
-# 클라이언트가 이 파일들을 스스로 다시 씀. 첫 실행 전에는 파일이 없어 추가하지 않음(다음 시작부터 등록).
+# The client rewrites these files itself. Before its first sign-in neither exists: then
+# <Steam>/steamapps/libraryfolders.vdf is written with the main library and this one, because at
+# sign-in the client loads exactly that file and, finding none, wrote a list with only its own
+# folder, so the shared library showed up only after a restart (steam.log "Load failed:
+# .../steamapps/libraryfolders.vdf ... configuration will be reset", 2026-10-20)
+# 클라이언트가 이 파일들을 스스로 다시 씀. 첫 로그인 전에는 둘 다 없음: 그때는 기본 라이브러리와 이
+# 라이브러리로 <Steam>/steamapps/libraryfolders.vdf를 씀. 로그인 때 클라이언트가 바로 그 파일을 읽고,
+# 없으면 자기 폴더만 든 목록을 써서 공유 라이브러리가 재시작 뒤에야 보였음(steam.log "Load failed:
+# .../steamapps/libraryfolders.vdf ... configuration will be reset", 2026-10-20)
 import os
 import random
 import re
@@ -184,7 +190,23 @@ def main():
         os.replace(tmp, path)
         print("OK   library : %s 등록, 설치된 게임 %d개 (%s)" % (lib, len(apps), os.path.relpath(path, steam)))
     if not found:
-        print("INFO library : 라이브러리 목록 파일 없음 (첫 실행 전), 다음 시작부터 %s 등록" % lib)
+        steamapps = os.path.join(steam, "steamapps")
+        if not os.path.isdir(steamapps):
+            print("INFO library : 라이브러리 목록 파일 없음 (첫 실행 전), 다음 시작부터 %s 등록" % lib)
+            return
+        data = {"libraryfolders": {
+            "0": {"path": steam, "label": "", "contentid": str(random.randint(10 ** 18, 9 * 10 ** 18)),
+                  "totalsize": "0", "update_clean_bytes_tally": "0", "time_last_update_verified": "0",
+                  "apps": installed_apps(steam)},
+            "1": {"path": lib, "label": "EZlator", "contentid": cid, "totalsize": "0",
+                  "update_clean_bytes_tally": "0", "time_last_update_verified": "0", "apps": apps},
+        }}
+        path = os.path.join(steamapps, "libraryfolders.vdf")
+        tmp = path + ".ezs-tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(dump(data))
+        os.replace(tmp, path)
+        print("OK   library : 목록 파일 새로 만듦 (첫 로그인 전), %s 등록, 설치된 게임 %d개" % (lib, len(apps)))
 
 
 if __name__ == "__main__":
