@@ -285,9 +285,13 @@ while :; do
     # 도우미가 GPU를 쓸 수 있음. Chromium 플래그는 앱이 EZS_CEF_FLAGS에 넣음
     GPUARG=-cef-disable-gpu
     [ "${EZS_STEAM_GPU:-0}" = 1 ] && GPUARG=
-    echo "INFO steam : 시작 $n ($(date +%H:%M:%S)) 화면 GPU=${EZS_STEAM_GPU:-0}"
+    # Big Picture (the controller-friendly full screen UI) when the app asks for it
+    # 앱이 요청하면 빅픽처(컨트롤러용 전체 화면 UI)로 시작
+    BPARG=
+    [ "${EZS_STEAM_BIGPICTURE:-0}" = 1 ] && BPARG=-gamepadui
+    echo "INFO steam : 시작 $n ($(date +%H:%M:%S)) 화면 GPU=${EZS_STEAM_GPU:-0} 빅픽처=${EZS_STEAM_BIGPICTURE:-0}"
     LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_CLIENT_PRELOAD" \
-        "$BIN" -no-cef-sandbox $GPUARG -chromeosnopreallocate $VERIFY ${EZS_STEAM_EXTRA:-} >>"$LOG" 2>&1
+        "$BIN" -no-cef-sandbox $GPUARG $BPARG -chromeosnopreallocate $VERIFY ${EZS_STEAM_EXTRA:-} >>"$LOG" 2>&1
     rc=$?
     echo "INFO steam : 종료 rc=$rc ($(date +%H:%M:%S))"
     # 42: restart after a self update (at most 5 times in a row) / 42: 자체 갱신 후 재시작(연속 5회까지)

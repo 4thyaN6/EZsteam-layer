@@ -87,6 +87,14 @@ public class MainActivity extends Activity {
             prefs.edit().putBoolean(KEY_BIG_SCREEN, big).apply();
             size.setText(sizeLabel());
         });
+        // Big Picture or the normal client window at start / 시작할 때 빅픽처 또는 일반 클라이언트 창
+        Button bp = addButton(start, bigPictureLabel(bigPicture(this)), null);
+        bp.setOnClickListener(v -> {
+            boolean on = !bigPicture(this);
+            prefs.edit().putBoolean(KEY_BIG_PICTURE, on).apply();
+            bp.setText(bigPictureLabel(on));
+            log("Steam 시작 화면: " + (on ? "빅픽처" : "일반") + " (다음 Steam 시작부터)");
+        });
         Button auto = addButton(start, autoLabel(prefs.getBoolean(KEY_AUTOSTART, true)), null);
         auto.setOnClickListener(v -> {
             boolean on = !prefs.getBoolean(KEY_AUTOSTART, true);
@@ -329,6 +337,17 @@ public class MainActivity extends Activity {
         return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_SHARED_LIB, true);
     }
 
+    /** Start Steam in Big Picture (on by default, user request 2026-10-20) / Steam을 빅픽처로 시작(기본 켬, 사용자 요청 2026-10-20) */
+    static final String KEY_BIG_PICTURE = "steam.bigpicture";
+
+    static boolean bigPicture(android.content.Context ctx) {
+        return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_BIG_PICTURE, true);
+    }
+
+    private static String bigPictureLabel(boolean on) {
+        return "시작 화면: " + (on ? "빅픽처" : "일반");
+    }
+
     private static String autoLabel(boolean on) {
         return "바로 실행: " + (on ? "켬" : "끔");
     }
@@ -554,7 +573,7 @@ public class MainActivity extends Activity {
     };
 
     static int steamGpu(android.content.Context ctx) {
-        int m = ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getInt(KEY_STEAM_GPU, 0);
+        int m = ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getInt(KEY_STEAM_GPU, 2);
         return m >= 0 && m < STEAM_GPU_MODES.length ? m : 0;
     }
 

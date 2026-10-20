@@ -16,10 +16,14 @@
 #
 # <Steam>/config/config.vdf, InstallConfigStore/Software/Valve/Steam/CompatToolMapping:
 #   "0" (the default for all titles) and every per-game entry naming another tool -> "ezproton".
-#   Entries already on ezproton are left alone. Nothing happens before the client's first run (no
-#   config.vdf yet).
+#   Entries already on ezproton are left alone. Before the client's first sign-in there is no
+#   config.vdf: then one holding only this mapping is written, because the first game started in
+#   that session otherwise got the client's default (Proton Experimental), which made it download
+#   Proton Experimental and the Steam Linux Runtime 4.0 container (content_log 2026-10-20)
 #   "0"(모든 게임의 기본값)과 다른 도구를 가리키는 게임별 항목을 "ezproton"으로 바꿈. 이미 ezproton인
-#   항목은 그대로 둠. 클라이언트 첫 실행 전에는(config.vdf가 없음) 아무것도 하지 않음.
+#   항목은 그대로 둠. 클라이언트 첫 로그인 전에는 config.vdf가 없음: 그때는 이 연결만 든 파일을 씀. 그렇지
+#   않으면 그 세션에서 처음 시작한 게임이 클라이언트 기본값(Proton Experimental)을 받아 Proton Experimental과
+#   Steam Linux Runtime 4.0 컨테이너를 받았음(content_log 2026-10-20)
 import importlib.util
 import os
 import re
@@ -149,12 +153,16 @@ def main():
     libraries(steam, vdf())
     network(steam)
     path = os.path.join(steam, "config", "config.vdf")
-    if not os.path.isfile(path):
-        print("INFO compat : config.vdf 없음 (첫 실행 전), 다음 시작부터 EZ Proton 기본값")
-        return
     v = vdf()
-    with open(path, encoding="utf-8", errors="replace") as f:
-        data = v.parse(f.read())
+    data = {}
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            data = v.parse(f.read())
+    elif os.path.isdir(steam):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        print("INFO compat : config.vdf 없음 (첫 로그인 전) → EZ Proton 기본값만 든 파일을 만듦")
+    else:
+        return
     node = data
     for name in ("InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping"):
         node = child(node, name)

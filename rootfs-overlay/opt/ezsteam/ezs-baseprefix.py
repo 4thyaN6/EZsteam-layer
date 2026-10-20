@@ -175,11 +175,12 @@ def redist_steps():
 
 def shared_ready(lib):
     """
-    Steamworks Shared (appid 228980) fully downloaded in this library: its install record says
-    StateFlags 4 (installed, nothing pending). Installers are not run from a download in progress.
+    Steamworks Shared (appid 228980) usable in this library: its install record says installed
+    with no update running (files_usable). Installers are not run from a download in progress.
     No record (folder copied by hand) counts as ready.
-    이 라이브러리에 Steamworks Shared(appid 228980)가 다 받아졌는지: 설치 기록의 StateFlags가 4(설치됨,
-    남은 작업 없음). 받는 중인 파일로 설치 프로그램을 돌리지 않음. 기록이 없으면(직접 복사한 폴더) 준비된 것으로 봄
+    이 라이브러리의 Steamworks Shared(appid 228980)를 쓸 수 있는지: 설치 기록이 설치됨이고 진행 중인
+    업데이트가 없음(files_usable). 받는 중인 파일로 설치 프로그램을 돌리지 않음. 기록이 없으면(직접 복사한
+    폴더) 준비된 것으로 봄
     """
     acf = os.path.join(lib, "appmanifest_228980.acf")
     try:
@@ -187,7 +188,28 @@ def shared_ready(lib):
             m = re.search(r'"StateFlags"\s+"(\d+)"', f.read())
     except OSError:
         return True
-    return m is None or m.group(1) == "4"
+    if m is None:
+        return True
+    return files_usable(int(m.group(1)))
+
+
+# Steam app state bits: 4 fully installed; files missing 32, corrupt 128, update running 256,
+# paused 512, started 1024, uninstalling 2048, and the download phases from 65536 up
+# Steam 앱 상태 비트: 4 설치 완료. 파일 없음 32, 손상 128, 업데이트 중 256, 일시 정지 512, 시작됨 1024,
+# 제거 중 2048, 65536부터는 받기 단계들
+BUSY = 32 | 128 | 256 | 512 | 1024 | 2048
+
+
+def files_usable(flags):
+    """
+    Installed files can be used: "fully installed" without a running or broken update. "Update
+    required" (2) alone is fine: the files of the previous version are complete, and Steam put
+    off that update for days (StateFlags 6 in a shared library, 2026-10-20)
+    설치된 파일을 쓸 수 있음: 진행 중이거나 깨진 업데이트 없이 "설치 완료". "업데이트 필요"(2)만 있는 것은
+    괜찮음: 이전 버전 파일이 온전하고, Steam이 그 업데이트를 며칠 미뤘음(공유 라이브러리에서 StateFlags 6,
+    2026-10-20)
+    """
+    return bool(flags & 4) and not flags & BUSY and flags < 65536
 
 
 def find_proton():

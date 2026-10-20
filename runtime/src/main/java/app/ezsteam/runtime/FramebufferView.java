@@ -102,6 +102,14 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         scaleMode = m;
     }
 
+    /** FSR RCAS sharpness in stops (0 strongest .. 2 weak; FSR's usual default 0.2), or -1 for none
+     *  FSR RCAS 선명도 단(0 가장 강함 .. 2 약함, FSR 보통 기본값 0.2), -1이면 선명화 없음 */
+    private volatile float fsrSharpness = 0.2f;
+
+    public void setFsrSharpness(float stops) {
+        fsrSharpness = stops;
+    }
+
     public int getScaleMode() {
         return scaleMode;
     }
@@ -533,8 +541,10 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         GLES20.glUseProgram(rcasProg);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fsrTex);
         GLES20.glUniform2f(rOut, w, h);
-        // Sharpness 0.2 stops (FSR's usual default) / 선명도 0.2단(FSR 보통 기본값)
-        GLES20.glUniform1f(rCon, (float) Math.pow(2.0, -0.2));
+        // Sharpness in stops: 0 = strongest, each stop halves it; off = 0 (EASU only)
+        // 선명도 단: 0 = 가장 강함, 1단마다 절반. 끔 = 0(EASU 확대만)
+        float stops = fsrSharpness;
+        GLES20.glUniform1f(rCon, stops < 0 ? 0f : (float) Math.pow(2.0, -stops));
         drawQuad(raPos, raTex);
         return true;
     }

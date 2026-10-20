@@ -168,6 +168,7 @@ public class DisplayActivity extends Activity {
         //   [숨김]은 작은 [≡] 모서리 버튼만 남기고 모두 숨김(플레이용)
         // 보이는 부분 밖의 터치는 아래 화면 뷰로 감
         FrameLayout root = new FrameLayout(this);
+        watchKeyboard(root);
         root.setBackgroundColor(Color.BLACK);
         view = new FramebufferView(this);
         root.addView(view, new FrameLayout.LayoutParams(-1, -1));
@@ -212,6 +213,12 @@ public class DisplayActivity extends Activity {
         bar.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
         bar.setBackgroundColor(0x99000000);
         scaleButton = addButton(bar, "확대: " + SCALE_NAMES[FramebufferView.SCALE_SHARP], v -> cycleScale());
+        // Long press: FSR sharpness / 길게 누름: FSR 선명도
+        scaleButton.setOnLongClickListener(v -> {
+            chooseFsrSharpness();
+            return true;
+        });
+        view.setFsrSharpness(getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getFloat(PREF_FSR_SHARP, 0.2f));
         addButton(bar, "키보드", v -> toggleKeyboard());
         padButton = addButton(bar, "패드", v -> setTouchPadShown(touchPad.getVisibility() != View.VISIBLE));
         // Long press: size (hand size) and opacity / 길게 누름: 크기(손 크기)와 투명도
@@ -414,6 +421,29 @@ public class DisplayActivity extends Activity {
         log("확대 방식: " + SCALE_NAMES[m]);
     }
 
+    private static final String PREF_FSR_SHARP = "fsr.sharp";
+    private static final float[] FSR_SHARP = {0f, 0.2f, 0.5f, 1f, 2f, -1f};
+    private static final String[] FSR_SHARP_NAMES = {"0 (가장 선명)", "0.2 (FSR 기본)", "0.5", "1.0", "2.0 (약하게)", "선명화 끔 (확대만)"};
+
+    /**
+     * FSR 1 sharpness (RCAS stops: 0 strongest, each stop halves it), saved for next time; also
+     * switches to FSR so the choice is seen
+     * FSR 1 선명도(RCAS 단: 0이 가장 강하고 1단마다 절반), 다음에도 유지. 고른 것이 보이도록 FSR로 바꿈
+     */
+    private void chooseFsrSharpness() {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("FSR 1 선명도 (숫자가 작을수록 선명)")
+                .setItems(FSR_SHARP_NAMES, (d, which) -> {
+                    float v = FSR_SHARP[which];
+                    getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit().putFloat(PREF_FSR_SHARP, v).apply();
+                    view.setFsrSharpness(v);
+                    view.setScaleMode(FramebufferView.SCALE_FSR);
+                    scaleButton.setText("확대: " + SCALE_NAMES[FramebufferView.SCALE_FSR]);
+                    log("확대 방식: FSR 1, 선명도 " + FSR_SHARP_NAMES[which]);
+                })
+                .show();
+    }
+
     /** Immersive full screen (system bars hidden) / 몰입형 전체 화면(시스템 막대 숨김) */
     @SuppressWarnings("deprecation")
     private void hideSystemBars() {
@@ -524,7 +554,7 @@ public class DisplayActivity extends Activity {
                 // Fewer Steam web helper processes (option on the main screen, on by default)
                 // Steam 웹 도우미 프로세스 줄이기(메인 화면 옵션, 기본 켬)
                 String cefFlags = MainActivity.cefSlim(this) ? MainActivity.CEF_SLIM_FLAGS : "";
-                // Steam UI GPU test (admin option, off by default) / Steam 화면 GPU 시험(관리자 옵션, 기본 끔)
+                // Steam UI GPU (admin option, ANGLE Vulkan by default) / Steam 화면 GPU(관리자 옵션, 기본 ANGLE Vulkan)
                 int gpuMode = MainActivity.steamGpu(this);
                 if (gpuMode > 0) {
                     c.env.put("EZS_STEAM_GPU", "1");
@@ -532,6 +562,8 @@ public class DisplayActivity extends Activity {
                     log("Steam 화면 GPU(시험) " + MainActivity.STEAM_GPU_MODES[gpuMode][0] + ": " + cefFlags);
                 }
                 if (!cefFlags.isEmpty()) c.env.put("EZS_CEF_FLAGS", cefFlags);
+                // Big Picture at start (steam-run.sh adds -gamepadui) / 시작할 때 빅픽처(steam-run.sh가 -gamepadui를 붙임)
+                if (MainActivity.bigPicture(this)) c.env.put("EZS_STEAM_BIGPICTURE", "1");
                 // Phone language for the Steam client language (steam-language.py)
                 // Steam 클라이언트 언어용 휴대폰 언어(steam-language.py)
                 c.env.put("EZS_LANG", Locale.getDefault().toLanguageTag());
@@ -726,6 +758,10 @@ public class DisplayActivity extends Activity {
                 lastPos = p;
                 // Input diagnosis: where each tap lands in X / 입력 진단: 탭이 X의 어디에 닿았는지
                 log("TOUCH " + p[0] + "," + p[1]);
+                // Remembered so the soft keyboard does not cover the field just tapped
+                // 소프트 키보드가 방금 누른 입력란을 가리지 않도록 기억함
+                lastTapRawY = e.getRawY();
+                if (imeHeight > 0) keepTapAboveKeyboard();
                 break;
             }
             case MotionEvent.ACTION_POINTER_DOWN:
@@ -1316,6 +1352,55 @@ public class DisplayActivity extends Activity {
             default:
                 return k >= KeyEvent.KEYCODE_F1 && k <= KeyEvent.KEYCODE_F12;
         }
+    }
+
+    /** Screen y of the last tap and the soft keyboard height (0 = hidden), px
+     *  마지막 탭의 화면 y와 소프트 키보드 높이(0 = 숨김), px */
+    private float lastTapRawY = -1;
+    private int imeHeight;
+
+    /**
+     * Follows the soft keyboard: while it is shown the game screen moves up just enough that the
+     * last tapped spot (usually the text field) stays above it, and back down when it hides
+     * (the keyboard covered the Steam sign-in fields, user report 2026-10-20). Android 11+ reports
+     * the keyboard height in the window insets; older versions use the visible window frame.
+     * 소프트 키보드를 따라감: 키보드가 보이는 동안 마지막으로 누른 곳(보통 입력란)이 키보드 위에 오도록
+     * 게임 화면을 필요한 만큼만 올리고, 숨으면 되돌림(키보드가 Steam 로그인 입력란을 가렸음, 사용자 보고
+     * 2026-10-20). 안드로이드 11 이상은 창 인셋으로 키보드 높이를 주고, 이전 버전은 보이는 창 영역을 씀
+     */
+    private void watchKeyboard(View root) {
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            root.setOnApplyWindowInsetsListener((v, insets) -> {
+                int ime = insets.getInsets(android.view.WindowInsets.Type.ime()).bottom;
+                onKeyboardHeight(ime);
+                return insets;
+            });
+        } else {
+            root.getViewTreeObserver().addOnGlobalLayoutListener(() -> {
+                android.graphics.Rect r = new android.graphics.Rect();
+                root.getWindowVisibleDisplayFrame(r);
+                int hidden = root.getRootView().getHeight() - r.bottom;
+                onKeyboardHeight(hidden > root.getRootView().getHeight() / 6 ? hidden : 0);
+            });
+        }
+    }
+
+    private void onKeyboardHeight(int h) {
+        if (h == imeHeight) return;
+        imeHeight = h;
+        if (h == 0) view.setTranslationY(0f);
+        else keepTapAboveKeyboard();
+    }
+
+    /** Move the game screen up so the last tap is above the keyboard / 마지막 탭이 키보드 위에 오도록 게임 화면을 올림 */
+    private void keepTapAboveKeyboard() {
+        if (lastTapRawY < 0) return;
+        float margin = 56 * getResources().getDisplayMetrics().density;
+        int screenH = view.getRootView().getHeight();
+        // Tap position on the unshifted screen / 올리기 전 화면에서의 탭 위치
+        float tapY = lastTapRawY - view.getTranslationY();
+        float shift = tapY + margin - (screenH - imeHeight);
+        view.setTranslationY(-Math.max(0f, Math.min(shift, imeHeight)));
     }
 
     private void toggleKeyboard() {
@@ -1948,8 +2033,9 @@ public class DisplayActivity extends Activity {
             int pct = protonDownloadPercent();
             if (pct >= 0) {
                 protonBanner = true;
+                // Progress and the next step only (user request, 2026-10-20) / 진행도와 다음 단계만(사용자 요청, 2026-10-20)
                 String t = "게임 실행 환경 준비 1/3: Proton 받는 중 " + pct + "%"
-                        + "\n처음 한 번만 함. 끝나면 기본 환경을 자동으로 준비함";
+                        + "\n다음: 기본 환경 (Wine, Visual C++)";
                 runOnUiThread(() -> {
                     prepView.setText(t);
                     prepBox.setVisibility(View.VISIBLE);
@@ -1994,18 +2080,16 @@ public class DisplayActivity extends Activity {
             String text;
             if (basePrepRunning && background) {
                 // Games can start now / 이제 게임을 시작할 수 있음
-                text = "게임 실행 환경 준비 3/3: " + kind + "\n경과 " + mmss(now - prepKindStartMs)
-                        + "\n게임은 지금 바로 실행할 수 있음. 오래된 일부 게임용 구성 요소이며 처음 한 번만 함";
+                text = "게임 실행 환경 준비 3/3: " + kind + " · " + mmss(now - prepKindStartMs)
+                        + "\n게임은 지금 실행할 수 있음";
             } else if (basePrepRunning) {
                 // Prepared ahead of time, no game waiting / 미리 준비 중, 기다리는 게임 없음
-                text = "게임 실행 환경 준비 2/3: " + kind + "\n경과 " + mmss(now - prepStartMs)
-                        + " · 하위 작업 " + prepNew + "개"
-                        + "\n처음 한 번만 함(약 1분). 그동안 Steam은 쓸 수 있고, 새 게임 첫 실행은 끝날 때까지 기다림";
+                text = "게임 실행 환경 준비 2/3: " + kind + " · " + mmss(now - prepStartMs)
+                        + "\n다음: DirectX (백그라운드)";
             } else {
                 text = (prepFirstRun ? "게임 첫 실행 준비 중: " : "게임 실행 준비 중: ") + kind
-                        + "\n경과 " + mmss(now - prepStartMs) + " · 하위 작업 " + prepNew + "개"
-                        + (best == 3 ? "\n측정 예: DirectX 설치 약 3분" : "")
-                        + (prepFirstRun ? "\n게임마다 처음 한 번만 하며, 끝나면 게임이 자동으로 시작됨" : "");
+                        + " · " + mmss(now - prepStartMs)
+                        + "\n다음: 게임 시작";
             }
             runOnUiThread(() -> {
                 prepView.setText(text);
@@ -2175,10 +2259,16 @@ public class DisplayActivity extends Activity {
         for (File lib : libs) {
             File redist = new File(lib, "common/Steamworks Shared/_CommonRedist");
             if (!redist.isDirectory()) continue;
-            // Only a finished download (StateFlags 4 or no record) / 다 받은 것만(StateFlags 4 또는 기록 없음)
+            // Usable files only: installed, no update running (same rule as ezs-baseprefix.py
+            // files_usable; "update required" alone is fine), or no record
+            // 쓸 수 있는 파일만: 설치됨, 진행 중인 업데이트 없음(ezs-baseprefix.py files_usable과 같은 규칙.
+            // "업데이트 필요"만 있는 것은 괜찮음), 또는 기록 없음
             String acf = readText(new File(lib, "appmanifest_228980.acf"));
             java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"StateFlags\"\\s+\"(\\d+)\"").matcher(acf);
-            if (m.find() && !m.group(1).equals("4")) return 0;
+            if (m.find()) {
+                long fl = Long.parseLong(m.group(1));
+                if ((fl & 4) == 0 || (fl & (32 | 128 | 256 | 512 | 1024 | 2048)) != 0 || fl >= 65536) return 0;
+            }
             int n = 0;
             File[] tops = redist.listFiles(File::isDirectory);
             for (File top : tops == null ? new File[0] : tops) {
