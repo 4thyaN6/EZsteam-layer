@@ -531,6 +531,7 @@ public class DisplayActivity extends Activity {
             }
             int n = RootfsInstaller.syncScripts(this);
             if (n > 0) log("스크립트 동기화 " + n + "개");
+            killLeftovers();
             GlibcLauncher.Config c = new GlibcLauncher.Config();
             c.rootfs = RootfsInstaller.rootfsDir(this);
             c.nativeLibDir = new File(getApplicationInfo().nativeLibraryDir);
@@ -1436,6 +1437,52 @@ public class DisplayActivity extends Activity {
         if (!inFront) log("APP 화면 돌아옴");
         inFront = true;
         view.onResume();
+    }
+
+    /**
+     * Processes of this app left from a session that was killed (orphans: not under this app
+     * process any more), stopped before a new session. After the Steam session was killed (137)
+     * its X server stayed alive and the next start failed with "server already running"
+     * (2026-10-21). Only processes of this app's own user id; work started from this app process
+     * (e.g. [DirectX 설치]) is a descendant and is left alone.
+     * 죽은 세션에서 남은 이 앱의 프로세스(고아: 더는 이 앱 프로세스 아래에 없음)를 새 세션 전에 멈춤. Steam
+     * 세션이 137로 죽은 뒤 X 서버가 살아남아 다음 시작이 "server already running"으로 실패했음(2026-10-21).
+     * 이 앱 사용자 id의 프로세스만 대상. 이 앱 프로세스에서 시작한 작업([DirectX 설치] 등)은 자손이라 건드리지 않음
+     */
+    private void killLeftovers() {
+        int me = android.os.Process.myPid();
+        int uid = android.os.Process.myUid();
+        java.util.Map<Integer, Integer> parent = new java.util.HashMap<>();
+        java.util.Map<Integer, String> name = new java.util.HashMap<>();
+        File[] procs = new File("/proc").listFiles(f -> f.getName().matches("\\d+"));
+        for (File pd : procs == null ? new File[0] : procs) {
+            String st = readText(new File(pd, "status"));
+            java.util.regex.Matcher u = java.util.regex.Pattern.compile("(?m)^Uid:\\s+(\\d+)").matcher(st);
+            java.util.regex.Matcher pp = java.util.regex.Pattern.compile("(?m)^PPid:\\s+(\\d+)").matcher(st);
+            java.util.regex.Matcher nm = java.util.regex.Pattern.compile("(?m)^Name:\\s+(.*)$").matcher(st);
+            if (!u.find() || Integer.parseInt(u.group(1)) != uid || !pp.find()) continue;
+            int pid = Integer.parseInt(pd.getName());
+            parent.put(pid, Integer.parseInt(pp.group(1)));
+            name.put(pid, nm.find() ? nm.group(1).trim() : "?");
+        }
+        java.util.List<String> killed = new java.util.ArrayList<>();
+        for (int pid : parent.keySet()) {
+            if (pid == me) continue;
+            // Under this app process? / 이 앱 프로세스 아래인가?
+            int p = pid, guard = 0;
+            boolean mine = false;
+            while (parent.containsKey(p) && guard++ < 64) {
+                p = parent.get(p);
+                if (p == me) {
+                    mine = true;
+                    break;
+                }
+            }
+            if (mine) continue;
+            android.os.Process.killProcess(pid);
+            killed.add(name.get(pid) + "(" + pid + ")");
+        }
+        if (!killed.isEmpty()) log("이전 세션에서 남은 프로세스 " + killed.size() + "개 멈춤: " + String.join(", ", killed));
     }
 
     /** Lines of the Steam log shown in the app log (case-insensitive)
@@ -2453,13 +2500,21 @@ public class DisplayActivity extends Activity {
      * 어디로도 보내지 않으며 사용자가 저장한 곳에만 남음. 로그에 Steam 계정 이름과 경로가 들어 있을 수
      * 있으므로 공유 전에 사용자가 확인함
      */
+    private volatile boolean saving;
+
     private void saveLogs() {
         String stamp = new java.text.SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.ROOT).format(new java.util.Date());
         // Testers: straight into Download/.EZlator/Reports, the folder EZlator reports use too
         // (newest 5 of this layer kept). Without the storage permission: the file picker as before
         // 테스터용: EZlator 제보와 같은 Download/.EZlator/Reports에 바로 저장(이 레이어 것 최근 5개 유지).
         // 저장소 권한이 없으면 예전처럼 파일 선택 창
+        // One save at a time / 한 번에 하나만 저장
+        if (saving) {
+            notice("로그 저장 중입니다. 끝나면 알림이 뜹니다");
+            return;
+        }
         if (app.ezsteam.runtime.SharedStorage.granted(this)) {
+            saving = true;
             String appLog = String.join("\n", saveLines) + "\n";
             String procs = processText();
             new Thread(() -> {
@@ -2472,10 +2527,15 @@ public class DisplayActivity extends Activity {
                     // ".part"로 쓰고 다 쓰면 이름을 바꿈: 쓰는 중에 컴퓨터로 복사한 제보가 잘린 채
                     // 도착했음(8 KB, 2026-10-20)
                     File part = new File(dir, zip.getName() + ".part");
+                    // Leftovers of a save that never finished (older than 10 minutes); a save in
+                    // progress is not touched (two quick saves deleted each other's file, 2026-10-21)
+                    // 끝나지 못한 저장의 남은 파일(10분 넘은 것). 진행 중인 저장은 건드리지 않음(연달아 두 번
+                    // 저장하자 서로의 파일을 지웠음, 2026-10-21)
+                    long old = System.currentTimeMillis() - 10 * 60_000L;
                     File[] stale = dir.listFiles((d, n) -> n.endsWith(".zip.part"));
                     for (File f : stale == null ? new File[0] : stale) {
                         //noinspection ResultOfMethodCallIgnored
-                        f.delete();
+                        if (f.lastModified() < old) f.delete();
                     }
                     notice("로그 저장 중… (게임 폴더 검사 포함, 끝나면 알림)");
                     try (java.io.OutputStream os = new java.io.FileOutputStream(part)) {
@@ -2504,6 +2564,8 @@ public class DisplayActivity extends Activity {
                     log("공용 폴더 저장 실패, 파일 선택 창으로 저장: " + e);
                     notice("공용 폴더 저장 실패, 저장 위치를 고르십시오");
                     runOnUiThread(() -> pickLogFile("ezsteam-logs-" + stamp + ".zip"));
+                } finally {
+                    saving = false;
                 }
             }, "ezs-log-save").start();
             return;
@@ -2578,6 +2640,15 @@ public class DisplayActivity extends Activity {
         // 모든 IP 주소는 <v4>/<v6>로 바꿈(종류만 남김)
         File conn = new File(rootfs, "home/steam/.local/share/Steam/logs/connection_log.txt");
         if (conn.isFile()) files.add(conn);
+        // The client's own launch and compatibility logs: each game start step ("GameAction") and
+        // which compatibility tool it picked. A game start that never reached EZ Proton left no
+        // trace in the other logs (2026-10-21)
+        // 클라이언트 자체 실행·호환성 로그: 게임 시작 단계마다("GameAction")와 고른 호환성 도구. EZ Proton까지
+        // 오지 못한 게임 시작은 다른 로그에 흔적이 없었음(2026-10-21)
+        for (String n : new String[]{"console_log.txt", "compat_log.txt"}) {
+            File f = new File(rootfs, "home/steam/.local/share/Steam/logs/" + n);
+            if (f.isFile()) files.add(f);
+        }
         // The Steam web helper wrapper as patched by ezsteam-prepare.sh (the feature merge did not
         // reach the browser switches, 2026-10-18); a short Valve script, sent only in a report
         // the user saves

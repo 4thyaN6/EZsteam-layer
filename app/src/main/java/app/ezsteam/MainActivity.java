@@ -343,11 +343,13 @@ public class MainActivity extends Activity {
         return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_SHARED_LIB, true);
     }
 
-    /** Start Steam in Big Picture (on by default, user request 2026-10-20) / Steam을 빅픽처로 시작(기본 켬, 사용자 요청 2026-10-20) */
+    /** Start Steam in Big Picture. Off by default for now: it showed only a black screen on the
+     *  device (2026-10-21), cause not found yet / Steam을 빅픽처로 시작. 지금은 기본 끔: 기기에서 검은
+     *  화면만 나왔고(2026-10-21) 원인을 아직 찾지 못함 */
     static final String KEY_BIG_PICTURE = "steam.bigpicture";
 
     static boolean bigPicture(android.content.Context ctx) {
-        return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_BIG_PICTURE, true);
+        return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_BIG_PICTURE, false);
     }
 
     private static String bigPictureLabel(boolean on) {

@@ -118,8 +118,12 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - 첫 시작 전 라이브러리 검사: 패키지 목록이 없을 때 CEF·FFmpeg 이름(libcef.so, libav*, libsw*)은 클라이언트 파일 검사가 받으므로 apt에 묻지 않음(새 설치에서 약 18초 + 헷갈리는 경고)
 - Steam 언어: 앱이 휴대폰 언어(BCP 47)를 `EZS_LANG`으로 넘기고 `steam-language.py`가 Steam 언어 이름(koreana, english, japanese, schinese/tchinese, brazilian, latam 등)으로 바꿔 `~/.steam/registry.vdf`의 HKCU/Software/Valve/Steam `language`에 시작마다 씀. 모르는 언어면 그대로 둠
 - 제보 추가 항목: `storage-usage.txt`(앱 파일·캐시, rootfs, Steam 폴더, 게임·prefix, 기본 prefix, /usr, /var 크기), `dx-usage.txt`(라이브러리별 게임의 .exe/.dll 안에서 DirectX 2010년 6월 런타임 DLL 이름(d3dx9/10/11, d3dcompiler_33~43, xinput1_3, xaudio2_0~7, x3daudio, xact, xapofx)을 ASCII·UTF-16으로 찾고, 게임 폴더에 같은 DLL이 직접 들어 있는지 표시. Windows 8/10 기본 DLL은 세지 않음). 큰 라이브러리면 저장에 시간이 더 걸림
+- 제보에 Steam 자체 `logs/console_log.txt`(게임 시작 단계 GameAction 등)와 `logs/compat_log.txt`(호환성 도구 선택)도 넣음(끝부분, 글은 가림 처리)
 - 제보 `dll-check.txt`: Proton의 `files/lib/wine/*-windows`, 기본 prefix, 최근 게임 prefix 4개의 system32·syswow64에서 확인 DLL(d3dx9_43, xinput1_3, xaudio2_7, d3dcompiler_43, xinput1_4, xaudio2_9, msvcp140, vcruntime140, d3d11, dxgi)마다 PE 헤더 CPU(x86, x86-64, ARM64, ARM64EC, ARM64X)와 출처(Wine builtin, Wine 자리표시, Wine 아님 = Microsoft 등), 이어서 Proton 로그마다 그중 native/builtin으로 불러온 것
 - EZ Proton: Proton을 받는 중에 Steam이 부르면 "not found" 대신 "still downloading"
+- EZ Proton: Steam의 그래픽 드라이버 조회(`d3ddriverquery64.exe`, 로그인 때와 게임 시작 때 두 번)는 실행하지 않고 바로 끝냄. 실행할 때마다 prefix 0에 Wine 세션 전체가 게임과 따로 떠, 그 순간 프로세스가 안드로이드 한도를 넘어 세션이 137("Cannot fork")로 종료됐음
+- 세션 시작 전 정리: 이 앱 사용자 id의 프로세스 중 앱 프로세스 아래에 없는 것(죽은 세션의 고아)을 멈춤. 세션이 137로 죽은 뒤 남은 X 서버 때문에 다음 시작이 "server already running"으로 실패했음. 앱 로그 `이전 세션에서 남은 프로세스 N개 멈춤`
+- 제보 저장은 한 번에 하나만. 10분 넘은 `.zip.part`만 지움(연달아 두 번 저장하자 서로의 파일을 지웠음)
 - Steam 클라이언트의 USB 장치 검사(DetectUsbEntities): 대기 중 초당 약 28번 libusb를 불러오고(폴더 두 곳 검색) /dev/bus/usb·/sys를 확인했음(분당 1668회, 모두 실패). `libezs_compat.so`가 "steam" 프로세스의 libusb 불러오기를 라이브러리가 없는 것처럼 거절해 시스템 호출 없이 끝냄(안드로이드는 앱에 그 USB 장치를 주지 않음). `EZS_LIBUSB=1`이면 끔. IO 통계를 켜면 `ezs-io: libusb 불러오기 거절 N회`
 - 제보 저장 후 새 파일과 지운 옛 제보를 함께 미디어 목록에 알림(USB로 연결한 컴퓨터에 지운 제보가 남아 보이거나 새 제보가 늦게 보였음). 앱 로그 `미디어 목록 갱신:`
 - 진행 표시: [Steam 시작]의 설치 등 설치 작업 중 시작 줄 아래 진행 패널(현재 단계 `[n/4]`, 움직이는 막대, 전체 비율, 경과 시간, 받은 양을 1초마다 갱신). Steam 화면에서는 첫 Steam 창이 뜨기 전까지 가운데 진행 카드: 시작 중 → 업데이트 받는 중(`Downloading update (X of Y KB)` 기준 %) → 설치 중 → 확인 중 → 적용·다시 시작(exit 42) → 필요한 라이브러리 설치. 첫 Steam 창(X 새 창 포커스)이 뜨면 숨김. 갱신 진행 줄은 단계가 바뀔 때만 앱 로그에 남김. 첫 로그인 뒤 Proton 받기는 위쪽 안내 띠 "게임 실행 환경 준비 1/3: Proton 받는 중 NN%"(appmanifest_4628740 BytesDownloaded/BytesToDownload), 이어지는 기본 prefix(prefix + Visual C++)는 "2/3", 백그라운드 DirectX는 "3/3"(게임 실행 중에는 띠를 숨김). 안내 띠 왼쪽에 작은 스피너
@@ -131,7 +135,7 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - 화면 확대 방식: 선형 → 바이큐빅 → 바이큐빅+선명 → FSR 1(EASU + RCAS, AMD FidelityFX FSR 1.0 알고리즘을 GLSL ES로 직접 옮김, MIT). FSR 셰이더나 화면 밖 버퍼가 실패하면 바이큐빅+선명으로 그리고 앱 로그에 남김
 - FSR 1 선명도: [확대] 길게 누름 → 0(가장 선명) / 0.2(FSR 기본) / 0.5 / 1.0 / 2.0(약하게) / 선명화 끔(EASU 확대만). RCAS 단 단위라 숫자가 작을수록 선명함. 고르면 FSR 1로 바뀌고 다음에도 유지
 - 소프트 키보드: 키보드가 뜨면 마지막으로 누른 곳(보통 입력란)이 키보드 위에 오도록 게임 화면을 필요한 만큼만 올리고, 숨으면 되돌림(안드로이드 11 이상은 창 인셋의 키보드 높이, 이전은 보이는 창 영역)
-- 시작 화면: [시작 화면: 빅픽처/일반](기본 빅픽처) → steam-run.sh가 `-gamepadui`를 붙임. 로그인을 기억한 계정(`config/loginusers.vdf`의 `AllowAutoLogin "1"`)이 있을 때만이며, 그 전(첫 로그인)에는 일반 창. 앱 로그 `INFO steam : 빅픽처는 첫 로그인 뒤부터`
+- 시작 화면: [시작 화면: 빅픽처/일반](기본 일반. 빅픽처는 기기에서 검은 화면만 나와 원인 확인 전까지 끔) → steam-run.sh가 `-gamepadui`를 붙임. 로그인을 기억한 계정(`config/loginusers.vdf`의 `AllowAutoLogin "1"`)이 있을 때만이며, 그 전(첫 로그인)에는 일반 창. 앱 로그 `INFO steam : 빅픽처는 첫 로그인 뒤부터`
 - 새 최상위 창: 크기·위치·깊이를 앱 로그 `X 새 창 0x…`에 남기고, `_NET_WM_STATE_FULLSCREEN`을 요청한 창은 창 관리자처럼 화면 전체 크기로 맞춤(빅픽처가 소리만 나고 화면이 비었던 원인 확인용)
 - 설치·준비 작업 중 30초마다 앱 로그에 `… <작업> 진행 중 N분: 받은 양, 최근 30초 Mbps, 자식 수, 가장 바쁜 프로세스(CPU%)` 한 줄(오래 걸리는 단계와 멈춘 단계 구분용)
 - 시작 화면: [Steam 시작](빠진 것이 있으면 rootfs → 드라이버 → 시험 도구(Xvfb) → Steam 설치를 빠진 것만 순서대로 진행 패널과 함께 설치한 뒤 바로 Steam, 다 있으면 바로 Steam. 실패한 단계에서 멈춤), [화면 1280x800/1920x1200], [바로 실행: 켬/끔](앱을 새로 열 때 바로 Steam, 기본 켬, 설치가 필요하면 자동으로 하지 않음), [관리자 모드](설치·시험 버튼 표시/숨김, [전체 준비만] = Steam을 열지 않고 설치만)
