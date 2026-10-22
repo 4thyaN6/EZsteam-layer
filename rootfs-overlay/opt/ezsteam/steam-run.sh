@@ -273,6 +273,38 @@ while :; do
             mkdir -p "$HOME/.steam" && echo "$ui_id" > "$UI_OK"
         fi
     fi
+    # Web helper (draws the Steam screen): after the client update of 2026-10-22 it stopped with
+    # "steamwebhelper: error while loading shared libraries: libcef.so" every 10 s and the Steam
+    # screen never came up, while steamui.so still loaded (user report). Checked with the web
+    # helper's own library search (no extra path), once per web helper file (size and time): when
+    # the client's own libraries are missing, the file check runs on this start. The places a
+    # libcef.so exists are logged for diagnosis.
+    # 웹 도우미(Steam 화면을 그림): 2026-10-22 클라이언트 갱신 뒤 "steamwebhelper: error while loading
+    # shared libraries: libcef.so"로 10초마다 멈추고 Steam 화면이 뜨지 않았음. steamui.so는 그대로
+    # 불러와졌음(사용자 제보). 웹 도우미 자체 라이브러리 검색(추가 경로 없음)으로 웹 도우미 파일(크기·시각)당
+    # 한 번 확인함. 클라이언트 자체 라이브러리가 없으면 이번 시작에 파일 검사를 함. libcef.so가 있는 곳은
+    # 진단용으로 남김
+    WHB=$STEAM_DIR/steamrtarm64/steamwebhelper
+    WH_DONE=$HOME/.steam/.ezs-webhelper-checked
+    wh_id=$(stat -c '%s %Y' "$WHB" 2>/dev/null)
+    if [ -f "$WHB" ] && [ "$wh_id" != "$(cat "$WH_DONE" 2>/dev/null)" ]; then
+        wh_missing=$(ldd "$WHB" 2>/dev/null | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ')
+        if [ -n "$wh_missing" ]; then
+            echo "WARN steam : Steam 화면 도우미에 없는 라이브러리($wh_missing)"
+            # Each libcef.so: path -> real file, or "없음" for a broken link
+            # libcef.so마다: 경로 -> 실제 파일, 끊어진 링크면 "없음"
+            find "$STEAM_DIR/steamrtarm64" "$STEAM_DIR/linuxarm64" -name 'libcef.so*' 2>/dev/null | head -n 5 \
+                | while IFS= read -r f; do
+                    echo "INFO steam :   $f -> $(readlink -e "$f" 2>/dev/null || echo 없음)"
+                done
+            if echo " $wh_missing" | grep -qE ' (libcef|libav|libsw)' && [ -z "${VERIFIED:-}" ]; then
+                VERIFY=
+                VERIFIED=1
+                echo "INFO steam : → 파일 검사·받기를 켜고 시작 (이 도우미 파일당 한 번)"
+            fi
+        fi
+        mkdir -p "$HOME/.steam" && echo "$wh_id" > "$WH_DONE"
+    fi
     # Where the client's own video libraries are, if any (diagnosis). Only the client's program
     # folders: the whole Steam folder holds every installed game and took seconds to walk
     # 클라이언트 자체 영상 라이브러리 위치(진단). 클라이언트 프로그램 폴더만 봄: Steam 폴더 전체에는 설치된
@@ -287,17 +319,21 @@ while :; do
     [ "${EZS_STEAM_GPU:-0}" = 1 ] && GPUARG=
     # Big Picture (the controller-friendly full screen UI) when the app asks for it
     # 앱이 요청하면 빅픽처(컨트롤러용 전체 화면 UI)로 시작
-    # Only once an account signs in by itself (remembered sign-in, AllowAutoLogin "1" in
-    # config/loginusers.vdf): before that the normal window opens for the first sign-in, because
-    # Big Picture without a signed-in account was of no use (user report 2026-10-20)
-    # 계정이 스스로 로그인할 수 있을 때만(로그인 기억, config/loginusers.vdf의 AllowAutoLogin "1"). 그
-    # 전에는 첫 로그인을 위해 일반 창을 엶. 로그인된 계정 없이 빅픽처로는 쓸 수 없었음(사용자 보고 2026-10-20)
+    # Only after an account has signed in once (a sign-in answered 'OK' in logs/connection_log.txt):
+    # before that the normal window opens for the first sign-in, because Big Picture without a
+    # signed-in account was of no use (user report 2026-10-20). The earlier test, AllowAutoLogin "1"
+    # in config/loginusers.vdf, stayed false although Steam signed in by itself at every start
+    # (connection_log, 2026-10-21), so Big Picture never started. Account files are not read.
+    # 계정이 한 번이라도 로그인한 뒤에만(logs/connection_log.txt에 로그인 응답 'OK'). 그 전에는 첫 로그인을
+    # 위해 일반 창을 엶. 로그인된 계정 없이 빅픽처로는 쓸 수 없었음(사용자 보고 2026-10-20). 이전 조건
+    # (config/loginusers.vdf의 AllowAutoLogin "1")은 Steam이 시작마다 스스로 로그인했는데도 계속 거짓이라
+    # 빅픽처가 한 번도 시작되지 않았음(connection_log, 2026-10-21). 계정 파일은 읽지 않음
     BPARG=
     if [ "${EZS_STEAM_BIGPICTURE:-0}" = 1 ]; then
-        if grep -Eq '"AllowAutoLogin"[[:space:]]+"1"' "$STEAM_DIR/config/loginusers.vdf" 2>/dev/null; then
+        if grep -q "RecvMsgClientLogOnResponse() : .* 'OK'" "$STEAM_DIR/logs/connection_log.txt" 2>/dev/null; then
             BPARG=-gamepadui
         else
-            echo "INFO steam : 빅픽처는 첫 로그인 뒤부터 (로그인 기억 계정 없음, 이번에는 일반 창)"
+            echo "INFO steam : 빅픽처는 첫 로그인 뒤부터 (로그인 기록 없음, 이번에는 일반 창)"
         fi
     fi
     echo "INFO steam : 시작 $n ($(date +%H:%M:%S)) 화면 GPU=${EZS_STEAM_GPU:-0} 빅픽처=$([ -n "$BPARG" ] && echo 1 || echo 0)"

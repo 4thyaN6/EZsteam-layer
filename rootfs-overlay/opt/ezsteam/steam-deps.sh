@@ -69,8 +69,12 @@ if m:
 # libcef.so / libav*.so.* that apt cannot provide
 # 클라이언트가 자기 폴더의 더 깊은 곳에 직접 가진 라이브러리(예: libcef.so와 영상 라이브러리)는 빠진 것이
 # 아님: 클라이언트가 그곳에서 불러옴. 테스터에게 apt로 줄 수 없는 libcef.so / libav*.so.* FAIL 줄이 나왔음
+# Only a real file counts (a link must lead to a file, -xtype f): a broken link must not hide a
+# library that is really gone (Steam screen did not start on libcef.so, 2026-10-22)
+# 실제 파일만 셈(링크는 파일로 이어져야 함, -xtype f): 끊어진 링크가 정말 없어진 라이브러리를 가리면 안 됨
+# (libcef.so 때문에 Steam 화면이 뜨지 않았음, 2026-10-22)
 own=$(echo "$missing" | while IFS= read -r so; do
-    [ -n "$so" ] && [ -n "$(find "$STEAM_DIR" -name "$so" \( -type f -o -type l \) -print -quit 2>/dev/null)" ] && echo "$so"
+    [ -n "$so" ] && [ -n "$(find "$STEAM_DIR" -name "$so" -xtype f -print -quit 2>/dev/null)" ] && echo "$so"
 done)
 if [ -n "$own" ]; then
     echo "INFO deps : 클라이언트가 직접 가진 라이브러리(설치 불필요): $(echo "$own" | tr '\n' ' ')"

@@ -34,6 +34,8 @@ import java.util.Set;
  *   요소 밖에서 시작한 터치는 아래 화면으로 넘어감
  * - Size: one scale on top of each element's own scale; opacity: how strongly they are drawn
  *   크기: 요소마다의 배율 위에 곱하는 배율 하나, 진하기: 얼마나 진하게 그릴지
+ * - Spacing: spreads each side's controls from that side's centre
+ *   간격: 각 쪽 조작부를 그쪽 중심에서 벌림
  */
 public final class TouchPadView extends View {
 
@@ -92,6 +94,9 @@ public final class TouchPadView extends View {
     private Input input;
     private float scale = 1f;
     private float opacity = 0.45f;
+    /** Spacing: distance of each control from the centre of its side, 0.8..1.6 (1 = as in the file)
+     *  간격: 각 조작부가 자기 쪽(왼쪽·오른쪽) 중심에서 떨어진 거리, 0.8..1.6(1 = 파일 그대로) */
+    private float gap = 1f;
     /** Keys and mouse buttons currently held by the pad / 패드가 지금 누르고 있는 키·마우스 버튼 */
     private final Set<Integer> keysDown = new HashSet<>(), buttonsDown = new HashSet<>();
     private final Map<Item, Boolean> scrollSent = new HashMap<>();
@@ -136,6 +141,19 @@ public final class TouchPadView extends View {
         invalidate();
     }
 
+    /**
+     * Spacing 0.8..1.6: spreads the controls of each side (left / right half) away from that side's
+     * centre, so bigger controls do not run into each other (user report 2026-10-22: with a larger
+     * size the controls had to be farther apart and the size alone could not do it)
+     * 간격 0.8..1.6: 각 쪽(왼쪽·오른쪽 절반)의 조작부를 그쪽 중심에서 벌림. 크기를 키운 조작부끼리 겹치지
+     * 않게 함(사용자 제보 2026-10-22: 크기를 키우면 조작부가 더 벌어져야 했는데 크기만으로는 안 됐음)
+     */
+    public void setGap(float gap) {
+        this.gap = Math.max(0.8f, Math.min(1.6f, gap));
+        place();
+        invalidate();
+    }
+
     /** Release everything (hidden, focus lost) / 모두 뗌(숨김, 포커스 잃음) */
     public void releaseAll() {
         for (Item it : items) {
@@ -157,13 +175,33 @@ public final class TouchPadView extends View {
     private void place() {
         int w = getWidth(), h = getHeight();
         float grid = w / 100f;
+        // Centre of each side (average position of its controls) for the spacing
+        // 간격용 각 쪽의 중심(그쪽 조작부의 평균 위치)
+        float[] sx = new float[2], sy = new float[2];
+        int[] sn = new int[2];
+        for (Item it : items) {
+            int side = it.e.x < 0.5f ? 0 : 1;
+            sx[side] += it.e.x;
+            sy[side] += it.e.y;
+            sn[side]++;
+        }
+        for (int i = 0; i < 2; i++) {
+            if (sn[i] > 0) {
+                sx[i] /= sn[i];
+                sy[i] /= sn[i];
+            }
+        }
         for (Item it : items) {
             float[] half = it.e.halfSize();
             it.unit = grid * it.e.scale * scale;
-            it.cx = it.e.x * w;
-            it.cy = it.e.y * h;
-            it.box.set(it.cx - half[0] * it.unit, it.cy - half[1] * it.unit,
-                    it.cx + half[0] * it.unit, it.cy + half[1] * it.unit);
+            int side = it.e.x < 0.5f ? 0 : 1;
+            float hw = half[0] * it.unit, hh = half[1] * it.unit;
+            float x = (sx[side] + (it.e.x - sx[side]) * gap) * w;
+            float y = (sy[side] + (it.e.y - sy[side]) * gap) * h;
+            // Keep the whole control on screen / 조작부 전체가 화면 안에 있게 함
+            it.cx = Math.max(Math.min(hw, w / 2f), Math.min(w - Math.min(hw, w / 2f), x));
+            it.cy = Math.max(Math.min(hh, h / 2f), Math.min(h - Math.min(hh, h / 2f), y));
+            it.box.set(it.cx - hw, it.cy - hh, it.cx + hw, it.cy + hh);
         }
     }
 

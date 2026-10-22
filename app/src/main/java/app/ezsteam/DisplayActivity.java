@@ -179,6 +179,7 @@ public class DisplayActivity extends Activity {
         touchPad.setVisibility(View.GONE);
         android.content.SharedPreferences pp = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE);
         touchPad.setLook(pp.getFloat(PREF_PAD_SCALE, 1f), pp.getFloat(PREF_PAD_OPACITY, 0.45f));
+        touchPad.setGap(pp.getFloat(PREF_PAD_GAP, 1f));
         // After the log view exists (the layout load writes a log line) / 로그 뷰가 생긴 뒤(배치 읽기가 로그를 남김)
         root.post(this::loadPadLayout);
         // Keyboard and mouse bindings of the layout go to the X server
@@ -938,6 +939,8 @@ public class DisplayActivity extends Activity {
     // ---- on-screen touch pad / 화면 터치 패드
 
     private static final String PREF_PAD_SCALE = "pad.scale", PREF_PAD_OPACITY = "pad.opacity";
+    /** Touch pad spacing 0.8..1.6 / 터치 패드 간격 0.8..1.6 */
+    private static final String PREF_PAD_GAP = "pad.gap";
     private static final int REQ_PAD_LAYOUT = 7302;
 
     /** Imported layout (.icp) kept inside the app / 앱 안에 보관한 불러온 배치(.icp) */
@@ -1020,13 +1023,15 @@ public class DisplayActivity extends Activity {
     }
 
     /**
-     * Size and opacity of the touch pad, saved for next time. Size scales every control and its
-     * distance from the edges (50..180 %).
-     * 터치 패드 크기와 투명도, 다음에도 유지함. 크기는 모든 조작부와 가장자리까지의 거리를 함께 바꿈(50..180 %)
+     * Size, spacing and opacity of the touch pad, saved for next time. Size scales every control
+     * (50..180 %); spacing spreads each side's controls apart (80..160 %).
+     * 터치 패드 크기·간격·진하기, 다음에도 유지함. 크기는 모든 조작부를 키움(50..180 %), 간격은 각 쪽
+     * 조작부 사이를 벌림(80..160 %)
      */
     private void showPadSettings() {
         android.content.SharedPreferences pp = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE);
-        float[] cur = {pp.getFloat(PREF_PAD_SCALE, 1f), pp.getFloat(PREF_PAD_OPACITY, 0.45f)};
+        float[] cur = {pp.getFloat(PREF_PAD_SCALE, 1f), pp.getFloat(PREF_PAD_OPACITY, 0.45f),
+                pp.getFloat(PREF_PAD_GAP, 1f)};
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         int pad16 = (int) (16 * getResources().getDisplayMetrics().density);
@@ -1039,12 +1044,19 @@ public class DisplayActivity extends Activity {
         android.widget.SeekBar alpha = new android.widget.SeekBar(this);
         alpha.setMax(75);  // 15..90 %
         alpha.setProgress(Math.round(cur[1] * 100) - 15);
+        TextView gapText = new TextView(this);
+        android.widget.SeekBar gapBar = new android.widget.SeekBar(this);
+        gapBar.setMax(80);  // 80..160 %
+        gapBar.setProgress(Math.round(cur[2] * 100) - 80);
         Runnable update = () -> {
             cur[0] = (size.getProgress() + 50) / 100f;
             cur[1] = (alpha.getProgress() + 15) / 100f;
+            cur[2] = (gapBar.getProgress() + 80) / 100f;
             sizeText.setText("크기(손 크기) " + (size.getProgress() + 50) + "%");
+            gapText.setText("간격(조작부 사이) " + (gapBar.getProgress() + 80) + "%");
             alphaText.setText("진하기 " + (alpha.getProgress() + 15) + "%");
             touchPad.setLook(cur[0], cur[1]);
+            touchPad.setGap(cur[2]);
         };
         android.widget.SeekBar.OnSeekBarChangeListener l = new android.widget.SeekBar.OnSeekBarChangeListener() {
             @Override
@@ -1061,9 +1073,12 @@ public class DisplayActivity extends Activity {
             }
         };
         size.setOnSeekBarChangeListener(l);
+        gapBar.setOnSeekBarChangeListener(l);
         alpha.setOnSeekBarChangeListener(l);
         box.addView(sizeText);
         box.addView(size);
+        box.addView(gapText);
+        box.addView(gapBar);
         box.addView(alphaText);
         box.addView(alpha);
         update.run();
@@ -1074,24 +1089,30 @@ public class DisplayActivity extends Activity {
                 .setTitle("터치 패드")
                 .setView(box)
                 .setPositiveButton("저장", (d, w) -> pp.edit()
-                        .putFloat(PREF_PAD_SCALE, cur[0]).putFloat(PREF_PAD_OPACITY, cur[1]).apply())
+                        .putFloat(PREF_PAD_SCALE, cur[0]).putFloat(PREF_PAD_OPACITY, cur[1])
+                        .putFloat(PREF_PAD_GAP, cur[2]).apply())
                 .setNeutralButton("배치 파일…", (d, w) -> {
                     // Keep the size and opacity being tried, then choose the layout
                     // 시험 중인 크기·진하기를 저장한 뒤 배치를 고름
-                    pp.edit().putFloat(PREF_PAD_SCALE, cur[0]).putFloat(PREF_PAD_OPACITY, cur[1]).apply();
+                    pp.edit().putFloat(PREF_PAD_SCALE, cur[0]).putFloat(PREF_PAD_OPACITY, cur[1])
+                            .putFloat(PREF_PAD_GAP, cur[2]).apply();
                     showPadLayoutMenu();
                 })
-                .setNegativeButton("취소", (d, w) -> touchPad.setLook(
-                        pp.getFloat(PREF_PAD_SCALE, 1f), pp.getFloat(PREF_PAD_OPACITY, 0.45f)))
-                .setOnCancelListener(d -> touchPad.setLook(
-                        pp.getFloat(PREF_PAD_SCALE, 1f), pp.getFloat(PREF_PAD_OPACITY, 0.45f)))
+                .setNegativeButton("취소", (d, w) -> restorePadLook(pp))
+                .setOnCancelListener(d -> restorePadLook(pp))
                 .show();
+    }
+
+    /** Saved size, opacity and spacing back on the pad (cancel) / 저장된 크기·진하기·간격으로 되돌림(취소) */
+    private void restorePadLook(android.content.SharedPreferences pp) {
+        touchPad.setLook(pp.getFloat(PREF_PAD_SCALE, 1f), pp.getFloat(PREF_PAD_OPACITY, 0.45f));
+        touchPad.setGap(pp.getFloat(PREF_PAD_GAP, 1f));
     }
 
     /** Layout choices: import a .icp, back to the default, or default size and opacity
      *  배치 선택: .icp 불러오기, 기본 배치로, 크기·진하기 기본값 */
     private void showPadLayoutMenu() {
-        String[] items = {"배치 파일(.icp) 불러오기", "기본 배치로 되돌리기", "크기·진하기 기본값"};
+        String[] items = {"배치 파일(.icp) 불러오기", "기본 배치로 되돌리기", "크기·간격·진하기 기본값"};
         new android.app.AlertDialog.Builder(this)
                 .setTitle("터치 패드 배치")
                 .setItems(items, (d, which) -> {
@@ -1103,8 +1124,9 @@ public class DisplayActivity extends Activity {
                         loadPadLayout();
                     } else {
                         getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit()
-                                .remove(PREF_PAD_SCALE).remove(PREF_PAD_OPACITY).apply();
+                                .remove(PREF_PAD_SCALE).remove(PREF_PAD_OPACITY).remove(PREF_PAD_GAP).apply();
                         touchPad.setLook(1f, 0.45f);
+                        touchPad.setGap(1f);
                     }
                 })
                 .show();
