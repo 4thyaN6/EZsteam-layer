@@ -196,12 +196,14 @@ public final class TouchPadView extends View {
         // 간격용 각 쪽의 중심(그쪽 조작부의 평균 위치)
         float[] sx = new float[2], sy = new float[2];
         int[] sn = new int[2];
-        Item dpad = null, stick = null;
+        Item dpad = null, stick = null, l3 = null;
         for (Item it : items) {
             it.ex = it.e.x;
             it.ey = it.e.y;
             if (it.e.x < 0.5f && IcpLayout.D_PAD.equals(it.e.type) && dpad == null) dpad = it;
             if (it.e.x < 0.5f && IcpLayout.STICK.equals(it.e.type) && stick == null) stick = it;
+            // L3 presses the left stick, so it moves with it / L3는 왼쪽 스틱을 누르는 버튼이라 스틱과 함께 옮김
+            if (it.e.bindings.length > 0 && "GAMEPAD_BUTTON_L3".equals(it.e.bindings[0]) && l3 == null) l3 = it;
         }
         if (swapLeft && dpad != null && stick != null && w > 0) {
             float dHalf = dpad.e.halfSize()[0] * grid * dpad.e.scale * scale;
@@ -210,6 +212,11 @@ public final class TouchPadView extends View {
             dpad.ey = stick.e.y;
             stick.ex = dpad.e.x;
             stick.ey = dpad.e.y;
+            if (l3 != null) {
+                // Same offset from the stick as in the file / 파일에서와 같은 스틱과의 거리
+                l3.ex = stick.ex + (l3.e.x - stick.e.x);
+                l3.ey = stick.ey + (l3.e.y - stick.e.y);
+            }
         }
         for (Item it : items) {
             int side = it.ex < 0.5f ? 0 : 1;

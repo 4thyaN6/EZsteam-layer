@@ -41,12 +41,56 @@ rm -rf "$FB" /tmp/ezs-vkcube.pid /tmp/ezs-vkcube-display.log && mkdir -p "$FB"
 # 1. X 서버. 화면 메모리는 $FB/Xvfb_screen0(XWD 헤더 + 32비트 픽셀)
 # -noreset: keep the server state (pointer, screen) when the last client disconnects
 # -noreset: 마지막 클라이언트가 끊겨도 서버 상태(포인터, 화면)를 초기화하지 않음
-Xvfb :$D -screen 0 ${W}x${H}x24 -fbdir "$FB" -nolisten tcp -ac -noreset >/tmp/ezs-xvfb-display.log 2>&1 &
-XPID=$!
-i=0
-while { [ ! -S /tmp/.X11-unix/X$D ] || [ ! -s "$FB/Xvfb_screen0" ]; } && [ $i -lt 100 ]; do
-    sleep 0.1; i=$((i + 1))
-done
+# Korean in X core fonts: the Steam self-update window ("Using update UI: xwin") draws with
+# XDrawString16 in "-misc-fixed-medium-r-normal--*-120-*-*-c-*-iso10646-1" (names found in the
+# client binary, app log "INFO font", 2026-10-23), one font without fallback, so Korean came out
+# as boxes. A font folder put first in the X font path answers that name with a Korean TrueType
+# font (an alias). The phone's Noto Sans CJK cannot be used: the X server's font loader refused it
+# (CFF outlines, BadName on OpenFont), TrueType fonts loaded (tested with Xvfb 21, 2026-10-23).
+# NanumGothic comes from Debian's fonts-nanum (SIL OFL), installed by [시험 도구 설치] on the
+# device; nothing is shipped with the app.
+# X 코어 글꼴의 한글: Steam 자체 갱신 창("Using update UI: xwin")은 XDrawString16으로
+# "-misc-fixed-medium-r-normal--*-120-*-*-c-*-iso10646-1" 글꼴에 그림(클라이언트 실행 파일 안 이름,
+# 앱 로그 "INFO font", 2026-10-23). 대체 글꼴 없이 글꼴 하나만 써서 한글이 □로 나왔음. X 글꼴 경로 맨
+# 앞의 글꼴 폴더가 그 이름에 한글 TrueType 글꼴로 답함(별칭). 휴대폰 Noto Sans CJK는 쓸 수 없음: X 서버
+# 글꼴 읽기가 거부했고(CFF 외곽선, OpenFont BadName) TrueType은 읽혔음(Xvfb 21로 시험, 2026-10-23).
+# 나눔고딕은 데비안 fonts-nanum(SIL OFL)이며 기기에서 [시험 도구 설치]가 설치함. 앱에 넣어 배포하지 않음
+XFP=""
+KFONT=""
+# NanumGothic first, any other Nanum TrueType file otherwise / 나눔고딕 먼저, 없으면 다른 나눔 TrueType 파일
+KFONT=$(ls /usr/share/fonts/truetype/nanum/NanumGothic.ttf /usr/share/fonts/truetype/nanum/*Gothic*.ttf \
+    /usr/share/fonts/truetype/nanum/*.ttf 2>/dev/null | head -n 1)
+if [ -n "$KFONT" ]; then
+    XF=/tmp/ezs-xfonts
+    rm -rf "$XF" && mkdir -p "$XF" && ln -s "$KFONT" "$XF/ko.ttf"
+    printf '1\nko.ttf -ezsteam-ko-medium-r-normal--0-0-0-0-p-0-iso10646-1\n' > "$XF/fonts.dir"
+    printf '%s\n' '-misc-fixed-medium-r-normal--13-120-75-75-c-70-iso10646-1 "-ezsteam-ko-medium-r-normal--13-*-*-*-p-*-iso10646-1"' > "$XF/fonts.alias"
+    XFP="$XF,catalogue:/etc/X11/fontpath.d,built-ins"
+else
+    echo "INFO font : X 코어 글꼴용 한글 글꼴 없음 (Steam 갱신 창 한글이 □로 나옴, [시험 도구 설치]를 다시 누르면 받음)"
+fi
+start_xvfb() {
+    # $1: font path, empty = the server's own / $1: 글꼴 경로, 비면 서버 기본값
+    Xvfb :$D -screen 0 ${W}x${H}x24 -fbdir "$FB" -nolisten tcp -ac -noreset ${1:+-fp "$1"} >/tmp/ezs-xvfb-display.log 2>&1 &
+    XPID=$!
+    i=0
+    while { [ ! -S /tmp/.X11-unix/X$D ] || [ ! -s "$FB/Xvfb_screen0" ]; } && [ $i -lt 100 ]; do
+        sleep 0.1; i=$((i + 1))
+    done
+}
+start_xvfb "$XFP"
+if [ ! -S /tmp/.X11-unix/X$D ] && [ -n "$XFP" ]; then
+    # Started without the Korean font folder if the font path was refused
+    # 글꼴 경로가 거부되면 한글 글꼴 폴더 없이 다시 시작함
+    echo "WARN font : X 글꼴 경로로 시작 실패, 기본 글꼴로 다시 시작"
+    head -n 5 /tmp/ezs-xvfb-display.log
+    kill $XPID 2>/dev/null
+    rm -f /tmp/.X11-unix/X$D /tmp/.X$D-lock
+    rm -rf "$FB" && mkdir -p "$FB"
+    XFP=""
+    start_xvfb ""
+fi
+[ -n "$XFP" ] && echo "INFO font : X 코어 글꼴 한글 연결 ${KFONT##*/} (misc-fixed iso10646 별칭)"
 if [ ! -S /tmp/.X11-unix/X$D ]; then
     echo "FAIL xvfb : 시작 안 됨"; head -n 40 /tmp/ezs-xvfb-display.log; kill $XPID 2>/dev/null; exit 0
 fi
