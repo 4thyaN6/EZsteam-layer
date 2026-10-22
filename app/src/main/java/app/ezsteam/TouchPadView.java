@@ -62,6 +62,8 @@ public final class TouchPadView extends View {
         final String label;
         final RectF box = new RectF();
         float cx, cy, unit;
+        /** Position used on screen (file position, or the swapped one) / 화면에 쓰는 위치(파일 위치 또는 바꾼 위치) */
+        float ex, ey;
         boolean toggledOn;
         /** Finger holding it and its push (-1..1, sticks and d-pads) / 잡은 손가락과 기울기(-1..1, 스틱·십자키) */
         int pointer = -1;
@@ -97,6 +99,8 @@ public final class TouchPadView extends View {
     /** Spacing: distance of each control from the centre of its side, 0.8..1.6 (1 = as in the file)
      *  간격: 각 조작부가 자기 쪽(왼쪽·오른쪽) 중심에서 떨어진 거리, 0.8..1.6(1 = 파일 그대로) */
     private float gap = 1f;
+    /** Left D-pad and left stick change places / 왼쪽 십자키와 왼쪽 스틱의 자리를 바꿈 */
+    private boolean swapLeft;
     /** Keys and mouse buttons currently held by the pad / 패드가 지금 누르고 있는 키·마우스 버튼 */
     private final Set<Integer> keysDown = new HashSet<>(), buttonsDown = new HashSet<>();
     private final Map<Item, Boolean> scrollSent = new HashMap<>();
@@ -154,6 +158,19 @@ public final class TouchPadView extends View {
         invalidate();
     }
 
+    /**
+     * Swap the places of the left D-pad and the left stick (stick on top like an Xbox pad, or as in
+     * the file). The D-pad, being bigger, is moved inward by the size difference so it keeps the
+     * stick's distance from the controls beside it.
+     * 왼쪽 십자키와 왼쪽 스틱의 자리를 바꿈(엑스박스 패드처럼 스틱이 위, 또는 파일 그대로). 십자키가 더
+     * 크므로 크기 차이만큼 안쪽으로 옮겨 옆 조작부와의 거리를 스틱과 같게 둠
+     */
+    public void setSwapLeft(boolean swap) {
+        swapLeft = swap;
+        place();
+        invalidate();
+    }
+
     /** Release everything (hidden, focus lost) / 모두 뗌(숨김, 포커스 잃음) */
     public void releaseAll() {
         for (Item it : items) {
@@ -179,10 +196,25 @@ public final class TouchPadView extends View {
         // 간격용 각 쪽의 중심(그쪽 조작부의 평균 위치)
         float[] sx = new float[2], sy = new float[2];
         int[] sn = new int[2];
+        Item dpad = null, stick = null;
         for (Item it : items) {
-            int side = it.e.x < 0.5f ? 0 : 1;
-            sx[side] += it.e.x;
-            sy[side] += it.e.y;
+            it.ex = it.e.x;
+            it.ey = it.e.y;
+            if (it.e.x < 0.5f && IcpLayout.D_PAD.equals(it.e.type) && dpad == null) dpad = it;
+            if (it.e.x < 0.5f && IcpLayout.STICK.equals(it.e.type) && stick == null) stick = it;
+        }
+        if (swapLeft && dpad != null && stick != null && w > 0) {
+            float dHalf = dpad.e.halfSize()[0] * grid * dpad.e.scale * scale;
+            float sHalf = stick.e.halfSize()[0] * grid * stick.e.scale * scale;
+            dpad.ex = stick.e.x + Math.max(0f, dHalf - sHalf) / w;
+            dpad.ey = stick.e.y;
+            stick.ex = dpad.e.x;
+            stick.ey = dpad.e.y;
+        }
+        for (Item it : items) {
+            int side = it.ex < 0.5f ? 0 : 1;
+            sx[side] += it.ex;
+            sy[side] += it.ey;
             sn[side]++;
         }
         for (int i = 0; i < 2; i++) {
@@ -194,10 +226,10 @@ public final class TouchPadView extends View {
         for (Item it : items) {
             float[] half = it.e.halfSize();
             it.unit = grid * it.e.scale * scale;
-            int side = it.e.x < 0.5f ? 0 : 1;
+            int side = it.ex < 0.5f ? 0 : 1;
             float hw = half[0] * it.unit, hh = half[1] * it.unit;
-            float x = (sx[side] + (it.e.x - sx[side]) * gap) * w;
-            float y = (sy[side] + (it.e.y - sy[side]) * gap) * h;
+            float x = (sx[side] + (it.ex - sx[side]) * gap) * w;
+            float y = (sy[side] + (it.ey - sy[side]) * gap) * h;
             // Keep the whole control on screen / 조작부 전체가 화면 안에 있게 함
             it.cx = Math.max(Math.min(hw, w / 2f), Math.min(w - Math.min(hw, w / 2f), x));
             it.cy = Math.max(Math.min(hh, h / 2f), Math.min(h - Math.min(hh, h / 2f), y));

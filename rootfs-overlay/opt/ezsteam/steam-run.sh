@@ -311,6 +311,22 @@ while :; do
     # 게임이 모두 있어 훑는 데 몇 초가 걸렸음
     av=$(find "$STEAM_DIR/steamrtarm64" "$STEAM_DIR/linuxarm64" -maxdepth 4 -name 'libavcodec.so*' -print -quit 2>/dev/null)
     echo "INFO ffmpeg : ${av:-클라이언트 폴더에 libavcodec 없음}"
+    # Diagnosis: which X text functions the client binary names, once per binary (size and time).
+    # The self-update window ("Using update UI: xwin") showed Korean as boxes while the Steam
+    # screen did not; whether it draws with X core fonts, font sets or Xft decides the fix
+    # (user report 2026-10-22, not found in public sources)
+    # 진단: 클라이언트 실행 파일이 이름으로 가진 X 글자 그리기 함수, 실행 파일(크기·시각)당 한 번.
+    # 자체 갱신 창("Using update UI: xwin")은 한국어가 □로 나왔고 Steam 화면은 아니었음. X 코어 글꼴,
+    # 글꼴 세트, Xft 중 무엇으로 그리는지에 따라 고치는 방법이 달라짐(사용자 제보 2026-10-22, 공개 자료에 없음)
+    FONT_DONE=$HOME/.steam/.ezs-fontcheck
+    bin_id=$(stat -c '%s %Y' "$BIN" 2>/dev/null)
+    if [ -f "$BIN" ] && [ "$bin_id" != "$(cat "$FONT_DONE" 2>/dev/null)" ] && command -v strings >/dev/null 2>&1; then
+        fx=$(strings -a "$BIN" 2>/dev/null \
+            | grep -oE 'XCreateFontSet|Xutf8DrawString|XmbDrawString|XwcDrawString|XftDrawStringUtf8|XftFontOpen[A-Za-z]*|XLoadQueryFont|XDrawString16|XDrawString|XDrawImageString|FcFontMatch|-misc-fixed[^ ]*|iso10646-1' \
+            | sort -u | tr '\n' ' ')
+        echo "INFO font : 클라이언트 X 글자 함수: ${fx:-없음}"
+        mkdir -p "$HOME/.steam" && echo "$bin_id" > "$FONT_DONE"
+    fi
     # Steam UI drawing: software by default (-cef-disable-gpu); with EZS_STEAM_GPU=1 (app test
     # switch) the web helper may use the GPU, with the Chromium flags the app puts in EZS_CEF_FLAGS
     # Steam 화면 그리기: 기본은 소프트웨어(-cef-disable-gpu). EZS_STEAM_GPU=1(앱 시험 스위치)이면 웹

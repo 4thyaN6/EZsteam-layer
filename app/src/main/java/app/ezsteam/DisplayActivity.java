@@ -180,6 +180,7 @@ public class DisplayActivity extends Activity {
         android.content.SharedPreferences pp = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE);
         touchPad.setLook(pp.getFloat(PREF_PAD_SCALE, 1f), pp.getFloat(PREF_PAD_OPACITY, 0.45f));
         touchPad.setGap(pp.getFloat(PREF_PAD_GAP, 1f));
+        touchPad.setSwapLeft(pp.getBoolean(PREF_PAD_SWAP, false));
         // After the log view exists (the layout load writes a log line) / 로그 뷰가 생긴 뒤(배치 읽기가 로그를 남김)
         root.post(this::loadPadLayout);
         // Keyboard and mouse bindings of the layout go to the X server
@@ -948,6 +949,8 @@ public class DisplayActivity extends Activity {
     private static final String PREF_PAD_SCALE = "pad.scale", PREF_PAD_OPACITY = "pad.opacity";
     /** Touch pad spacing 0.8..1.6 / 터치 패드 간격 0.8..1.6 */
     private static final String PREF_PAD_GAP = "pad.gap";
+    /** Left D-pad and left stick swapped / 왼쪽 십자키·스틱 자리 바꿈 */
+    private static final String PREF_PAD_SWAP = "pad.swapLeft";
     private static final int REQ_PAD_LAYOUT = 7302;
 
     /** Imported layout (.icp) kept inside the app / 앱 안에 보관한 불러온 배치(.icp) */
@@ -1088,6 +1091,17 @@ public class DisplayActivity extends Activity {
         box.addView(gapBar);
         box.addView(alphaText);
         box.addView(alpha);
+        // Left D-pad and left stick change places (tried at once, kept with Save)
+        // 왼쪽 십자키·스틱 자리 바꾸기(바로 보이고, 저장으로 유지)
+        boolean[] swap = {pp.getBoolean(PREF_PAD_SWAP, false)};
+        android.widget.CheckBox swapBox = new android.widget.CheckBox(this);
+        swapBox.setText("십자키·왼쪽 스틱 자리 바꾸기");
+        swapBox.setChecked(swap[0]);
+        swapBox.setOnCheckedChangeListener((b, on) -> {
+            swap[0] = on;
+            touchPad.setSwapLeft(on);
+        });
+        box.addView(swapBox);
         update.run();
         // Show the pad while adjusting so the change is visible / 조절하는 동안 패드를 보여 변화가 보이게 함
         boolean wasShown = touchPad.getVisibility() == View.VISIBLE;
@@ -1097,12 +1111,12 @@ public class DisplayActivity extends Activity {
                 .setView(box)
                 .setPositiveButton("저장", (d, w) -> pp.edit()
                         .putFloat(PREF_PAD_SCALE, cur[0]).putFloat(PREF_PAD_OPACITY, cur[1])
-                        .putFloat(PREF_PAD_GAP, cur[2]).apply())
+                        .putFloat(PREF_PAD_GAP, cur[2]).putBoolean(PREF_PAD_SWAP, swap[0]).apply())
                 .setNeutralButton("배치 파일…", (d, w) -> {
                     // Keep the size and opacity being tried, then choose the layout
                     // 시험 중인 크기·진하기를 저장한 뒤 배치를 고름
                     pp.edit().putFloat(PREF_PAD_SCALE, cur[0]).putFloat(PREF_PAD_OPACITY, cur[1])
-                            .putFloat(PREF_PAD_GAP, cur[2]).apply();
+                            .putFloat(PREF_PAD_GAP, cur[2]).putBoolean(PREF_PAD_SWAP, swap[0]).apply();
                     showPadLayoutMenu();
                 })
                 .setNegativeButton("취소", (d, w) -> restorePadLook(pp))
@@ -1114,12 +1128,13 @@ public class DisplayActivity extends Activity {
     private void restorePadLook(android.content.SharedPreferences pp) {
         touchPad.setLook(pp.getFloat(PREF_PAD_SCALE, 1f), pp.getFloat(PREF_PAD_OPACITY, 0.45f));
         touchPad.setGap(pp.getFloat(PREF_PAD_GAP, 1f));
+        touchPad.setSwapLeft(pp.getBoolean(PREF_PAD_SWAP, false));
     }
 
     /** Layout choices: import a .icp, back to the default, or default size and opacity
      *  배치 선택: .icp 불러오기, 기본 배치로, 크기·진하기 기본값 */
     private void showPadLayoutMenu() {
-        String[] items = {"배치 파일(.icp) 불러오기", "기본 배치로 되돌리기", "크기·간격·진하기 기본값"};
+        String[] items = {"배치 파일(.icp) 불러오기", "기본 배치로 되돌리기", "크기·간격·진하기·자리 기본값"};
         new android.app.AlertDialog.Builder(this)
                 .setTitle("터치 패드 배치")
                 .setItems(items, (d, which) -> {
@@ -1131,9 +1146,11 @@ public class DisplayActivity extends Activity {
                         loadPadLayout();
                     } else {
                         getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit()
-                                .remove(PREF_PAD_SCALE).remove(PREF_PAD_OPACITY).remove(PREF_PAD_GAP).apply();
+                                .remove(PREF_PAD_SCALE).remove(PREF_PAD_OPACITY).remove(PREF_PAD_GAP)
+                                .remove(PREF_PAD_SWAP).apply();
                         touchPad.setLook(1f, 0.45f);
                         touchPad.setGap(1f);
+                        touchPad.setSwapLeft(false);
                     }
                 })
                 .show();
