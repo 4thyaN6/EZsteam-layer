@@ -369,6 +369,13 @@ public class DisplayActivity extends Activity {
         });
         // Soft keyboard text arrives here as key events / 소프트 키보드 텍스트는 키 이벤트로 바뀌어 여기로 옴
         view.setKeyListener(this::sendKey);
+        // Characters with no key (Korean and others) go in through a spare X keycode
+        // 키가 없는 글자(한글 등)는 X 예비 키코드로 들어감
+        view.setCharListener(cp -> {
+            XTestClient x = xtest;
+            if (x != null) x.typeChar(cp);
+            lastKey = new String(Character.toChars(cp));
+        });
         view.setOnTouchListener((v, e) -> onTouch(e));
         // Physical mouse: hover moves, wheel and button changes (not only while a button is held),
         // and relative movement while locked (pointer capture)

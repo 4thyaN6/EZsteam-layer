@@ -336,7 +336,20 @@ while :; do
             echo "INFO steam : 빅픽처는 첫 로그인 뒤부터 (로그인 기록 없음, 이번에는 일반 창)"
         fi
     fi
-    echo "INFO steam : 시작 $n ($(date +%H:%M:%S)) 화면 GPU=${EZS_STEAM_GPU:-0} 빅픽처=$([ -n "$BPARG" ] && echo 1 || echo 0)"
+    # Big Picture draws in software: with the Steam UI GPU on (ANGLE Vulkan and "Chromium 선택")
+    # it stayed a black screen with sound, with the GPU off it showed (user report 2026-10-22).
+    # The GPU Chromium flags are taken out of the web helper flags for this start only.
+    # 빅픽처는 소프트웨어로 그림: Steam 화면 GPU를 켜면(ANGLE Vulkan, "Chromium 선택") 소리만 나고 검은
+    # 화면이었고, 끄면 나왔음(사용자 제보 2026-10-22). 이번 시작에 한해 웹 도우미 플래그에서 GPU용
+    # Chromium 플래그를 뺌
+    if [ -n "$BPARG" ] && [ -z "$GPUARG" ]; then
+        GPUARG=-cef-disable-gpu
+        EZS_CEF_FLAGS=$(echo "${EZS_CEF_FLAGS:-}" | tr ' ' '\n' \
+            | grep -vE '^--(ignore-gpu-blocklist|use-gl=.*|use-angle=.*)$' | paste -sd' ' -)
+        export EZS_CEF_FLAGS
+        echo "INFO steam : 빅픽처는 Steam 화면 GPU 없이 시작 (GPU로는 검은 화면)"
+    fi
+    echo "INFO steam : 시작 $n ($(date +%H:%M:%S)) 화면 GPU=$([ -z "$GPUARG" ] && echo 1 || echo 0) 빅픽처=$([ -n "$BPARG" ] && echo 1 || echo 0)"
     LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_CLIENT_PRELOAD" \
         "$BIN" -no-cef-sandbox $GPUARG $BPARG -chromeosnopreallocate $VERIFY ${EZS_STEAM_EXTRA:-} >>"$LOG" 2>&1
     rc=$?

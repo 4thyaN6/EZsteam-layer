@@ -216,6 +216,35 @@ public final class XTestClient implements Closeable {
         fake(down ? KEY_PRESS : KEY_RELEASE, keycode, 0, 0);
     }
 
+    /** Spare keycodes for characters without a key, used in turn / 키 없는 글자용 예비 키코드, 차례로 씀 */
+    private static final int SPARE_FIRST = 240, SPARE_COUNT = 12;
+    /** Next spare keycode index / 다음 예비 키코드 번호 */
+    private int spareNext;
+
+    /**
+     * Type one character that has no key in the X keymap (e.g. a Hangul syllable): a spare keycode
+     * gets the character's keysym (Unicode keysym 0x01000000 + code point) by ChangeKeyboardMapping,
+     * then it is pressed and released. All three go out on the send thread in this order. The
+     * keycodes are used in turn and not set back, so a client that reads the new mapping a little
+     * later still sees the right character.
+     * X 키 배치에 키가 없는 글자 하나(예: 한글 음절)를 입력함: 예비 키코드에 그 글자의 keysym(유니코드
+     * keysym 0x01000000 + 코드 포인트)을 ChangeKeyboardMapping으로 준 뒤 눌렀다 뗌. 셋 모두 전송 스레드에서
+     * 이 순서로 나감. 키코드는 차례로 쓰고 되돌리지 않아, 새 배치를 조금 늦게 읽는 클라이언트도 맞는 글자를 봄
+     */
+    public synchronized void typeChar(int codePoint) {
+        if (closed) return;
+        int keysym = codePoint < 0x100 ? codePoint : 0x01000000 | codePoint;
+        int kc = SPARE_FIRST + spareNext;
+        spareNext = (spareNext + 1) % SPARE_COUNT;
+        // ChangeKeyboardMapping: 1 keycode, 2 keysyms (unshifted, shifted) / 키코드 1개, keysym 2개(기본, Shift)
+        ByteBuffer m = le(16);
+        m.put((byte) 100).put((byte) 1).putShort((short) 4).put((byte) kc).put((byte) 2).putShort((short) 0);
+        m.putInt(keysym).putInt(keysym);
+        send(m.array(), null);
+        fake(KEY_PRESS, kc, 0, 0);
+        fake(KEY_RELEASE, kc, 0, 0);
+    }
+
     /**
      * Give the keyboard focus to the top-level window under the pointer, the way a window manager
      * does: SetInputFocus plus a WM_TAKE_FOCUS client message. There is no window manager here, and

@@ -46,9 +46,16 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         void onKey(android.view.KeyEvent e);
     }
 
+    /** A character that has no key on the keyboard map (Hangul and other scripts), as a code point
+     *  키 배치에 키가 없는 글자(한글 등 다른 문자), 코드 포인트로 */
+    public interface CharListener {
+        void onChar(int codePoint);
+    }
+
     private volatile XvfbFramebuffer fb;
     private volatile int scaleMode = SCALE_SHARP;
     private volatile KeyListener keyListener;
+    private volatile CharListener charListener;
     private int uSrc, uMode, uSharp;
     private volatile StatsListener stats;
 
@@ -118,6 +125,10 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         keyListener = l;
     }
 
+    public void setCharListener(CharListener l) {
+        charListener = l;
+    }
+
     /**
      * Convert a view position to X screen coordinates (clamped), or null before the first frame.
      * 뷰 좌표를 X 화면 좌표로 바꿈(범위 안으로 제한). 첫 프레임 전에는 null
@@ -132,40 +143,65 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         return new int[]{sx, sy};
     }
 
-    // ---- soft keyboard: ask the input method for raw key events (no text composition)
-    // ---- 소프트 키보드: 입력기에 글자 조합 없이 키 이벤트를 그대로 보내도록 요청함
+    // ---- soft keyboard: letters typed directly, Korean (and other composed scripts) sent when a
+    //      syllable is finished
+    // ---- 소프트 키보드: 영문 등은 바로 보내고, 한글(조합하는 문자)은 글자 하나가 완성되면 보냄
     @Override
     public boolean onCheckIsTextEditor() {
         return true;
     }
 
+    /**
+     * Text field without suggestions: with TYPE_NULL keyboards offered no Korean (only English came
+     * out, user report 2026-10-22). NO_SUGGESTIONS keeps Latin letters going out key by key; Korean
+     * keyboards compose a syllable and commit it. No enter action, so Enter stays a key.
+     * 추천 없는 텍스트 칸: TYPE_NULL에서는 키보드가 한글을 주지 않았음(영문만 입력됨, 사용자 제보
+     * 2026-10-22). NO_SUGGESTIONS로 영문은 한 글자씩 바로 나가고, 한글 키보드는 글자를 조합해 확정함.
+     * 엔터 동작 없음으로 Enter는 키로 남음
+     */
     @Override
     public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
-        outAttrs.inputType = InputType.TYPE_NULL;
-        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN | EditorInfo.IME_FLAG_NO_EXTRACT_UI;
+        outAttrs.inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
+        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN | EditorInfo.IME_FLAG_NO_EXTRACT_UI
+                | EditorInfo.IME_FLAG_NO_ENTER_ACTION | EditorInfo.IME_ACTION_NONE;
         return new KeyInputConnection();
     }
 
     /**
-     * Turns what the soft keyboard sends into key events: some keyboards send letters as text
-     * (commitText) instead of key events even with TYPE_NULL.
-     * 소프트 키보드가 보내는 것을 키 이벤트로 바꿈: 일부 키보드는 TYPE_NULL이어도 글자를 키
-     * 이벤트 대신 텍스트(commitText)로 보냄
+     * Turns what the soft keyboard sends into key events and characters. A syllable being composed
+     * (setComposingText) is kept here and sent once it is committed or finished; the X side has no
+     * input method, so a half-built syllable cannot be shown there.
+     * 소프트 키보드가 보내는 것을 키 이벤트와 글자로 바꿈. 조합 중인 글자(setComposingText)는 여기에
+     * 두었다가 확정·완료될 때 보냄. X 쪽에는 입력기가 없어 조합 중인 글자를 보여 줄 수 없음
      */
     private final class KeyInputConnection extends BaseInputConnection {
+        /** Syllable being composed, not sent yet / 조합 중이라 아직 보내지 않은 글자 */
+        private String composing = "";
+
         KeyInputConnection() {
             super(FramebufferView.this, false);
         }
 
         @Override
         public boolean commitText(CharSequence text, int newCursorPosition) {
+            // The committed text replaces the composing one / 확정된 글자가 조합 중인 글자를 대신함
+            composing = "";
             sendChars(text);
             return true;
         }
 
         @Override
         public boolean setComposingText(CharSequence text, int newCursorPosition) {
-            // No composition: keys go out as typed / 조합하지 않음: 입력한 대로 바로 보냄
+            composing = text == null ? "" : text.toString();
+            return true;
+        }
+
+        @Override
+        public boolean finishComposingText() {
+            // Keyboard closed or composition ended: send what was composed / 키보드 닫힘·조합 끝: 조합한 것을 보냄
+            String c = composing;
+            composing = "";
+            sendChars(c);
             return true;
         }
 
@@ -179,19 +215,43 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         }
 
         @Override
+        public boolean performEditorAction(int actionCode) {
+            // Some keyboards still send Enter as an action / 일부 키보드는 Enter를 여전히 동작으로 보냄
+            deliver(new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER));
+            deliver(new android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER));
+            return true;
+        }
+
+        @Override
         public boolean sendKeyEvent(android.view.KeyEvent e) {
+            // A key pressed while composing ends the composition first / 조합 중 누른 키는 조합을 먼저 끝냄
+            if (!composing.isEmpty() && e.getAction() == android.view.KeyEvent.ACTION_DOWN) finishComposingText();
             deliver(e);
             return true;
         }
     }
 
-    /** Text to key events with the virtual keyboard character map / 가상 키보드 문자 배치로 텍스트 → 키 이벤트 */
+    /**
+     * Text to input: characters the virtual keyboard map knows go out as key events, the rest
+     * (Hangul syllables and jamo, other scripts) as code points to the character listener.
+     * 텍스트 → 입력: 가상 키보드 배치에 있는 글자는 키 이벤트로, 나머지(한글 음절·자모, 다른 문자)는
+     * 코드 포인트로 글자 리스너에 보냄
+     */
     public void sendChars(CharSequence text) {
         if (text == null || text.length() == 0) return;
         android.view.KeyCharacterMap map = android.view.KeyCharacterMap.load(android.view.KeyCharacterMap.VIRTUAL_KEYBOARD);
-        android.view.KeyEvent[] evs = map.getEvents(text.toString().toCharArray());
-        if (evs == null) return;
-        for (android.view.KeyEvent e : evs) deliver(e);
+        String t = text.toString();
+        for (int i = 0; i < t.length(); ) {
+            int cp = t.codePointAt(i);
+            i += Character.charCount(cp);
+            android.view.KeyEvent[] evs = cp < 0x10000 ? map.getEvents(new char[]{(char) cp}) : null;
+            if (evs != null) {
+                for (android.view.KeyEvent e : evs) deliver(e);
+            } else {
+                CharListener l = charListener;
+                if (l != null) l.onChar(cp);
+            }
+        }
     }
 
     private void deliver(android.view.KeyEvent e) {
