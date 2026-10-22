@@ -461,28 +461,58 @@ public final class TouchPadView extends View {
     }
 
     /** Cross with the pressed arms filled / 눌린 방향을 채운 십자 */
+    /** Outline of the cross and the arrows, reused every frame / 십자 외곽선과 화살표, 매 프레임 재사용 */
+    private final android.graphics.Path cross = new android.graphics.Path(), arrow = new android.graphics.Path();
+
+    /**
+     * D-pad drawn as one cross like a real pad (user request 2026-10-22: the four separate arms with
+     * text did not look like a D-pad): each arm lights up while pushed, an arrow points outwards.
+     * 실제 패드처럼 하나의 십자로 그림(사용자 요청 2026-10-22: 텍스트가 있는 따로 떨어진 네 팔은 십자키처럼
+     * 보이지 않았음). 누른 방향의 팔이 밝아지고, 화살표가 바깥을 가리킴
+     */
     private void drawDpad(Canvas canvas, Item it) {
-        float arm = it.unit * 2.2f;      // half thickness of an arm / 팔 반두께
-        float reach = it.box.width() / 2f;
-        float[][] arms = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
+        float reach = it.box.width() / 2f;   // centre to arm end / 중심에서 팔 끝까지
+        float arm = reach * 0.36f;           // half width of an arm / 팔 반폭
+        float cx = it.cx, cy = it.cy;
         int base = Math.round(opacity * 255);
+        // Arms in target order: up, right, down, left / 바인딩 순서대로의 팔: 위, 오른쪽, 아래, 왼쪽
+        float[][] arms = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
         for (int i = 0; i < 4; i++) {
             float ax = arms[i][0], ay = arms[i][1];
             float s = i == 0 ? -it.dy : i == 1 ? it.dx : i == 2 ? it.dy : -it.dx;
             boolean on = it.pointer >= 0 && s > DIRECTION_ON;
-            if (ax == 0) tmp.set(it.cx - arm, ay < 0 ? it.cy - reach : it.cy + arm * 0.6f,
-                    it.cx + arm, ay < 0 ? it.cy - arm * 0.6f : it.cy + reach);
-            else tmp.set(ax < 0 ? it.cx - reach : it.cx + arm * 0.6f, it.cy - arm,
-                    ax < 0 ? it.cx - arm * 0.6f : it.cx + reach, it.cy + arm);
+            if (ax == 0) tmp.set(cx - arm, ay < 0 ? cy - reach : cy + arm, cx + arm, ay < 0 ? cy - arm : cy + reach);
+            else tmp.set(ax < 0 ? cx - reach : cx + arm, cy - arm, ax < 0 ? cx - arm : cx + reach, cy + arm);
             fill.setColor(Color.argb(on ? Math.min(255, base + 70) / 2 : base / 5, 255, 255, 255));
-            canvas.drawRoundRect(tmp, arm * 0.4f, arm * 0.4f, fill);
-            canvas.drawRoundRect(tmp, arm * 0.4f, arm * 0.4f, line);
-            IcpLayout.Target t = i < it.targets.length ? it.targets[i] : null;
-            if (t != null && !t.label.isEmpty()) {
-                text.setTextSize(it.unit * 1.6f);
-                float tx = (tmp.left + tmp.right) / 2f, ty = (tmp.top + tmp.bottom) / 2f;
-                canvas.drawText(t.label, tx, ty - (text.ascent() + text.descent()) / 2, text);
-            }
+            canvas.drawRect(tmp, fill);
+            // Arrow from 50 % to 85 % of the arm, pointing outwards / 팔의 50~85 % 위치에 바깥을 향한 화살표
+            float tip = reach * 0.85f, back = reach * 0.5f, half = arm * 0.55f;
+            arrow.reset();
+            arrow.moveTo(cx + ax * tip, cy + ay * tip);
+            arrow.lineTo(cx + ax * back - ay * half, cy + ay * back + ax * half);
+            arrow.lineTo(cx + ax * back + ay * half, cy + ay * back - ax * half);
+            arrow.close();
+            canvas.drawPath(arrow, text);
         }
+        // Centre square / 가운데 사각형
+        fill.setColor(Color.argb(base / 5, 255, 255, 255));
+        tmp.set(cx - arm, cy - arm, cx + arm, cy + arm);
+        canvas.drawRect(tmp, fill);
+        // One outline around the whole cross (12 corners) / 십자 전체를 두르는 외곽선 하나(꼭짓점 12개)
+        cross.reset();
+        cross.moveTo(cx - arm, cy - reach);
+        cross.lineTo(cx + arm, cy - reach);
+        cross.lineTo(cx + arm, cy - arm);
+        cross.lineTo(cx + reach, cy - arm);
+        cross.lineTo(cx + reach, cy + arm);
+        cross.lineTo(cx + arm, cy + arm);
+        cross.lineTo(cx + arm, cy + reach);
+        cross.lineTo(cx - arm, cy + reach);
+        cross.lineTo(cx - arm, cy + arm);
+        cross.lineTo(cx - reach, cy + arm);
+        cross.lineTo(cx - reach, cy - arm);
+        cross.lineTo(cx - arm, cy - arm);
+        cross.close();
+        canvas.drawPath(cross, line);
     }
 }
