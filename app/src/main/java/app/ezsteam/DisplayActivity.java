@@ -214,7 +214,12 @@ public class DisplayActivity extends Activity {
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
         bar.setBackgroundColor(0x99000000);
-        scaleButton = addButton(bar, "확대: " + SCALE_NAMES[FramebufferView.SCALE_SHARP], v -> cycleScale());
+        // Scale mode: the last one chosen, FSR 1 when none was chosen yet (user request 2026-10-24)
+        // 확대 방식: 마지막으로 고른 것, 아직 고른 적 없으면 FSR 1(사용자 요청 2026-10-24)
+        int savedScale = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getInt(PREF_SCALE, FramebufferView.SCALE_FSR);
+        if (savedScale < 0 || savedScale >= SCALE_NAMES.length) savedScale = FramebufferView.SCALE_FSR;
+        view.setScaleMode(savedScale);
+        scaleButton = addButton(bar, "확대: " + SCALE_NAMES[savedScale], v -> cycleScale());
         // Long press: FSR sharpness / 길게 누름: FSR 선명도
         scaleButton.setOnLongClickListener(v -> {
             chooseFsrSharpness();
@@ -428,8 +433,16 @@ public class DisplayActivity extends Activity {
     private void cycleScale() {
         int m = (view.getScaleMode() + 1) % SCALE_NAMES.length;
         view.setScaleMode(m);
+        saveScale(m);
         scaleButton.setText("확대: " + SCALE_NAMES[m]);
         log("확대 방식: " + SCALE_NAMES[m]);
+    }
+
+    /** Saved scale mode (FramebufferView.SCALE_*) / 저장된 확대 방식(FramebufferView.SCALE_*) */
+    private static final String PREF_SCALE = "view.scale";
+
+    private void saveScale(int m) {
+        getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit().putInt(PREF_SCALE, m).apply();
     }
 
     private static final String PREF_FSR_SHARP = "fsr.sharp";
@@ -462,6 +475,7 @@ public class DisplayActivity extends Activity {
                         getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit().putInt(PREF_FSR_TARGET, t).apply();
                         applyFsrTarget(t);
                         view.setScaleMode(FramebufferView.SCALE_FSR);
+                    saveScale(FramebufferView.SCALE_FSR);
                         scaleButton.setText("확대: " + SCALE_NAMES[FramebufferView.SCALE_FSR]);
                         log("확대 방식: FSR 1, " + FSR_TARGET_NAMES[t]);
                         return;
@@ -470,6 +484,7 @@ public class DisplayActivity extends Activity {
                     getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit().putFloat(PREF_FSR_SHARP, v).apply();
                     view.setFsrSharpness(v);
                     view.setScaleMode(FramebufferView.SCALE_FSR);
+                    saveScale(FramebufferView.SCALE_FSR);
                     scaleButton.setText("확대: " + SCALE_NAMES[FramebufferView.SCALE_FSR]);
                     log("확대 방식: FSR 1, 선명도 " + FSR_SHARP_NAMES[which]);
                 })

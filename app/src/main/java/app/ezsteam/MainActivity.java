@@ -112,6 +112,17 @@ public class MainActivity extends Activity {
             prev.setText(prevGameLabel(end));
             log("앞 게임이 남아 있을 때: " + (end ? "자동 종료" : "알림만"));
         });
+        // LSFG frame generation for games: off / 2x / 3x. Usable only with the user's own Lossless
+        // Scaling (Steam app 993090) installed; EZ Proton reads the choice at every game start
+        // 게임용 LSFG 프레임 생성: 끔 / 2배 / 3배. 사용자 자신의 Lossless Scaling(Steam 앱 993090)이 설치돼
+        // 있어야 쓸 수 있음. EZ Proton이 게임을 시작할 때마다 읽음
+        Button lsfg = addButton(start, lsfgLabel(lsfgMode()), null);
+        lsfg.setOnClickListener(v -> {
+            int n = lsfgMode() == 0 ? 2 : lsfgMode() == 2 ? 3 : 0;
+            setLsfgMode(n);
+            lsfg.setText(lsfgLabel(n));
+            log("LSFG: " + (n == 0 ? "끔" : n + "배") + " (다음 게임 시작부터, Lossless Scaling 설치 필요)");
+        });
         Button auto = addButton(start, autoLabel(prefs.getBoolean(KEY_AUTOSTART, true)), null);
         auto.setOnClickListener(v -> {
             boolean on = !prefs.getBoolean(KEY_AUTOSTART, true);
@@ -211,6 +222,28 @@ public class MainActivity extends Activity {
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_STEAM_HID_LOW, on).apply();
             hid.setText("Steam HID 찾기: " + (on ? "줄임(시험)" : "기본"));
             log("Steam HID 찾기: " + (on ? "줄임(시험)" : "기본") + " (다음 Steam 시작부터)");
+        });
+        // Test switch: Wine fsync with our futex_waitv stand-in (native/ezsfsync); a file EZ Proton
+        // reads at every game start. Off by default.
+        // 시험 스위치: futex_waitv 대체(native/ezsfsync)로 Wine fsync 사용. EZ Proton이 게임 시작마다 읽는
+        // 파일. 기본 끔
+        File shimFile = new File(dxNativeFile().getParentFile(), "fsync-shim");
+        Button sync = addButton(row4, "빠른 동기화(시험): " + (shimFile.isFile() ? "켬" : "끔"), null);
+        sync.setOnClickListener(v -> {
+            boolean on = !shimFile.isFile();
+            try {
+                if (on) {
+                    File d = shimFile.getParentFile();
+                    if (d != null && !d.isDirectory() && !d.mkdirs()) throw new IOException("폴더 없음");
+                    if (!shimFile.createNewFile() && !shimFile.isFile()) throw new IOException("만들 수 없음");
+                } else if (!shimFile.delete()) {
+                    throw new IOException("지울 수 없음");
+                }
+                sync.setText("빠른 동기화(시험): " + (on ? "켬" : "끔"));
+                log("빠른 동기화(시험): " + (on ? "켬" : "끔") + " (다음 게임 시작부터)");
+            } catch (IOException e) {
+                log("빠른 동기화 설정 실패: " + e.getMessage());
+            }
         });
         Button io = addButton(row4, "IO 통계: " + (ioStat(this) ? "켬" : "끔"), null);
         io.setOnClickListener(v -> {
@@ -838,6 +871,39 @@ public class MainActivity extends Activity {
     }
 
     /** Save the choice and write or remove the file ezproton reads / 선택을 저장하고 ezproton이 읽는 파일을 쓰거나 지움 */
+    /** LSFG choice file read by EZ Proton (0 = off) / EZ Proton이 읽는 LSFG 선택 파일(0 = 끔) */
+    private File lsfgFile() {
+        return new File(dxNativeFile().getParentFile(), "lsfg");
+    }
+
+    private int lsfgMode() {
+        return getSharedPreferences(PREFS, MODE_PRIVATE).getInt(KEY_LSFG, 0);
+    }
+
+    private static final String KEY_LSFG = "game.lsfg";
+
+    private static String lsfgLabel(int n) {
+        return "LSFG: " + (n == 0 ? "끔" : n + "배");
+    }
+
+    private void setLsfgMode(int n) {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(KEY_LSFG, n).apply();
+        File f = lsfgFile();
+        try {
+            if (n >= 2) {
+                File d = f.getParentFile();
+                if (d != null && !d.isDirectory() && !d.mkdirs()) throw new IOException("폴더 없음");
+                try (java.io.FileOutputStream o = new java.io.FileOutputStream(f)) {
+                    o.write(String.valueOf(n).getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+                }
+            } else if (f.isFile() && !f.delete()) {
+                throw new IOException("지울 수 없음");
+            }
+        } catch (IOException e) {
+            log("LSFG 설정 실패: " + e.getMessage());
+        }
+    }
+
     private void setDxNative(boolean on) {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_DX_NATIVE, on).apply();
         File f = dxNativeFile();

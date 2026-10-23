@@ -1,0 +1,58 @@
+#!/bin/sh
+# Build the LSFG frame generation Vulkan layer (lsfg-vk 1.0.0 lineage, MIT) for glibc aarch64,
+# in the same Debian release as the rootfs. Only the layer is built and shipped; the shaders come
+# at run time from the user's own Lossless.dll (Lossless Scaling, Steam app 993090, bought by the
+# user and installed by their Steam client), which is never shipped.
+#   tools/build-lsfg.sh <out dir>   (run inside debian:trixie arm64)
+# Source: GameNative/lsfg-vk-android (MIT, fork of lsfg-vk 1.0.0 with Android patches that are
+# compiled out on glibc), pinned to a commit; its submodules pe-parse (MIT), toml11 (MIT),
+# volk (MIT), dxbc (zlib). Later lsfg-vk versions are GPLv3 / CC BY-NC-ND and are not used.
+# LSFG 프레임 생성 Vulkan 레이어(lsfg-vk 1.0.0 계열, MIT)를 rootfs와 같은 데비안 릴리스에서 glibc
+# aarch64용으로 빌드함. 레이어만 빌드·배포하고, 셰이더는 실행할 때 사용자 자신의 Lossless.dll(Lossless
+# Scaling, Steam 앱 993090. 사용자가 사서 자기 Steam 클라이언트로 설치)에서 꺼냄. 그 파일은 배포하지 않음.
+#   tools/build-lsfg.sh <출력 폴더>   (debian:trixie arm64 안에서 실행)
+# 출처: GameNative/lsfg-vk-android(MIT, lsfg-vk 1.0.0 포크. 안드로이드 패치는 glibc에서는 빠짐)를 커밋으로
+# 고정. 하위 모듈 pe-parse(MIT), toml11(MIT), volk(MIT), dxbc(zlib). 이후 lsfg-vk 버전은 GPLv3 /
+# CC BY-NC-ND라 쓰지 않음
+set -eu
+OUT=${1:?out dir}
+REPO=https://github.com/GameNative/lsfg-vk-android
+COMMIT=d33caceb5e26cc6773834c00b4eb570ad4906272
+# Vulkan headers matching the layer's api_version (Debian's are a little older)
+# 레이어 api_version에 맞는 Vulkan 헤더(데비안 것은 조금 오래됨)
+VKH_TAG=v1.4.313
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -q
+apt-get install -y -q --no-install-recommends ca-certificates git cmake ninja-build g++ file >/dev/null
+
+WORK=$(mktemp -d)
+git -c advice.detachedHead=false clone -q "$REPO" "$WORK/lsfg"
+git -C "$WORK/lsfg" checkout -q "$COMMIT"
+git -C "$WORK/lsfg" submodule update -q --init --recursive
+git -c advice.detachedHead=false clone -q --depth 1 -b "$VKH_TAG" https://github.com/KhronosGroup/Vulkan-Headers "$WORK/vkh"
+
+cmake -S "$WORK/lsfg" -B "$WORK/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_FLAGS="-I$WORK/vkh/include" -DCMAKE_CXX_FLAGS="-I$WORK/vkh/include"
+ninja -C "$WORK/build" lsfg-vk
+
+mkdir -p "$OUT"
+cp "$WORK/build/liblsfg-vk.so" "$OUT/"
+strip "$OUT/liblsfg-vk.so"
+# Layer manifest: library next to it (relative path) / 레이어 설명 파일: 라이브러리는 옆(상대 경로)
+cp "$WORK/lsfg/VkLayer_LS_frame_generation.json" "$OUT/"
+# Licenses of everything inside the library / 라이브러리에 들어간 모든 것의 라이선스
+mkdir -p "$OUT/licenses"
+cp "$WORK/lsfg/LICENSE.md" "$OUT/licenses/lsfg-vk.md"
+cp "$WORK/lsfg/framegen/LICENSE.md" "$OUT/licenses/lsfg-vk-framegen.md"
+cp "$WORK/lsfg/thirdparty/pe-parse/LICENSE" "$OUT/licenses/pe-parse.txt"
+cp "$WORK/lsfg/thirdparty/toml11/LICENSE" "$OUT/licenses/toml11.txt"
+cp "$WORK/lsfg/thirdparty/volk/LICENSE.md" "$OUT/licenses/volk.md"
+cp "$WORK/lsfg/thirdparty/dxbc/LICENSE.md" "$OUT/licenses/dxbc.md"
+{
+    echo "lsfg-vk $REPO $COMMIT"
+    git -C "$WORK/lsfg" submodule status | sed 's/^/  /'
+    echo "Vulkan-Headers $VKH_TAG"
+} > "$OUT/source.txt"
+file "$OUT/liblsfg-vk.so"
+cat "$OUT/source.txt"

@@ -15,6 +15,9 @@ bundled by it and keep their own licenses.
 | SDL2 (`libSDL2-2.0.so.0`, built without libudev) | zlib | https://github.com/libsdl-org/SDL, tag in `tools/build-alsa-plugin.sh` |
 | SDL3 headers (used to build `libezs_pad.so`) | zlib | https://github.com/libsdl-org/SDL, tag in `tools/build-alsa-plugin.sh` |
 | AMD FidelityFX Super Resolution 1.0 algorithm (EASU, RCAS), ported to GLSL ES in `FramebufferView` | MIT, Copyright (c) 2021 Advanced Micro Devices, Inc. | https://github.com/GPUOpen-Effects/FidelityFX-FSR |
+| LSFG frame generation layer (`/opt/ezsteam/lsfg/liblsfg-vk.so`), lsfg-vk 1.0.0 lineage | MIT | https://github.com/GameNative/lsfg-vk-android, commit in `lsfg/source.txt`; build script `tools/build-lsfg.sh` |
+| pe-parse, toml11, volk (inside the LSFG layer) | MIT | submodules of the above, commits in `lsfg/source.txt` |
+| dxbc (inside the LSFG layer, from DXVK) | zlib | submodule of the above |
 
 ## Downloaded by the app from this repository's Release / 앱이 이 저장소 Release에서 받는 것
 
@@ -25,7 +28,8 @@ bundled by it and keep their own licenses.
 
 ## Not distributed / 배포하지 않는 것
 
-Steam, Proton, the Steam Linux Runtime, Steamworks Shared redistributables (DirectX, Visual C++)
+Steam, Proton, the Steam Linux Runtime, Steamworks Shared redistributables (DirectX, Visual C++),
+Lossless Scaling (its `Lossless.dll`, used by the LSFG layer only when the user owns and installs it)
 and games are downloaded by each device from Valve's servers through the Steam client; this
 project does not host or redistribute them.
 Steam, Proton, Steam Linux Runtime, Steamworks Shared 재배포 패키지(DirectX, Visual C++), 게임은 각

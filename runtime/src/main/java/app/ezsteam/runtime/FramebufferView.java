@@ -568,9 +568,14 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         rOut = GLES20.glGetUniformLocation(rcasProg, "uOut");
         rCon = GLES20.glGetUniformLocation(rcasProg, "uCon");
         // Plain copy with linear filtering for the step after a middle-size FSR (colours already
-        // in order) / 중간 크기 FSR 뒤 단계용 선형 필터 단순 복사(색 순서는 이미 맞음)
+        // in order). Upside down on purpose: every pass that reads an offscreen texture with the
+        // shared quad turns the picture over, so with this third pass it came out upside down
+        // (user report 2026-10-24); flipping here makes it an even number again.
+        // 중간 크기 FSR 뒤 단계용 선형 필터 단순 복사(색 순서는 이미 맞음). 일부러 뒤집음: 공용 사각형으로
+        // 화면 밖 텍스처를 읽는 단계마다 그림이 뒤집혀, 이 세 번째 단계가 더해지자 위아래가 뒤집혔음(사용자
+        // 제보 2026-10-24). 여기서 뒤집어 다시 짝수 번이 되게 함
         copyProg = link(vs, "precision mediump float; uniform sampler2D uTex; varying vec2 vTex;\n"
-                + "void main() { gl_FragColor = vec4(texture2D(uTex, vTex).rgb, 1.0); }\n");
+                + "void main() { gl_FragColor = vec4(texture2D(uTex, vec2(vTex.x, 1.0 - vTex.y)).rgb, 1.0); }\n");
         if (copyProg != 0) {
             cpPos = GLES20.glGetAttribLocation(copyProg, "aPos");
             cpTex = GLES20.glGetAttribLocation(copyProg, "aTex");

@@ -356,6 +356,29 @@ print(r, os.strerror(ctypes.get_errno()))' 2>&1 | tail -n 1)
     fi
     [ -n "$sync_id" ] || echo "INFO sync : Proton 없음 ($PDIR)"
     [ -s "$SYNC_OUT" ] && cat "$SYNC_OUT"
+    # LSFG check (once per driver bundle, printed every start): the device extensions the layer
+    # needs, from vulkaninfo, and whether the user's Lossless.dll is installed
+    # LSFG 확인(드라이버 묶음당 한 번, 시작마다 출력): 레이어가 필요로 하는 장치 확장(vulkaninfo)과
+    # 사용자의 Lossless.dll 설치 여부
+    LSFG_OUT=$HOME/.steam/ezs-lsfgcheck.txt
+    lsfg_id="$(ls -l --time-style=+%s /opt/ezdrv 2>/dev/null | md5sum | cut -c1-12) $(stat -c %Y /opt/ezsteam/lsfg/liblsfg-vk.so 2>/dev/null)"
+    if [ "$lsfg_id" != "$(cat "$HOME/.steam/.ezs-lsfgcheck" 2>/dev/null)" ] || [ ! -s "$LSFG_OUT" ]; then
+        mkdir -p "$HOME/.steam"
+        {
+            vi=$(vulkaninfo 2>/dev/null)
+            ext=""
+            for e in VK_KHR_external_memory_fd VK_KHR_external_semaphore_fd VK_EXT_robustness2 VK_KHR_shader_float16_int8; do
+                echo "$vi" | grep -q "$e" && ext="$ext $e=있음" || ext="$ext $e=없음"
+            done
+            f16=$(echo "$vi" | grep -m1 -E 'shaderFloat16 *=' | tr -s ' ')
+            echo "INFO lsfg : 장치 확장$ext, ${f16:-shaderFloat16 확인 안 됨}"
+            echo "INFO lsfg : 레이어 $([ -f /opt/ezsteam/lsfg/liblsfg-vk.so ] && echo 있음 || echo 없음)"
+        } > "$LSFG_OUT.tmp" 2>&1 && mv -f "$LSFG_OUT.tmp" "$LSFG_OUT"
+        echo "$lsfg_id" > "$HOME/.steam/.ezs-lsfgcheck"
+    fi
+    [ -s "$LSFG_OUT" ] && cat "$LSFG_OUT"
+    ldll=$(ls "$STEAM_DIR/steamapps/common/Lossless Scaling/Lossless.dll" "/mnt/ezlator-library/steamapps/common/Lossless Scaling/Lossless.dll" 2>/dev/null | head -n 1)
+    echo "INFO lsfg : Lossless.dll ${ldll:-없음 (Steam에서 Lossless Scaling 설치 시 사용 가능)}"
     FONT_DONE=$HOME/.steam/.ezs-fontcheck
     bin_id=$(stat -c '%s %Y' "$BIN" 2>/dev/null)
     if [ -f "$BIN" ] && [ "$bin_id" != "$(cat "$FONT_DONE" 2>/dev/null)" ] && command -v strings >/dev/null 2>&1; then

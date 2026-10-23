@@ -22,7 +22,7 @@
 # 함께 빌드되어 udev가 없으면 햅틱 초기화가 실패하고, 그래서 Wine SDL 버스가 시작하지 못함).
 # 소스: 아래 libsdl-org/SDL GitHub 릴리스 태그(zlib 라이선스)
 #
-# Output / 결과물: libasound_module_pcm_ezs.so, libezs_pad.so, libSDL2-2.0.so.0, libezs_compat.so,
+# Output / 결과물: libasound_module_pcm_ezs.so, libezs_pad.so, libSDL2-2.0.so.0, libezs_compat.so, libezs_fsync.so,
 #                  alsa-plugin.version
 set -eu
 OUT="${1:-out-alsa}"
@@ -102,6 +102,13 @@ gcc -shared -fPIC -O2 -Wall -Wextra -o "$OUT/libezs_compat.so" native/ezscompat/
 strip --strip-unneeded "$OUT/libezs_compat.so"
 nm -D "$OUT/libezs_compat.so" | grep -q ' T flock$'
 nm -D "$OUT/libezs_compat.so" | grep -q ' T pwrite64$'
+
+# futex_waitv stand-in for Wine's fsync (native/ezsfsync), preloaded only when the app's test
+# switch is on (EZ Proton) / Wine fsync용 futex_waitv 대체(native/ezsfsync). 앱의 시험 스위치가 켜졌을
+# 때만 미리 불러옴(EZ Proton)
+gcc -shared -fPIC -O2 -Wall -Wextra -o "$OUT/libezs_fsync.so" native/ezsfsync/ezs_fsync.c -ldl
+strip --strip-unneeded "$OUT/libezs_fsync.so"
+nm -D "$OUT/libezs_fsync.so" | grep -q ' T syscall$'
 
 dpkg-query -W -f='libasound2-dev ${Version}\n' libasound2-dev > "$OUT/alsa-plugin.version"
 echo "SDL $SDL_TAG, SDL3 headers $SDL3_TAG" >> "$OUT/alsa-plugin.version"

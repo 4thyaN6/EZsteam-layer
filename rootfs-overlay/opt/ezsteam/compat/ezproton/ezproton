@@ -193,6 +193,52 @@ echo "ezproton: $PROTON_DIR $*" >&2
 # 게임까지 전달된 화면 전달 설정(앱이 정함, steam-run.sh 참고)
 echo "ezproton: MESA_VK_WSI_DEBUG=${MESA_VK_WSI_DEBUG:-} MESA_VK_WSI_PRESENT_MODE=${MESA_VK_WSI_PRESENT_MODE:-} DXVK_CONFIG=${DXVK_CONFIG:-} DXVK_HUD=${DXVK_HUD:-}" >&2
 echo "ezproton: LD_PRELOAD=${LD_PRELOAD:-}" >&2
+# LSFG frame generation (app option EZS_LSFG = 2 or 3 times; off by default). Only when the
+# layer is present (/opt/ezsteam/lsfg, built from lsfg-vk 1.0.0, MIT) and the user's own
+# Lossless.dll is installed: Lossless Scaling (Steam app 993090), bought by the user and installed
+# by their Steam client into one of the libraries. Nothing of Lossless Scaling is shipped. The
+# layer's own environment settings (LSFG_LEGACY) are used; present mode immediate like the rest of
+# the display path (MESA_VK_WSI_PRESENT_MODE, which the layer clears).
+# LSFG 프레임 생성(앱 옵션 EZS_LSFG = 2배 또는 3배, 기본 끔). 레이어가 있고(/opt/ezsteam/lsfg, lsfg-vk
+# 1.0.0으로 빌드, MIT) 사용자 자신의 Lossless.dll이 설치돼 있을 때만: Lossless Scaling(Steam 앱 993090)을
+# 사용자가 사서 자기 Steam 클라이언트로 라이브러리 중 하나에 설치한 것. Lossless Scaling 파일은 배포하지 않음.
+# 레이어 자체의 환경 변수 설정(LSFG_LEGACY)을 씀. 표시 방식은 나머지 화면 경로와 같은 immediate(레이어가
+# 지우는 MESA_VK_WSI_PRESENT_MODE 대신)
+LSFG_N=${EZS_LSFG:-$(cat "$HOME/.local/share/ezsteam/lsfg" 2>/dev/null || echo 0)}
+if [ "$LSFG_N" -ge 2 ] 2>/dev/null; then
+    LDLL=""
+    for d in "$HOME/.local/share/Steam/steamapps/common/Lossless Scaling/Lossless.dll" \
+             "/mnt/ezlator-library/steamapps/common/Lossless Scaling/Lossless.dll"; do
+        [ -f "$d" ] && { LDLL=$d; break; }
+    done
+    if [ ! -f /opt/ezsteam/lsfg/liblsfg-vk.so ]; then
+        echo "ezproton: LSFG ${LSFG_N}배 선택, 레이어 없음 (/opt/ezsteam/lsfg)" >&2
+    elif [ -z "$LDLL" ]; then
+        echo "ezproton: LSFG ${LSFG_N}배 선택, Lossless.dll 없음 (Steam에서 Lossless Scaling 설치 필요)" >&2
+    else
+        export VK_ADD_LAYER_PATH="/opt/ezsteam/lsfg${VK_ADD_LAYER_PATH:+:$VK_ADD_LAYER_PATH}"
+        export VK_INSTANCE_LAYERS="VK_LAYER_LS_frame_generation${VK_INSTANCE_LAYERS:+:$VK_INSTANCE_LAYERS}"
+        export LSFG_LEGACY=1 LSFG_DLL_PATH="$LDLL" LSFG_MULTIPLIER="$LSFG_N"
+        export LSFG_FLOW_SCALE="${EZS_LSFG_FLOW:-1.0}" LSFG_PERFORMANCE_MODE="${EZS_LSFG_PERF:-1}"
+        export LSFG_EXPERIMENTAL_PRESENT_MODE=immediate
+        echo "ezproton: LSFG ${LSFG_N}배 켬 (흐름 배율 $LSFG_FLOW_SCALE, 성능 모드 $LSFG_PERFORMANCE_MODE, $LDLL)" >&2
+    fi
+fi
+# Fast sync test switch (file ~/.local/share/ezsteam/fsync-shim written by the app): Wine's
+# fsync with a futex_waitv stand-in (native/ezsfsync), because the kernel call is missing here
+# (ENOSYS) and wineserver otherwise does all synchronization. Proton sets WINEFSYNC=1 itself.
+# 빠른 동기화 시험 스위치(앱이 쓰는 ~/.local/share/ezsteam/fsync-shim 파일): futex_waitv 대체
+# (native/ezsfsync)로 Wine fsync를 씀. 여기서는 커널 호출이 없어(ENOSYS) 그렇지 않으면 wineserver가 동기화를
+# 모두 처리함. WINEFSYNC=1은 Proton이 직접 정함
+if [ -f "$HOME/.local/share/ezsteam/fsync-shim" ]; then
+    if [ -f /opt/ezsteam/lib/libezs_fsync.so ]; then
+        export LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}/opt/ezsteam/lib/libezs_fsync.so"
+        unset PROTON_NO_FSYNC
+        echo "ezproton: 빠른 동기화(시험): fsync + futex_waitv 대체 켬" >&2
+    else
+        echo "ezproton: 빠른 동기화(시험) 선택, libezs_fsync.so 없음" >&2
+    fi
+fi
 # The client-only HID test switch (steam-run.sh) is not passed on to games
 # 클라이언트 전용 HID 시험 스위치(steam-run.sh)는 게임에 넘기지 않음
 if [ "${EZS_STEAM_HID_LOW:-0}" = 1 ]; then

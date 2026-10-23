@@ -141,8 +141,24 @@ jobs:
           path: out-alsa/
           retention-days: 14
 
+  lsfg:
+    # LSFG frame generation Vulkan layer (lsfg-vk 1.0.0 lineage, MIT), glibc aarch64, in the
+    # rootfs' Debian release. The layer only; shaders come from the user's own Lossless.dll.
+    # LSFG 프레임 생성 Vulkan 레이어(lsfg-vk 1.0.0 계열, MIT), glibc aarch64, rootfs와 같은 데비안
+    # 릴리스. 레이어만 빌드함. 셰이더는 사용자 자신의 Lossless.dll에서 옴
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: lsfg layer
+        run: docker run --rm -v "$PWD:/src" -w /src debian:trixie sh tools/build-lsfg.sh out-lsfg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lsfg
+          path: out-lsfg/
+          retention-days: 14
+
   apk:
-    needs: [proot, rootfs, turnip, alsa]
+    needs: [proot, rootfs, turnip, alsa, lsfg]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -178,7 +194,23 @@ jobs:
           # flock fallback for the shared Steam library (native/ezscompat)
           # 공유 Steam 라이브러리용 flock 대체(native/ezscompat)
           cp alsa-artifact/libezs_compat.so rootfs-overlay/opt/ezsteam/lib/
+          # futex_waitv stand-in for Wine fsync (native/ezsfsync, test switch)
+          # Wine fsync용 futex_waitv 대체(native/ezsfsync, 시험 스위치)
+          cp alsa-artifact/libezs_fsync.so rootfs-overlay/opt/ezsteam/lib/
           cat alsa-artifact/alsa-plugin.version
+
+      # LSFG layer into /opt/ezsteam/lsfg (EZ Proton turns it on only when the user asks and their
+      # Lossless.dll is installed) / LSFG 레이어를 /opt/ezsteam/lsfg에 넣음(사용자가 켜고 Lossless.dll이
+      # 설치돼 있을 때만 EZ Proton이 켬)
+      - uses: actions/download-artifact@v4
+        with:
+          name: lsfg
+          path: lsfg-artifact
+      - name: place lsfg layer
+        run: |
+          mkdir -p rootfs-overlay/opt/ezsteam/lsfg
+          cp -r lsfg-artifact/. rootfs-overlay/opt/ezsteam/lsfg/
+          cat lsfg-artifact/source.txt
 
       - uses: actions/setup-java@v4
         with:
