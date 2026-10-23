@@ -109,6 +109,8 @@ public class DisplayActivity extends Activity {
     private volatile String cpuText = "";
     /** Sound output of the rootfs programs (Steam mode) / rootfs 프로그램의 소리 출력(Steam 모드) */
     private volatile app.ezsteam.runtime.AudioServer audio;
+    /** Game frame path check, app side (answers ezs-present-probe) / 게임 프레임 경로 확인의 앱 쪽(ezs-present-probe에 답함) */
+    private volatile app.ezsteam.runtime.PresentProbe present;
     /** Game controller state for the rootfs (Steam mode) / rootfs용 게임 컨트롤러 상태(Steam 모드) */
     private volatile app.ezsteam.runtime.PadFile pad;
     /** On-screen touch pad over the game ([패드]) / 게임 위 화면 터치 패드([패드]) */
@@ -684,6 +686,14 @@ public class DisplayActivity extends Activity {
                     log("AUDIO 대기 " + app.ezsteam.runtime.AudioServer.GUEST_SOCKET);
                 } catch (IOException | RuntimeException e) {
                     log("AUDIO 시작 실패 (소리 없이 계속): " + e);
+                }
+                // Zero-copy frame path check: listens before steam-run.sh starts the probe
+                // 0복사 프레임 경로 확인: steam-run.sh가 probe를 시작하기 전에 기다림
+                try {
+                    present = app.ezsteam.runtime.PresentProbe.start(c.rootfs, this::log);
+                    log("PRESENT 대기 " + app.ezsteam.runtime.PresentProbe.GUEST_SOCKET);
+                } catch (IOException | RuntimeException e) {
+                    log("PRESENT 시작 실패 (확인 없이 계속): " + e);
                 }
                 // Game controller: the app writes the Android controller state here, the rootfs
                 // library native/ezspad turns it into a virtual Xbox 360 pad inside Wine
@@ -3187,6 +3197,8 @@ public class DisplayActivity extends Activity {
         view.setFramebuffer(null);
         app.ezsteam.runtime.AudioServer a = audio;
         if (a != null) a.close();
+        app.ezsteam.runtime.PresentProbe pp = present;
+        if (pp != null) pp.close();
         app.ezsteam.runtime.PadFile pf = pad;
         if (pf != null) {
             try {

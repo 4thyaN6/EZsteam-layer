@@ -379,6 +379,21 @@ print(r, os.strerror(ctypes.get_errno()))' 2>&1 | tail -n 1)
     [ -s "$LSFG_OUT" ] && cat "$LSFG_OUT"
     ldll=$(ls "$STEAM_DIR/steamapps/common/Lossless Scaling/Lossless.dll" "/mnt/ezlator-library/steamapps/common/Lossless Scaling/Lossless.dll" 2>/dev/null | head -n 1)
     echo "INFO lsfg : Lossless.dll ${ldll:-없음 (Steam에서 Lossless Scaling 설치 시 사용 가능)}"
+    # Zero-copy game frame path check, every start (about a second): Vulkan export/import of GPU
+    # buffers and fences here, the EGL half in the app (PresentProbe). Decides how the present
+    # layer and the compositor are built. Limited to 25 s so Steam's start is never held up.
+    # 0복사 게임 프레임 경로 확인, 시작마다(약 1초): 여기서는 GPU 버퍼·펜스의 Vulkan 내보내기/가져오기,
+    # 앱(PresentProbe)에서는 EGL 쪽. present 레이어와 컴포지터를 어떻게 만들지 정함. Steam 시작을 막지
+    # 않도록 25초로 제한함
+    if [ -x /opt/ezsteam/bin/ezs-present-probe ]; then
+        pout=$(timeout 25 /opt/ezsteam/bin/ezs-present-probe 2>&1)
+        prc=$?
+        echo "$pout" | head -n 80
+        # 124 = timeout ran out; other codes are a crash of the tool / 124 = 시간 초과, 그 밖은 도구 비정상 종료
+        [ "$prc" -eq 0 ] || echo "INFO present : 확인 도구 끝 코드 $prc$([ "$prc" -eq 124 ] && echo ' (시간 초과)')"
+    else
+        echo "INFO present : 확인 도구 없음"
+    fi
     FONT_DONE=$HOME/.steam/.ezs-fontcheck
     bin_id=$(stat -c '%s %Y' "$BIN" 2>/dev/null)
     if [ -f "$BIN" ] && [ "$bin_id" != "$(cat "$FONT_DONE" 2>/dev/null)" ] && command -v strings >/dev/null 2>&1; then

@@ -38,7 +38,7 @@ apt-get update -q
 # though nothing C++ is built here
 # g++: SDL2 CMakeLists가 "project(SDL2 C CXX)"로 선언해서, 여기서 C++을 빌드하지 않아도 C++ 컴파일러가
 # 없으면 CMake가 멈춤
-apt-get install -y -q --no-install-recommends gcc g++ libc6-dev libasound2-dev binutils git cmake make \
+apt-get install -y -q --no-install-recommends gcc g++ libc6-dev libasound2-dev libvulkan-dev binutils git cmake make \
     ca-certificates pkgconf
 
 mkdir -p "$OUT"
@@ -109,6 +109,13 @@ nm -D "$OUT/libezs_compat.so" | grep -q ' T pwrite64$'
 gcc -shared -fPIC -O2 -Wall -Wextra -o "$OUT/libezs_fsync.so" native/ezsfsync/ezs_fsync.c -ldl
 strip --strip-unneeded "$OUT/libezs_fsync.so"
 nm -D "$OUT/libezs_fsync.so" | grep -q ' T syscall$'
+
+# Game frame path check tool (native/ezspresent): Vulkan headers only, the loader is opened at run
+# time (libvulkan.so.1 of the rootfs) / 게임 프레임 경로 확인 도구(native/ezspresent): Vulkan 헤더만 씀,
+# 로더는 실행할 때 엶(rootfs의 libvulkan.so.1)
+gcc -O2 -Wall -Wextra -o "$OUT/ezs-present-probe" native/ezspresent/ezs_present_probe.c -ldl
+strip --strip-unneeded "$OUT/ezs-present-probe"
+objdump -p "$OUT/ezs-present-probe" | grep NEEDED
 
 dpkg-query -W -f='libasound2-dev ${Version}\n' libasound2-dev > "$OUT/alsa-plugin.version"
 echo "SDL $SDL_TAG, SDL3 headers $SDL3_TAG" >> "$OUT/alsa-plugin.version"

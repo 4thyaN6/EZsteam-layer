@@ -21,7 +21,10 @@
 | `runtime/.../XvfbFramebuffer.java` | Xvfb `-fbdir` 화면 파일(XWD) 매핑, 픽셀(B G R X 32비트) 직접 접근 |
 | `runtime/.../FramebufferView.java` | 위 화면을 OpenGL ES 3 텍스처로 매 프레임 올려 비율 유지 표시. 확대 방식 선형 / 바이큐빅(Catmull-Rom) / 바이큐빅 + CAS 방식 선명화, fps·업로드 시간·내용 변경 수, 소프트 키보드 텍스트 → 키 이벤트 |
 | `runtime/.../XTestClient.java`, `XKeys.java` | X11 소켓 직접 통신으로 XTEST 포인터·버튼·키 입력 주입(Xlib 불필요), 안드로이드 키 → X 키코드(evdev + 8) |
-| `runtime/src/main/jniLibs/arm64-v8a/` | `libproot.so`, `libproot-loader.so`(CI가 만듦, 저장소에는 없음) |
+| `runtime/.../PresentProbe.java` | 0복사 게임 프레임 경로 확인의 앱 쪽: rootfs `/tmp/ezs-present.sock`(SOCK_SEQPACKET)에서 `ezs-present-probe`에 답함, 앱 스레드(추가 프로세스 없음) |
+| `runtime/src/main/jniLibs/arm64-v8a/` | `libproot.so`, `libproot-loader.so`, `libezs_present.so`(CI가 만듦, 저장소에는 없음) |
+| `native/ezspresent/` | 게임 프레임 경로(계획: 앱이 AHardwareBuffer를 만들고 게임 Vulkan이 그곳에 바로 그림, 앱이 EGL로 표시). `ezs_present_proto.h` 소켓 메시지 형식(나중 present 레이어·컴포지터도 씀), `ezs_present_probe.c` rootfs 쪽 확인 도구(Vulkan dma-buf 내보내기·가져오기, DRM modifier, sync fd), `ezs_present_jni.c` 앱 쪽(EGL dma-buf·AHB 가져오기, 펜스, NDK). steam-run.sh가 시작마다 실행해 `INFO present :` 줄과 결론 한 줄을 남김 |
+| `tools/build-present-jni.sh` | 위 앱 쪽을 NDK(API 26)로 `libezs_present.so` 빌드 |
 | `app/` | 시험용 호스트 앱(targetSdk 28): rootfs 설치, 환경 시험, 자식 프로세스 수, Steam 준비, PRoot 상태, 실시간 화면(`DisplayActivity`) |
 | `.github/workflows/build.yml` | NDK로 PRoot, arm64 실행기에서 rootfs, 이어서 APK 빌드. 태그 빌드는 Release에 올림 |
 | `tools/build-proot-android.sh` | termux/proot 고정 커밋 + `tools/patches/proot-*.patch` + talloc 단일 파일본을 NDK(API 26)로 빌드 |

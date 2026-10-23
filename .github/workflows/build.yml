@@ -157,8 +157,24 @@ jobs:
           path: out-lsfg/
           retention-days: 14
 
+  present:
+    # App side of the game frame path (libezs_present.so: EGL / AHardwareBuffer half of the
+    # zero-copy check, later the compositor), NDK on GitHub's Ubuntu runner
+    # 게임 프레임 경로의 앱 쪽(libezs_present.so: 0복사 확인의 EGL / AHardwareBuffer 쪽, 나중에
+    # 컴포지터), GitHub Ubuntu 실행기의 NDK로 빌드
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: present jni
+        run: sh tools/build-present-jni.sh out-present
+      - uses: actions/upload-artifact@v4
+        with:
+          name: present
+          path: out-present/
+          retention-days: 14
+
   apk:
-    needs: [proot, rootfs, turnip, alsa, lsfg]
+    needs: [proot, rootfs, turnip, alsa, lsfg, present]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -197,7 +213,23 @@ jobs:
           # futex_waitv stand-in for Wine fsync (native/ezsfsync, test switch)
           # Wine fsync용 futex_waitv 대체(native/ezsfsync, 시험 스위치)
           cp alsa-artifact/libezs_fsync.so rootfs-overlay/opt/ezsteam/lib/
+          # Game frame path check tool, rootfs side (native/ezspresent)
+          # 게임 프레임 경로 확인 도구, rootfs 쪽(native/ezspresent)
+          mkdir -p rootfs-overlay/opt/ezsteam/bin
+          cp alsa-artifact/ezs-present-probe rootfs-overlay/opt/ezsteam/bin/
           cat alsa-artifact/alsa-plugin.version
+
+      # App side of the game frame path into the runtime module's jniLibs (next to PRoot)
+      # 게임 프레임 경로의 앱 쪽을 런타임 모듈 jniLibs에 넣음(PRoot 옆)
+      - uses: actions/download-artifact@v4
+        with:
+          name: present
+          path: present-artifact
+      - name: place present jni
+        run: |
+          mkdir -p runtime/src/main/jniLibs/arm64-v8a
+          cp present-artifact/libezs_present.so runtime/src/main/jniLibs/arm64-v8a/
+          cat present-artifact/present-jni.version
 
       # LSFG layer into /opt/ezsteam/lsfg (EZ Proton turns it on only when the user asks and their
       # Lossless.dll is installed) / LSFG 레이어를 /opt/ezsteam/lsfg에 넣음(사용자가 켜고 Lossless.dll이
