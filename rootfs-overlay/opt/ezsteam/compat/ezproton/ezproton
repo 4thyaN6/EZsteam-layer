@@ -185,4 +185,13 @@ echo "ezproton: $PROTON_DIR $*" >&2
 # 게임까지 전달된 화면 전달 설정(앱이 정함, steam-run.sh 참고)
 echo "ezproton: MESA_VK_WSI_DEBUG=${MESA_VK_WSI_DEBUG:-} MESA_VK_WSI_PRESENT_MODE=${MESA_VK_WSI_PRESENT_MODE:-} DXVK_CONFIG=${DXVK_CONFIG:-} DXVK_HUD=${DXVK_HUD:-}" >&2
 echo "ezproton: LD_PRELOAD=${LD_PRELOAD:-}" >&2
+# Diagnosis: controller settings Steam hands to the game (SDL hints such as the list of devices to
+# ignore, Steam Input virtual pads). In one start Wine never set up its XInput device for the
+# virtual pad (no winexinput.sys in the Proton log) while earlier starts did (2026-10-23). Only
+# device ids and switches, no account data.
+# 진단: Steam이 게임에 넘기는 컨트롤러 설정(무시할 장치 목록 같은 SDL 힌트, Steam 입력 가상 패드).
+# 한 번의 시작에서 Wine이 가상 패드용 XInput 장치를 만들지 않았고(Proton 로그에 winexinput.sys 없음)
+# 이전 시작들은 만들었음(2026-10-23). 장치 번호와 스위치만 있고 계정 정보는 없음
+env | grep -E '^(SDL_[A-Z_]*JOY|SDL_[A-Z_]*CONTROLLER|SDL_[A-Z_]*GAMEPAD|SDL_JOYSTICK|SteamVirtualGamepad|STEAM_INPUT|ENABLE_VK_LAYER_VALVE)' \
+    | cut -c1-300 | sed 's/^/ezproton: pad env /' >&2
 exec "$PROTON_DIR/proton" "$@"

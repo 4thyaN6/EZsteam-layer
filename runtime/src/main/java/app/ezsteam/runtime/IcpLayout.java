@@ -36,6 +36,12 @@ public final class IcpLayout {
         public final float scale, x, y;
         public final boolean toggle;
         public final String text;
+        /**
+         * Width only, on top of the scale ("widthScale", this app's own optional field; other apps
+         * ignore it and draw the normal width). 1 = as the shape.
+         * 너비에만 곱하는 배율(이 앱만의 선택 항목 "widthScale". 다른 앱은 무시하고 보통 너비로 그림). 1 = 모양 그대로
+         */
+        public float widthScale = 1f;
 
         Element(String type, String shape, String[] bindings, float scale, float x, float y,
                 boolean toggle, String text) {
@@ -56,6 +62,12 @@ public final class IcpLayout {
          * 배치 모양이 그대로 유지됨
          */
         public float[] halfSize() {
+            float[] h = baseHalfSize();
+            h[0] *= widthScale;
+            return h;
+        }
+
+        private float[] baseHalfSize() {
             switch (type) {
                 case D_PAD:
                     return new float[]{7, 7};
@@ -92,9 +104,11 @@ public final class IcpLayout {
             for (int k = 0; k < bindings.length; k++) {
                 bindings[k] = b != null && k < b.length() ? b.optString(k, "NONE") : "NONE";
             }
-            list.add(new Element(e.optString("type", BUTTON), e.optString("shape", "CIRCLE"), bindings,
+            Element el = new Element(e.optString("type", BUTTON), e.optString("shape", "CIRCLE"), bindings,
                     (float) e.optDouble("scale", 1.0), (float) e.optDouble("x", 0.5),
-                    (float) e.optDouble("y", 0.5), e.optBoolean("toggleSwitch", false), e.optString("text", "")));
+                    (float) e.optDouble("y", 0.5), e.optBoolean("toggleSwitch", false), e.optString("text", ""));
+            el.widthScale = Math.max(0.25f, Math.min(4f, (float) e.optDouble("widthScale", 1.0)));
+            list.add(el);
         }
         return new IcpLayout(o.optString("name", ""), list);
     }
@@ -145,6 +159,10 @@ public final class IcpLayout {
         put("GAMEPAD_BUTTON_R1", PAD_BUTTON, PadFile.RIGHT_SHOULDER, 0, "RB");
         put("GAMEPAD_BUTTON_SELECT", PAD_BUTTON, PadFile.BACK, 0, "BACK");
         put("GAMEPAD_BUTTON_START", PAD_BUTTON, PadFile.START, 0, "START");
+        // Guide / Home button (Steam: Home + X opens the keyboard); two names in use for it
+        // 가이드·홈 버튼(Steam: 홈 + X로 키보드 열림). 쓰이는 이름 두 가지
+        put("GAMEPAD_BUTTON_MODE", PAD_BUTTON, PadFile.GUIDE, 0, "HOME");
+        put("GAMEPAD_BUTTON_GUIDE", PAD_BUTTON, PadFile.GUIDE, 0, "HOME");
         put("GAMEPAD_BUTTON_L3", PAD_BUTTON, PadFile.LEFT_STICK, 0, "L3");
         put("GAMEPAD_BUTTON_R3", PAD_BUTTON, PadFile.RIGHT_STICK, 0, "R3");
         put("GAMEPAD_DPAD_UP", PAD_BUTTON, PadFile.DPAD_UP, 0, "↑");

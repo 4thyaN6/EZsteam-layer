@@ -2195,7 +2195,9 @@ public class DisplayActivity extends Activity {
                 text = "게임 실행 환경 준비 2/3: " + kind + " · " + mmss(now - prepStartMs)
                         + "\n다음: DirectX (백그라운드)";
             } else {
-                text = (prepFirstRun ? "게임 첫 실행 준비 중: " : "게임 실행 준비 중: ") + kind
+                // One wording for every start: the wait comes back at each start, so "first" misled
+                // (user report 2026-10-23) / 시작마다 같은 문구: 기다림이 시작할 때마다 있어 "첫"이 헷갈렸음(사용자 제보 2026-10-23)
+                text = "게임 실행 준비 중: " + kind
                         + " · " + mmss(now - prepStartMs)
                         + "\n다음: 게임 시작";
             }

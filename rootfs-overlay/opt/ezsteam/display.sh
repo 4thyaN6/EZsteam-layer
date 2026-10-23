@@ -58,8 +58,11 @@ rm -rf "$FB" /tmp/ezs-vkcube.pid /tmp/ezs-vkcube-display.log && mkdir -p "$FB"
 XFP=""
 KFONT=""
 # NanumGothic first, any other Nanum TrueType file otherwise / 나눔고딕 먼저, 없으면 다른 나눔 TrueType 파일
-KFONT=$(ls /usr/share/fonts/truetype/nanum/NanumGothic.ttf /usr/share/fonts/truetype/nanum/*Gothic*.ttf \
-    /usr/share/fonts/truetype/nanum/*.ttf 2>/dev/null | head -n 1)
+# (ls sorts its whole output, so the preferred file is tested on its own first: one device got
+# NanumBarunGothic from a single ls, 2026-10-23)
+# (ls는 출력 전체를 정렬하므로 원하는 파일을 먼저 따로 확인함: 한 번의 ls로는 NanumBarunGothic이 골라졌음, 2026-10-23)
+KFONT=/usr/share/fonts/truetype/nanum/NanumGothic.ttf
+[ -f "$KFONT" ] || KFONT=$(ls /usr/share/fonts/truetype/nanum/*.ttf 2>/dev/null | head -n 1)
 if [ -n "$KFONT" ]; then
     XF=/tmp/ezs-xfonts
     rm -rf "$XF" && mkdir -p "$XF" && ln -s "$KFONT" "$XF/ko.ttf"
