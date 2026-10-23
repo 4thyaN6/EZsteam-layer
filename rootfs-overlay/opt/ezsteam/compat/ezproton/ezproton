@@ -199,4 +199,21 @@ env | grep -E '^(SDL_[A-Z_]*JOY|SDL_[A-Z_]*CONTROLLER|SDL_[A-Z_]*GAMEPAD|SDL_JOY
 # 무시 목록은 김(Valve 자체 0x28de 장치가 앞에 옴): 그 밖의 제조사 항목은 전부 출력함. 우리 가상 패드는
 # 0x045e/0x028e임(위 줄은 300자에서 잘림)
 echo "ezproton: pad ignore (Valve 0x28de 제외): $(echo "${SDL_GAMECONTROLLER_IGNORE_DEVICES:-}" | tr ',' '\n' | grep -vi '^0x28de/' | grep . | tr '\n' ' ')" >&2
+# Our virtual pad must stay visible to the game. With Steam Input on for a game, Steam lists the
+# controllers it takes over as devices to ignore and gives the game its own virtual pad instead;
+# that pad cannot be made here (no /dev/uinput for an app), so the game saw no controller at all.
+# Measured: one game's list held 0x045e/0x028e (our pad) and Wine set up no XInput device for it,
+# another game's list did not and its pad worked (2026-10-23). Only that id is taken out.
+# 우리 가상 패드는 게임에 보여야 함. 게임에 Steam 입력이 켜지면 Steam은 넘겨받는 컨트롤러를 무시 목록에
+# 넣고 대신 자기 가상 패드를 줌. 여기서는 그 패드를 만들 수 없어(앱에는 /dev/uinput 없음) 게임에 컨트롤러가
+# 하나도 안 보였음. 실측: 한 게임의 목록에 0x045e/0x028e(우리 패드)가 있었고 Wine이 XInput 장치를 만들지
+# 않았음. 목록에 없던 다른 게임은 패드가 동작했음(2026-10-23). 그 번호만 뺌
+case ",$(echo "${SDL_GAMECONTROLLER_IGNORE_DEVICES:-}" | tr 'A-F' 'a-f')," in
+    *,0x045e/0x028e,*)
+        SDL_GAMECONTROLLER_IGNORE_DEVICES=$(echo "$SDL_GAMECONTROLLER_IGNORE_DEVICES" | tr ',' '\n' \
+            | grep -vix '0x045e/0x028e' | paste -sd, -)
+        export SDL_GAMECONTROLLER_IGNORE_DEVICES
+        echo "ezproton: pad ignore list: removed 0x045e/0x028e (our virtual pad)" >&2
+        ;;
+esac
 exec "$PROTON_DIR/proton" "$@"

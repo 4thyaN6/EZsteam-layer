@@ -337,6 +337,7 @@ public class DisplayActivity extends Activity {
         setupDetail.setGravity(Gravity.CENTER);
         setupPanel.addView(setupDetail);
         root.addView(setupPanel, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+        buildLaunchCover(root);
 
         // Corner button that brings the bar back after [숨김] / [숨김] 뒤에 막대를 되돌리는 모서리 버튼
         showButton = new Button(this);
@@ -500,6 +501,7 @@ public class DisplayActivity extends Activity {
             steamWindowSeen = true;
             hideSetup();
         }
+        launchWatch(s);
         runOnUiThread(() -> {
             logLines.addLast(s);
             // Time stamp only in the saved copy / 시각은 저장용 사본에만 붙임
@@ -2053,6 +2055,110 @@ public class DisplayActivity extends Activity {
     /** Banner shown for the Proton download / Proton 다운로드용으로 띄운 안내 띠 */
     private boolean protonBanner;
 
+    // ---- game launch cover / 게임 실행 가림막 ----
+
+    /**
+     * Full-screen cover from the moment Steam starts a game until the game's first window shows.
+     * Between the two Proton runs of a start (install script, then the game) and after the last
+     * preparation step, the Steam screen came back for a few seconds and looked frozen (DMC5: 6 s,
+     * 2026-10-23 log; user report). A tap closes it; it also closes by itself after 3 minutes.
+     * Steam가 게임을 시작한 순간부터 게임의 첫 창이 뜰 때까지 화면 전체를 가림. 한 번의 시작에 있는 두 번의
+     * Proton 실행(설치 스크립트, 그다음 게임) 사이와 마지막 준비 단계 뒤에 Steam 화면이 몇 초 돌아와 멈춘
+     * 것처럼 보였음(DMC5: 6초, 2026-10-23 로그, 사용자 제보). 누르면 닫히고, 3분이 지나면 저절로 닫힘
+     */
+    private FrameLayout launchCover;
+    private TextView launchText;
+    /** When the cover was shown (elapsedRealtime), 0 = not shown / 가림막을 띄운 시각, 0이면 안 띄움 */
+    private volatile long launchStartMs;
+    /** Steam has been started in this session (lines before it are the old log read again)
+     *  이번 세션에 Steam이 시작됨(그 전 줄은 다시 읽은 예전 로그) */
+    private volatile boolean steamStarted;
+    /** The game itself has been started (not only its install script); installer windows before
+     *  that do not close the cover / 게임 자체가 시작됨(설치 스크립트만이 아님). 그 전의 설치 프로그램 창은
+     *  가림막을 닫지 않음 */
+    private volatile boolean launchGameRun;
+    private static final long LAUNCH_COVER_MAX_MS = 180_000;
+
+    private void buildLaunchCover(FrameLayout root) {
+        float dp = getResources().getDisplayMetrics().density;
+        launchCover = new FrameLayout(this);
+        launchCover.setBackgroundColor(0xF0000000);
+        launchCover.setVisibility(View.GONE);
+        launchCover.setClickable(true);
+        // Tap closes it, in case the game opens no window of its own / 게임이 자기 창을 열지 않는 경우를 위해 누르면 닫힘
+        launchCover.setOnClickListener(v -> endLaunchCover("눌러서 닫음"));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setGravity(Gravity.CENTER);
+        col.addView(new android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleLarge));
+        launchText = new TextView(this);
+        launchText.setTextColor(Color.WHITE);
+        launchText.setTextSize(16);
+        launchText.setGravity(Gravity.CENTER);
+        launchText.setPadding(0, (int) (16 * dp), 0, (int) (8 * dp));
+        col.addView(launchText);
+        TextView hint = new TextView(this);
+        hint.setTextColor(0x99FFFFFF);
+        hint.setTextSize(12);
+        hint.setGravity(Gravity.CENTER);
+        hint.setText("화면을 누르면 닫힘");
+        col.addView(hint);
+        launchCover.addView(col, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+        root.addView(launchCover, new FrameLayout.LayoutParams(-1, -1));
+    }
+
+    /**
+     * Watches log lines (any thread): Steam start, a Proton run of a game (install script or the
+     * game itself) opens the cover, the first Wine window (depth 24; Steam's own windows are depth
+     * 32 in every log so far) of at least 320 px closes it.
+     * 로그 줄 감시(아무 스레드): Steam 시작, 게임의 Proton 실행(설치 스크립트나 게임 자체)이 가림막을 열고,
+     * 폭 320px 이상인 첫 Wine 창(깊이 24. 지금까지 모든 로그에서 Steam 자체 창은 깊이 32)이 닫음
+     */
+    private void launchWatch(String s) {
+        if (s.startsWith("INFO steam : 시작 ")) {
+            steamStarted = true;
+        } else if (steamStarted && s.startsWith("STEAM ezproton: /")
+                && (s.contains(" waitforexitandrun ") || s.contains("iscriptevaluator.exe"))) {
+            if (s.contains(" waitforexitandrun ")) launchGameRun = true;
+            if (launchStartMs == 0) {
+                launchStartMs = SystemClock.elapsedRealtime();
+                runOnUiThread(() -> {
+                    launchCover.setVisibility(View.VISIBLE);
+                    tickLaunchCover();
+                });
+            }
+        } else if (launchStartMs != 0 && launchGameRun && s.startsWith("X 새 창 0x") && s.endsWith("깊이 24")) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile(": (\\d+)x(\\d+) ").matcher(s);
+            if (m.find() && Integer.parseInt(m.group(1)) >= 320) endLaunchCover("게임 창");
+        }
+    }
+
+    /** Elapsed time and the current preparation step, every second while shown
+     *  보이는 동안 1초마다 경과 시간과 지금 준비 단계 */
+    private void tickLaunchCover() {
+        long start = launchStartMs;
+        if (start == 0 || launchCover.getVisibility() != View.VISIBLE) return;
+        long t = SystemClock.elapsedRealtime() - start;
+        if (t > LAUNCH_COVER_MAX_MS) {
+            endLaunchCover("3분 지남");
+            return;
+        }
+        String kind = prepKind;
+        launchText.setText("게임 실행 준비 중" + (kind != null ? ": " + kind : "") + " · " + mmss(t));
+        // The cover already says it; the small banner would repeat it / 가림막이 이미 알리므로 작은 안내 띠는 숨김
+        prepBox.setVisibility(View.GONE);
+        launchCover.postDelayed(this::tickLaunchCover, 1000);
+    }
+
+    private void endLaunchCover(String why) {
+        long start = launchStartMs;
+        if (start == 0) return;
+        launchStartMs = 0;
+        launchGameRun = false;
+        log("게임 실행 가림막 닫힘: " + why + " (" + mmss(SystemClock.elapsedRealtime() - start) + ")");
+        runOnUiThread(() -> launchCover.setVisibility(View.GONE));
+    }
+
     // ---- first-run preparation banner / 첫 실행 준비 안내 띠 ----
 
     /** Set when Proton logs a new prefix (log thread) / Proton이 새 prefix를 기록하면 정함(로그 스레드) */
@@ -2203,7 +2309,8 @@ public class DisplayActivity extends Activity {
             }
             runOnUiThread(() -> {
                 prepView.setText(text);
-                prepBox.setVisibility(View.VISIBLE);
+                // Not under the launch cover, which shows the step itself / 단계를 직접 보여 주는 실행 가림막 아래에서는 띄우지 않음
+                if (launchStartMs == 0) prepBox.setVisibility(View.VISIBLE);
             });
         } else if (prepKind != null && now - prepLastSeenMs >= 6_000) {
             log("첫 실행 준비 끝: 총 " + mmss(prepLastSeenMs - prepStartMs) + ", 하위 작업 " + prepNew + "개 (마지막 단계 "
