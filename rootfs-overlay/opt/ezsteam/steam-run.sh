@@ -330,9 +330,15 @@ while :; do
     # fsync)가 허용되는지(기다릴 것 없이 부르면 허용될 때 EINVAL), 이 Proton 빌드가 아는 동기화 스위치.
     # 자식 프로세스에서 시험함: 막힌 호출은 부른 쪽을 죽일 수 있음(SIGSYS)
     PDIR="$STEAM_DIR/steamapps/common/Proton 11.0 (ARM64)"
+    # The result is kept in a file and printed at every start: printed only once, it fell into a
+    # session that the next report no longer held (2026-10-23)
+    # 결과는 파일에 두고 시작할 때마다 출력함: 한 번만 출력했더니 다음 제보에 없는 세션에 들어가 버렸음(2026-10-23)
     SYNC_DONE=$HOME/.steam/.ezs-synccheck
+    SYNC_OUT=$HOME/.steam/ezs-synccheck.txt
     sync_id=$(stat -c '%Y' "$PDIR/proton" 2>/dev/null)
-    if [ -n "$sync_id" ] && [ "$sync_id" != "$(cat "$SYNC_DONE" 2>/dev/null)" ]; then
+    if [ -n "$sync_id" ] && { [ "$sync_id" != "$(cat "$SYNC_DONE" 2>/dev/null)" ] || [ ! -s "$SYNC_OUT" ]; }; then
+      mkdir -p "$HOME/.steam"
+      {
         nt=$([ -e /dev/ntsync ] && echo 있음 || echo 없음)
         fw=$(python3 -c 'import ctypes,os
 l=ctypes.CDLL(None,use_errno=True)
@@ -345,8 +351,11 @@ print(r, os.strerror(ctypes.get_errno()))' 2>&1 | tail -n 1)
         echo "INFO sync : wineserver 안 동기화 이름: ${ws:-없음}"
         grep -nE 'FSYNC|ESYNC|NTSYNC|fsync|esync|ntsync' "$PDIR/proton" 2>/dev/null | head -n 8 | cut -c1-160 \
             | sed 's/^/INFO sync : proton /'
+      } > "$SYNC_OUT.tmp" 2>&1 && mv -f "$SYNC_OUT.tmp" "$SYNC_OUT"
         mkdir -p "$HOME/.steam" && echo "$sync_id" > "$SYNC_DONE"
     fi
+    [ -n "$sync_id" ] || echo "INFO sync : Proton 없음 ($PDIR)"
+    [ -s "$SYNC_OUT" ] && cat "$SYNC_OUT"
     FONT_DONE=$HOME/.steam/.ezs-fontcheck
     bin_id=$(stat -c '%s %Y' "$BIN" 2>/dev/null)
     if [ -f "$BIN" ] && [ "$bin_id" != "$(cat "$FONT_DONE" 2>/dev/null)" ] && command -v strings >/dev/null 2>&1; then

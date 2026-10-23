@@ -357,6 +357,18 @@ public final class XTestClient implements Closeable {
             Log l = log;
             if (l != null) l.line(String.format(java.util.Locale.ROOT, "X 새 창 0x%x: %dx%d 위치 %d,%d 깊이 %d",
                     win, w, h, x, y, r[1] & 0xff));
+            // A window larger than the screen is fitted to it: with a smaller screen (960x600) the
+            // Steam window kept its 1280x800 at -160,-100 and its edges were cut off (2026-10-23)
+            // 화면보다 큰 창은 화면에 맞춤: 작은 화면(960x600)에서 Steam 창이 1280x800 크기로 -160,-100에
+            // 남아 가장자리가 잘렸음(2026-10-23)
+            if (w > screenWidth || h > screenHeight) {
+                ByteBuffer c = le(28);
+                c.put((byte) 12).put((byte) 0).putShort((short) 7).putInt(win).putShort((short) 0xF).putShort((short) 0)
+                        .putInt(0).putInt(0).putInt(screenWidth).putInt(screenHeight);
+                send(c.array(), null);
+                if (l != null) l.line(String.format(java.util.Locale.ROOT, "X 창 0x%x 화면보다 큼 → %dx%d로 맞춤",
+                        win, screenWidth, screenHeight));
+            }
         });
         if (atomNetState == 0 || atomFullscreen == 0) return;
         // GetProperty(win, _NET_WM_STATE, ATOM, offset 0, 32 values)
