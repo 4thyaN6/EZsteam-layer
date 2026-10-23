@@ -1769,8 +1769,9 @@ public class DisplayActivity extends Activity {
         float sec = lastNs == 0 ? 0f : (now - lastNs) / 1e9f;
         java.util.Map<Integer, Float> pct = new java.util.HashMap<>();
         java.util.Map<Integer, Long> ticks = new java.util.HashMap<>();
-        float all = 0, xvfb = 0, proot = 0;
+        float all = 0, xvfb = 0, proot = 0, ui = 0;
         app.ezsteam.runtime.ChildProcessCounter.Proc game = gameOf(ps);
+        lastProcs = ps;
         for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
             ticks.put(pr.pid, pr.cpuTicks);
             Long before = lastTicks.get(pr.pid);
@@ -1782,14 +1783,17 @@ public class DisplayActivity extends Activity {
             String comm = exeName(pr);
             if (comm.equals("Xvfb")) xvfb += p;
             if (comm.contains("libproot")) proot += p;
+            // Steam screen (web helper processes), to compare GPU and software drawing
+            // Steam 화면(웹 도우미 프로세스). GPU 그리기와 소프트웨어 그리기 비교용
+            if (comm.startsWith("steamwebhelper")) ui += p;
         }
         lastTicks.clear();
         lastTicks.putAll(ticks);
         cpuPct = pct;
         if (sec <= 0) return;
         Float g = game == null ? null : pct.get(game.pid);
-        cpuText = String.format(Locale.ROOT, "CPU 전체 %.0f%%  게임 %s  Xvfb %.0f%%  PRoot %.0f%%",
-                all, g == null ? "-" : String.format(Locale.ROOT, "%.0f%%", g), xvfb, proot);
+        cpuText = String.format(Locale.ROOT, "CPU 전체 %.0f%%  게임 %s  Steam 화면 %.0f%%  Xvfb %.0f%%  PRoot %.0f%%",
+                all, g == null ? "-" : String.format(Locale.ROOT, "%.0f%%", g), ui, xvfb, proot);
     }
 
     /**
@@ -2085,8 +2089,33 @@ public class DisplayActivity extends Activity {
         launchCover.setBackgroundColor(0xF0000000);
         launchCover.setVisibility(View.GONE);
         launchCover.setClickable(true);
-        // Tap closes it, in case the game opens no window of its own / 게임이 자기 창을 열지 않는 경우를 위해 누르면 닫힘
-        launchCover.setOnClickListener(v -> endLaunchCover("눌러서 닫음"));
+        // Taps are taken and do nothing (people tap while waiting); a swipe slides it away so the
+        // screen below shows, in case the game opens no window of its own (user request 2026-10-23)
+        // 터치는 받기만 하고 아무것도 안 함(기다리면서 화면을 누름). 밀면 옆으로 밀려나며 아래 화면이 보임.
+        // 게임이 자기 창을 열지 않는 경우 대비(사용자 요청 2026-10-23)
+        float[] down = new float[2];
+        launchCover.setOnTouchListener((v, e) -> {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    down[0] = e.getRawX();
+                    down[1] = e.getRawY();
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    v.setTranslationX(e.getRawX() - down[0]);
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    float dx = e.getRawX() - down[0];
+                    if (Math.abs(dx) > v.getWidth() * 0.3f) {
+                        v.animate().translationX(Math.signum(dx) * v.getWidth()).setDuration(150)
+                                .withEndAction(() -> endLaunchCover("밀어서 닫음")).start();
+                    } else {
+                        v.animate().translationX(0).setDuration(150).start();
+                    }
+                    break;
+            }
+            return true;
+        });
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setGravity(Gravity.CENTER);
@@ -2101,7 +2130,7 @@ public class DisplayActivity extends Activity {
         hint.setTextColor(0x99FFFFFF);
         hint.setTextSize(12);
         hint.setGravity(Gravity.CENTER);
-        hint.setText("화면을 누르면 닫힘");
+        hint.setText("옆으로 밀면 닫힘");
         col.addView(hint);
         launchCover.addView(col, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
         root.addView(launchCover, new FrameLayout.LayoutParams(-1, -1));
@@ -2123,9 +2152,11 @@ public class DisplayActivity extends Activity {
             if (launchStartMs == 0) {
                 launchStartMs = SystemClock.elapsedRealtime();
                 runOnUiThread(() -> {
+                    launchCover.setTranslationX(0);
                     launchCover.setVisibility(View.VISIBLE);
                     tickLaunchCover();
                 });
+                checkPreviousGame();
             }
         } else if (launchStartMs != 0 && launchGameRun && s.startsWith("X 새 창 0x") && s.endsWith("깊이 24")) {
             java.util.regex.Matcher m = java.util.regex.Pattern.compile(": (\\d+)x(\\d+) ").matcher(s);
@@ -2157,6 +2188,33 @@ public class DisplayActivity extends Activity {
         launchGameRun = false;
         log("게임 실행 가림막 닫힘: " + why + " (" + mmss(SystemClock.elapsedRealtime() - start) + ")");
         runOnUiThread(() -> launchCover.setVisibility(View.GONE));
+    }
+
+    /** Child processes of the last monitor pass / 마지막 감시 회차의 자식 프로세스 */
+    private volatile java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> lastProcs;
+
+    /**
+     * Another game is starting while one still runs: two games went over Android's limit of 32
+     * child processes for all apps and the whole session was killed (exit 137, 36 processes;
+     * the first game was still running in Steam's list although it looked closed, 2026-10-23).
+     * Default: tell; option on the main screen: end the old game first.
+     * 게임 하나가 아직 실행 중인데 다른 게임이 시작됨: 두 게임이 안드로이드의 모든 앱 합계 자식 프로세스 한도
+     * 32개를 넘어 세션 전체가 종료됐음(exit 137, 36개. 앞 게임은 꺼진 듯 보였지만 Steam 목록에서는 실행 중,
+     * 2026-10-23). 기본: 알림. 메인 화면 옵션: 앞 게임을 먼저 끝냄
+     */
+    private void checkPreviousGame() {
+        java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps = lastProcs;
+        app.ezsteam.runtime.ChildProcessCounter.Proc old = ps == null ? null : gameOf(ps);
+        if (old == null) return;
+        String name = winExeName(old);
+        if (MainActivity.prevGameEnd(this)) {
+            log("앞 게임 " + name + "(" + old.pid + ") 실행 중 → 종료 (설정: 자동 종료)");
+            android.os.Process.killProcess(old.pid);
+            notice("앞 게임 " + name + "을(를) 끝내고 새 게임을 시작함");
+        } else {
+            log("앞 게임 " + name + "(" + old.pid + ") 아직 실행 중 (설정: 알림)");
+            notice("앞 게임 " + name + "이(가) 아직 실행 중임. 두 게임을 함께 돌리면 프로세스 한도로 전체가 꺼질 수 있음");
+        }
     }
 
     // ---- first-run preparation banner / 첫 실행 준비 안내 띠 ----
@@ -2578,12 +2636,32 @@ public class DisplayActivity extends Activity {
         }, "ezs-base").start();
     }
 
+    /**
+     * Windows program file name of a process from its command line (after " | "), else the kernel
+     * name. The kernel name is cut to 15 characters, so "DevilMayCry5.exe" and "NieRAutomata.exe"
+     * showed as "....ex", were never taken for the game, and the top bar said "게임 -" (logs since
+     * 2026-10-21; a 13-character name was found)
+     * 명령줄(" | " 뒤)에서 본 프로세스의 윈도우 프로그램 파일 이름, 없으면 커널 이름. 커널 이름은 15자에서
+     * 잘려 "DevilMayCry5.exe", "NieRAutomata.exe"가 "....ex"로 보였고 게임으로 잡히지 않아 위쪽 막대가
+     * "게임 -"였음(2026-10-21부터의 로그. 13자 이름은 잡혔음)
+     */
+    private static String winExeName(app.ezsteam.runtime.ChildProcessCounter.Proc pr) {
+        int i = pr.name.indexOf(" | ");
+        if (i < 0) return exeName(pr);
+        String cmd = pr.name.substring(i + 3).trim();
+        int sp = cmd.toLowerCase(Locale.ROOT).indexOf(".exe");
+        if (sp >= 0) cmd = cmd.substring(0, sp + 4);
+        int slash = Math.max(cmd.lastIndexOf('\\'), cmd.lastIndexOf('/'));
+        String base = slash >= 0 ? cmd.substring(slash + 1) : cmd;
+        return base.toLowerCase(Locale.ROOT).endsWith(".exe") ? base : exeName(pr);
+    }
+
     /** The game: largest .exe that is not a Wine helper, or null / 게임: Wine 보조가 아닌 가장 큰 .exe, 없으면 null */
     private static app.ezsteam.runtime.ChildProcessCounter.Proc gameOf(
             java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps) {
         app.ezsteam.runtime.ChildProcessCounter.Proc game = null;
         for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
-            String exe = exeName(pr).toLowerCase(Locale.ROOT);
+            String exe = winExeName(pr).toLowerCase(Locale.ROOT);
             // Installers of the first start are not the game / 첫 시작의 설치 프로그램은 게임이 아님
             if (exe.endsWith(".exe") && !WINE_HELPERS.contains(exe) && prepIndexOf(exe) < 0
                     && (game == null || pr.rssKb > game.rssKb)) {

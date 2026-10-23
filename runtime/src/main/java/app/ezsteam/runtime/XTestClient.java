@@ -505,6 +505,16 @@ public final class XTestClient implements Closeable {
                             later.schedule(() -> {
                                 if (focused == target && !closed) requestFocus(target, "", false);
                             }, 1000, java.util.concurrent.TimeUnit.MILLISECONDS);
+                            // Later again while games are still starting up: one game took controller
+                            // input only after the screen was touched (a touch gives the focus again),
+                            // its window had come up about 40 s before (user report 2026-10-23)
+                            // 게임이 아직 시작하는 동안 다시 보냄: 한 게임은 화면을 터치한 뒤에야(터치가 포커스를
+                            // 다시 줌) 컨트롤러 입력을 받았고, 그 창은 약 40초 전에 떠 있었음(사용자 제보 2026-10-23)
+                            for (long ms : new long[]{3000, 8000, 15000, 30000}) {
+                                later.schedule(() -> {
+                                    if (focused == target && !closed) requestFocus(target, "", false);
+                                }, ms, java.util.concurrent.TimeUnit.MILLISECONDS);
+                            }
                         }
                     } else if ((p[0] & 0x7f) == 18) {
                         // UnmapNotify (real or synthetic from XWithdrawWindow): WM_STATE Withdrawn

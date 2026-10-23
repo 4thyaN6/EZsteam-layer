@@ -101,6 +101,15 @@ public class MainActivity extends Activity {
             bp.setText(bigPictureLabel(on));
             log("Steam 시작 화면: " + (on ? "빅픽처" : "일반") + " (다음 Steam 시작부터)");
         });
+        // A game still running when another one starts: tell (default) or end it first
+        // 다른 게임을 시작할 때 앞 게임이 아직 실행 중이면: 알림(기본) 또는 먼저 끝냄
+        Button prev = addButton(start, prevGameLabel(prevGameEnd(this)), null);
+        prev.setOnClickListener(v -> {
+            boolean end = !prevGameEnd(this);
+            prefs.edit().putBoolean(KEY_PREV_GAME_END, end).apply();
+            prev.setText(prevGameLabel(end));
+            log("앞 게임이 남아 있을 때: " + (end ? "자동 종료" : "알림만"));
+        });
         Button auto = addButton(start, autoLabel(prefs.getBoolean(KEY_AUTOSTART, true)), null);
         auto.setOnClickListener(v -> {
             boolean on = !prefs.getBoolean(KEY_AUTOSTART, true);
@@ -347,6 +356,18 @@ public class MainActivity extends Activity {
      *  device (2026-10-21), cause not found yet / Steam을 빅픽처로 시작. 지금은 기본 끔: 기기에서 검은
      *  화면만 나왔고(2026-10-21) 원인을 아직 찾지 못함 */
     static final String KEY_BIG_PICTURE = "steam.bigpicture";
+
+    /** End a still-running game when another one starts (false = only tell)
+     *  다른 게임이 시작될 때 아직 실행 중인 게임을 끝냄(false = 알림만) */
+    static final String KEY_PREV_GAME_END = "game.prevEnd";
+
+    static boolean prevGameEnd(android.content.Context ctx) {
+        return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_PREV_GAME_END, false);
+    }
+
+    private static String prevGameLabel(boolean end) {
+        return "앞 게임 남으면: " + (end ? "자동 종료" : "알림");
+    }
 
     static boolean bigPicture(android.content.Context ctx) {
         return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_BIG_PICTURE, false);
