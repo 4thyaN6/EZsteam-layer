@@ -89,9 +89,12 @@ public class MainActivity extends Activity {
         go.setTextSize(18);
         Button size = addButton(start, sizeLabel(), null);
         size.setOnClickListener(v -> {
-            boolean big = !prefs.getBoolean(KEY_BIG_SCREEN, false);
-            prefs.edit().putBoolean(KEY_BIG_SCREEN, big).apply();
+            int next = (screenSizeIndex() + 1) % SCREEN_SIZES.length;
+            prefs.edit().putInt(KEY_SCREEN_SIZE, next).apply();
             size.setText(sizeLabel());
+            log("Steam 화면 크기: " + SCREEN_SIZES[next][0] + "x" + SCREEN_SIZES[next][1]
+                    + (SCREEN_SIZES[next][0] < 1280 ? " (낮은 해상도로 그리고 앱이 확대, [확대: FSR] 권장)" : "")
+                    + " (다음 Steam 시작부터)");
         });
         // Big Picture or the normal client window at start / 시작할 때 빅픽처 또는 일반 클라이언트 창
         Button bp = addButton(start, bigPictureLabel(bigPicture(this)), null);
@@ -332,15 +335,34 @@ public class MainActivity extends Activity {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ADMIN, shown).apply();
     }
 
-    /** Steam screen size: 1280x800 (default) or 1920x1200 / Steam 화면 크기: 1280x800(기본) 또는 1920x1200 */
+    /**
+     * X screen sizes for the Steam session. Below 1280x800 games (and the Steam screen) are drawn
+     * at fewer pixels, which lowers GPU and CPU load, and the app scales the picture up to the
+     * display (FSR 1 among the scale modes). The whole session uses the size: Valve's Proton has
+     * no fullscreen scaling hack any more (removed after Proton 8 in favour of gamescope), so a
+     * size per game would need a Wine virtual desktop plus cropping (not done yet).
+     * Steam 세션의 X 화면 크기. 1280x800보다 작으면 게임(과 Steam 화면)을 더 적은 화소로 그려 GPU·CPU
+     * 부하가 줄고, 앱이 화면 크기로 확대함(확대 방식에 FSR 1 있음). 세션 전체가 이 크기를 씀: Valve Proton에는
+     * 전체 화면 확대 기능이 더는 없음(Proton 8 이후 gamescope로 대체되며 제거). 게임별 크기는 Wine 가상
+     * 데스크톱 + 잘라 보이기가 필요함(아직 안 함)
+     */
+    static final int[][] SCREEN_SIZES = {{1280, 800}, {1024, 640}, {960, 600}, {1920, 1200}};
+    static final String KEY_SCREEN_SIZE = "steam.size";
+
+    /** Chosen size; the older on/off setting (1920x1200) is read once / 고른 크기. 예전 켬/끔 설정(1920x1200)도 읽음 */
+    private int screenSizeIndex() {
+        android.content.SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
+        int i = p.getInt(KEY_SCREEN_SIZE, p.getBoolean(KEY_BIG_SCREEN, false) ? 3 : 0);
+        return i >= 0 && i < SCREEN_SIZES.length ? i : 0;
+    }
+
     private int[] steamSize() {
-        return getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_BIG_SCREEN, false)
-                ? new int[]{1920, 1200} : new int[]{1280, 800};
+        return SCREEN_SIZES[screenSizeIndex()];
     }
 
     private String sizeLabel() {
         int[] s = steamSize();
-        return "화면 " + s[0] + "x" + s[1];
+        return "화면 " + s[0] + "x" + s[1] + (s[0] < 1280 ? " (확대)" : "");
     }
 
     private static String sharedLabel(boolean on) {

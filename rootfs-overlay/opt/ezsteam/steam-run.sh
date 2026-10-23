@@ -318,6 +318,35 @@ while :; do
     # 진단: 클라이언트 실행 파일이 이름으로 가진 X 글자 그리기 함수, 실행 파일(크기·시각)당 한 번.
     # 자체 갱신 창("Using update UI: xwin")은 한국어가 □로 나왔고 Steam 화면은 아니었음. X 코어 글꼴,
     # 글꼴 세트, Xft 중 무엇으로 그리는지에 따라 고치는 방법이 달라짐(사용자 제보 2026-10-22, 공개 자료에 없음)
+    # Diagnosis for faster Wine synchronization, once per Proton build (time of its proton
+    # script): wineserver used about 50 % CPU with "wineserver: using server-side
+    # synchronization" in every Proton log (2026-10-23). Whether /dev/ntsync exists, whether
+    # futex_waitv (syscall 449, fsync) is allowed under the app's seccomp filter and PRoot (a
+    # call with no waiters answers EINVAL when it is), and which sync switches this Proton build
+    # knows. Tried in a child process: a blocked call can kill the caller (SIGSYS).
+    # 더 빠른 Wine 동기화 진단, Proton 빌드(proton 스크립트 시각)당 한 번: 모든 Proton 로그에
+    # "wineserver: using server-side synchronization"이 있었고 wineserver가 CPU 약 50%를 썼음
+    # (2026-10-23). /dev/ntsync가 있는지, 앱 seccomp 필터와 PRoot 아래에서 futex_waitv(시스템 호출 449,
+    # fsync)가 허용되는지(기다릴 것 없이 부르면 허용될 때 EINVAL), 이 Proton 빌드가 아는 동기화 스위치.
+    # 자식 프로세스에서 시험함: 막힌 호출은 부른 쪽을 죽일 수 있음(SIGSYS)
+    PDIR="$STEAM_DIR/steamapps/common/Proton 11.0 (ARM64)"
+    SYNC_DONE=$HOME/.steam/.ezs-synccheck
+    sync_id=$(stat -c '%Y' "$PDIR/proton" 2>/dev/null)
+    if [ -n "$sync_id" ] && [ "$sync_id" != "$(cat "$SYNC_DONE" 2>/dev/null)" ]; then
+        nt=$([ -e /dev/ntsync ] && echo 있음 || echo 없음)
+        fw=$(python3 -c 'import ctypes,os
+l=ctypes.CDLL(None,use_errno=True)
+r=l.syscall(449,0,0,0,0,0)
+print(r, os.strerror(ctypes.get_errno()))' 2>&1 | tail -n 1)
+        rc=$?
+        [ -z "$fw" ] && fw="응답 없음(종료 $rc)"
+        ws=$(strings -a "$PDIR/files/bin-arm64/wineserver" 2>/dev/null | grep -iE 'fsync|esync|ntsync|futex_waitv' | sort -u | head -n 6 | tr '\n' '|')
+        echo "INFO sync : /dev/ntsync $nt, futex_waitv(449): $fw"
+        echo "INFO sync : wineserver 안 동기화 이름: ${ws:-없음}"
+        grep -nE 'FSYNC|ESYNC|NTSYNC|fsync|esync|ntsync' "$PDIR/proton" 2>/dev/null | head -n 8 | cut -c1-160 \
+            | sed 's/^/INFO sync : proton /'
+        mkdir -p "$HOME/.steam" && echo "$sync_id" > "$SYNC_DONE"
+    fi
     FONT_DONE=$HOME/.steam/.ezs-fontcheck
     bin_id=$(stat -c '%s %Y' "$BIN" 2>/dev/null)
     if [ -f "$BIN" ] && [ "$bin_id" != "$(cat "$FONT_DONE" 2>/dev/null)" ] && command -v strings >/dev/null 2>&1; then

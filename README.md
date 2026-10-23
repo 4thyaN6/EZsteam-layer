@@ -181,3 +181,6 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - 앞 게임이 남아 있을 때: 다른 게임이 시작되는데 앞 게임 프로세스가 남아 있으면 기본은 알림, 메인 화면 [앞 게임 남으면: 알림/자동 종료]로 앞 게임을 먼저 끝낼 수 있음(두 게임이 안드로이드 자식 프로세스 한도 32개를 넘어 세션 전체가 종료됐음)
 - 위쪽 막대 CPU: `게임`은 명령줄의 윈도우 실행 파일 이름으로 찾음(커널 이름은 15자에서 잘려 긴 이름의 게임이 `-`로 나왔음), `Steam 화면`은 웹 도우미 프로세스 합계
 - 새 창 포커스: 창이 뜬 뒤 0.1·1·3·8·15·30초에 다시 줌(그사이 포커스가 옮겨 가면 건너뜀)
+- 프레임 제한: DX9~11은 `DXVK_CONFIG`의 60, DX12는 EZ Proton이 `VKD3D_FRAME_RATE=60`(vkd3d-proton 2.14+, `EZS_FPS_LIMIT`로 바꿈, 0 = 없음)
+- 화면 크기: [화면 …] 버튼이 1280x800 → 1024x640 → 960x600 → 1920x1200 순으로 바뀜. 1280보다 작으면 게임·Steam 화면을 적은 화소로 그리고 앱이 확대(FSR 1 권장). 세션 전체 적용(Valve Proton에는 전체 화면 확대 기능이 없어 게임별 크기는 아직 없음)
+- 동기화 진단: steam-run.sh가 Proton 빌드마다 한 번 `/dev/ntsync` 유무, futex_waitv(449) 허용 여부, wineserver·proton 스크립트의 동기화 이름을 `INFO sync` 줄로 남김(지금은 모든 실행이 server-side synchronization)

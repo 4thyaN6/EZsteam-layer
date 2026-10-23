@@ -193,6 +193,15 @@ echo "ezproton: $PROTON_DIR $*" >&2
 # 게임까지 전달된 화면 전달 설정(앱이 정함, steam-run.sh 참고)
 echo "ezproton: MESA_VK_WSI_DEBUG=${MESA_VK_WSI_DEBUG:-} MESA_VK_WSI_PRESENT_MODE=${MESA_VK_WSI_PRESENT_MODE:-} DXVK_CONFIG=${DXVK_CONFIG:-} DXVK_HUD=${DXVK_HUD:-}" >&2
 echo "ezproton: LD_PRELOAD=${LD_PRELOAD:-}" >&2
+# Frame limit for D3D12 games (vkd3d-proton, VKD3D_FRAME_RATE since vkd3d-proton 2.14; 0 = no
+# limit): 60 by default like the DX9-11 limit in DXVK_CONFIG, which vkd3d-proton does not read.
+# DX12 games ran without any limit and heated the device (2026-10-23). EZS_FPS_LIMIT changes it
+# (reserved for an app option to lift the limit later).
+# D3D12 게임 프레임 제한(vkd3d-proton, vkd3d-proton 2.14부터 VKD3D_FRAME_RATE. 0 = 제한 없음): 기본 60.
+# DX9~11용 DXVK_CONFIG 제한과 같게 함(vkd3d-proton은 그것을 읽지 않음). DX12 게임은 제한 없이 돌아
+# 기기가 뜨거워졌음(2026-10-23). EZS_FPS_LIMIT로 바꿈(나중에 제한을 푸는 앱 옵션용)
+export VKD3D_FRAME_RATE="${VKD3D_FRAME_RATE:-${EZS_FPS_LIMIT:-60}}"
+echo "ezproton: VKD3D_FRAME_RATE=$VKD3D_FRAME_RATE (DX12 프레임 제한, 0 = 없음)" >&2
 # Diagnosis: controller settings Steam hands to the game (SDL hints such as the list of devices to
 # ignore, Steam Input virtual pads). In one start Wine never set up its XInput device for the
 # virtual pad (no winexinput.sys in the Proton log) while earlier starts did (2026-10-23). Only
