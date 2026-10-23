@@ -194,4 +194,9 @@ echo "ezproton: LD_PRELOAD=${LD_PRELOAD:-}" >&2
 # 이전 시작들은 만들었음(2026-10-23). 장치 번호와 스위치만 있고 계정 정보는 없음
 env | grep -E '^(SDL_[A-Z_]*JOY|SDL_[A-Z_]*CONTROLLER|SDL_[A-Z_]*GAMEPAD|SDL_JOYSTICK|SteamVirtualGamepad|STEAM_INPUT|ENABLE_VK_LAYER_VALVE)' \
     | cut -c1-300 | sed 's/^/ezproton: pad env /' >&2
+# The ignore list is long (Valve's own 0x28de devices first): the other vendors in it are printed
+# in full, since our virtual pad is 0x045e/0x028e (the line above is cut at 300 characters)
+# 무시 목록은 김(Valve 자체 0x28de 장치가 앞에 옴): 그 밖의 제조사 항목은 전부 출력함. 우리 가상 패드는
+# 0x045e/0x028e임(위 줄은 300자에서 잘림)
+echo "ezproton: pad ignore (Valve 0x28de 제외): $(echo "${SDL_GAMECONTROLLER_IGNORE_DEVICES:-}" | tr ',' '\n' | grep -vi '^0x28de/' | grep . | tr '\n' ' ')" >&2
 exec "$PROTON_DIR/proton" "$@"
