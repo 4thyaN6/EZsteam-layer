@@ -221,6 +221,7 @@ public class DisplayActivity extends Activity {
             return true;
         });
         view.setFsrSharpness(getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getFloat(PREF_FSR_SHARP, 0.2f));
+        applyFsrTarget(getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getInt(PREF_FSR_TARGET, 0));
         addButton(bar, "키보드", v -> toggleKeyboard());
         padButton = addButton(bar, "패드", v -> setTouchPadShown(touchPad.getVisibility() != View.VISIBLE));
         // Long press: size (hand size) and opacity / 길게 누름: 크기(손 크기)와 투명도
@@ -434,6 +435,17 @@ public class DisplayActivity extends Activity {
     private static final String PREF_FSR_SHARP = "fsr.sharp";
     private static final float[] FSR_SHARP = {0f, 0.2f, 0.5f, 1f, 2f, -1f};
     private static final String[] FSR_SHARP_NAMES = {"0 (가장 선명)", "0.2 (FSR 기본)", "0.5", "1.0", "2.0 (약하게)", "선명화 끔 (확대만)"};
+    /** FSR output: 0 = up to the display, 1 = up to 1920x1200 then linear, 2 = up to 1920x1080 then linear
+     *  FSR 출력: 0 = 화면 크기까지, 1 = 1920x1200까지 뒤 선형, 2 = 1920x1080까지 뒤 선형 */
+    private static final String PREF_FSR_TARGET = "fsr.target";
+    private static final String[] FSR_TARGET_NAMES = {"FSR 출력: 화면 크기까지", "FSR 출력: 1920x1200까지 + 선형 확대",
+            "FSR 출력: 1920x1080까지 + 선형 확대"};
+
+    private void applyFsrTarget(int i) {
+        if (i == 1) view.setFsrTarget(1920, 1200);
+        else if (i == 2) view.setFsrTarget(1920, 1080);
+        else view.setFsrTarget(0, 0);
+    }
 
     /**
      * FSR 1 sharpness (RCAS stops: 0 strongest, each stop halves it), saved for next time; also
@@ -442,8 +454,18 @@ public class DisplayActivity extends Activity {
      */
     private void chooseFsrSharpness() {
         new android.app.AlertDialog.Builder(this)
-                .setTitle("FSR 1 선명도 (숫자가 작을수록 선명)")
-                .setItems(FSR_SHARP_NAMES, (d, which) -> {
+                .setTitle("FSR 1 선명도 (숫자가 작을수록 선명) · 출력 크기")
+                .setItems(concat(FSR_SHARP_NAMES, FSR_TARGET_NAMES), (d, which) -> {
+                    if (which >= FSR_SHARP_NAMES.length) {
+                        // Output size items after the sharpness items / 선명도 항목 뒤의 출력 크기 항목
+                        int t = which - FSR_SHARP_NAMES.length;
+                        getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit().putInt(PREF_FSR_TARGET, t).apply();
+                        applyFsrTarget(t);
+                        view.setScaleMode(FramebufferView.SCALE_FSR);
+                        scaleButton.setText("확대: " + SCALE_NAMES[FramebufferView.SCALE_FSR]);
+                        log("확대 방식: FSR 1, " + FSR_TARGET_NAMES[t]);
+                        return;
+                    }
                     float v = FSR_SHARP[which];
                     getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit().putFloat(PREF_FSR_SHARP, v).apply();
                     view.setFsrSharpness(v);
@@ -452,6 +474,12 @@ public class DisplayActivity extends Activity {
                     log("확대 방식: FSR 1, 선명도 " + FSR_SHARP_NAMES[which]);
                 })
                 .show();
+    }
+
+    private static String[] concat(String[] a, String[] b) {
+        String[] r = java.util.Arrays.copyOf(a, a.length + b.length);
+        System.arraycopy(b, 0, r, a.length, b.length);
+        return r;
     }
 
     /** Immersive full screen (system bars hidden) / 몰입형 전체 화면(시스템 막대 숨김) */
@@ -576,6 +604,9 @@ public class DisplayActivity extends Activity {
                 if (!cefFlags.isEmpty()) c.env.put("EZS_CEF_FLAGS", cefFlags);
                 // Big Picture at start (steam-run.sh adds -gamepadui) / 시작할 때 빅픽처(steam-run.sh가 -gamepadui를 붙임)
                 if (MainActivity.bigPicture(this)) c.env.put("EZS_STEAM_BIGPICTURE", "1");
+                // Test switch: fewer HID discovery rounds in the Steam client (steam-run.sh)
+                // 시험 스위치: Steam 클라이언트의 HID 찾기 줄이기(steam-run.sh)
+                if (MainActivity.steamHidLow(this)) c.env.put("EZS_STEAM_HID_LOW", "1");
                 // Phone language for the Steam client language (steam-language.py)
                 // Steam 클라이언트 언어용 휴대폰 언어(steam-language.py)
                 c.env.put("EZS_LANG", Locale.getDefault().toLanguageTag());

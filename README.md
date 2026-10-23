@@ -182,5 +182,7 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - 위쪽 막대 CPU: `게임`은 명령줄의 윈도우 실행 파일 이름으로 찾음(커널 이름은 15자에서 잘려 긴 이름의 게임이 `-`로 나왔음), `Steam 화면`은 웹 도우미 프로세스 합계
 - 새 창 포커스: 창이 뜬 뒤 0.1·1·3·8·15·30초에 다시 줌(그사이 포커스가 옮겨 가면 건너뜀)
 - 프레임 제한: DX9~11은 `DXVK_CONFIG`의 60, DX12는 EZ Proton이 `VKD3D_FRAME_RATE=60`(vkd3d-proton 2.14+, `EZS_FPS_LIMIT`로 바꿈, 0 = 없음)
-- 화면 크기: [화면 …] 버튼이 1280x800 → 1024x640 → 960x600 → 1920x1200 순으로 바뀜. 1280보다 작으면 게임·Steam 화면을 적은 화소로 그리고 앱이 확대(FSR 1 권장). 세션 전체 적용(Valve Proton에는 전체 화면 확대 기능이 없어 게임별 크기는 아직 없음)
-- 동기화 진단: steam-run.sh가 Proton 빌드마다 한 번 `/dev/ntsync` 유무, futex_waitv(449) 허용 여부, wineserver·proton 스크립트의 동기화 이름을 `INFO sync` 줄로 남김(지금은 모든 실행이 server-side synchronization)
+- 화면 크기: [화면 …] 버튼으로 1280x800 / 1920x1200. 1024x640·960x600은 시험 뒤 뺌(가로 3040화소 화면에서 3배 넘게 확대되어 FSR 1로도 글씨가 번졌음)
+- 동기화 진단: steam-run.sh가 Proton 빌드마다 한 번 `/dev/ntsync` 유무, futex_waitv(449) 허용 여부, wineserver·proton 스크립트의 동기화 이름을 `INFO sync` 줄로 남김(기기 결과: `/dev/ntsync` 없음, futex_waitv `Function not implemented` → fsync·ntsync 모두 쓸 수 없어 server-side synchronization)
+- FSR 출력 크기: [확대] 길게 누르기 → 선명도 항목 뒤 [FSR 출력: 화면 크기까지 / 1920x1200까지 + 선형 확대 / 1920x1080까지 + 선형 확대]. 중간 크기를 고르면 EASU·RCAS를 그 크기로 하고 마지막에 선형으로 화면까지 키움(FSR 1 권장 배율 2배 이하로 비교용)
+- Steam HID 찾기 시험 스위치(관리자, 기본 끔): 켜면 Steam 클라이언트에만 `SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0`(게임에는 넘기지 않음). 빅픽처에서 `Using udev for HIDAPI joystick device discovery`가 분당 12,000~21,000번(일반 창 약 1,700번), PRoot 약 70%(일반 창 10~20%)였음

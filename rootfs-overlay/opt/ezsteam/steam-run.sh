@@ -404,6 +404,17 @@ print(r, os.strerror(ctypes.get_errno()))' 2>&1 | tail -n 1)
         echo "INFO steam : 빅픽처는 Steam 화면 GPU 없이 시작 (GPU로는 검은 화면)"
     fi
     echo "INFO steam : 시작 $n ($(date +%H:%M:%S)) 화면 GPU=$([ -z "$GPUARG" ] && echo 1 || echo 0) 빅픽처=$([ -n "$BPARG" ] && echo 1 || echo 0)"
+    # Test switch from the app: the client's SDL stops its HIDAPI controller drivers and does not
+    # use udev to find HID devices (udev does not work under PRoot; Big Picture retried it
+    # 12,000-21,000 times a minute). Our pad reaches the client through an SDL virtual joystick,
+    # not HIDAPI. ezproton gives games their defaults back.
+    # 앱의 시험 스위치: 클라이언트 SDL이 HIDAPI 컨트롤러 드라이버를 쓰지 않고, HID 장치를 찾을 때 udev를 쓰지
+    # 않음(PRoot 아래에서 udev는 동작하지 않고, 빅픽처는 분당 12,000~21,000번 다시 시도했음). 우리 패드는
+    # HIDAPI가 아니라 SDL 가상 조이스틱으로 클라이언트에 들어감. 게임에는 ezproton이 기본값을 돌려줌
+    if [ "${EZS_STEAM_HID_LOW:-0}" = 1 ]; then
+        export SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0
+        echo "INFO steam : HID 찾기 줄임(시험): SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0"
+    fi
     LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_CLIENT_PRELOAD" \
         "$BIN" -no-cef-sandbox $GPUARG $BPARG -chromeosnopreallocate $VERIFY ${EZS_STEAM_EXTRA:-} >>"$LOG" 2>&1
     rc=$?

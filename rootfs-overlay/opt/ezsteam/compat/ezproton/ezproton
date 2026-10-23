@@ -193,6 +193,11 @@ echo "ezproton: $PROTON_DIR $*" >&2
 # 게임까지 전달된 화면 전달 설정(앱이 정함, steam-run.sh 참고)
 echo "ezproton: MESA_VK_WSI_DEBUG=${MESA_VK_WSI_DEBUG:-} MESA_VK_WSI_PRESENT_MODE=${MESA_VK_WSI_PRESENT_MODE:-} DXVK_CONFIG=${DXVK_CONFIG:-} DXVK_HUD=${DXVK_HUD:-}" >&2
 echo "ezproton: LD_PRELOAD=${LD_PRELOAD:-}" >&2
+# The client-only HID test switch (steam-run.sh) is not passed on to games
+# 클라이언트 전용 HID 시험 스위치(steam-run.sh)는 게임에 넘기지 않음
+if [ "${EZS_STEAM_HID_LOW:-0}" = 1 ]; then
+    unset SDL_JOYSTICK_HIDAPI SDL_HIDAPI_UDEV
+fi
 # Frame limit for D3D12 games (vkd3d-proton, VKD3D_FRAME_RATE since vkd3d-proton 2.14; 0 = no
 # limit): 60 by default like the DX9-11 limit in DXVK_CONFIG, which vkd3d-proton does not read.
 # DX12 games ran without any limit and heated the device (2026-10-23). EZS_FPS_LIMIT changes it

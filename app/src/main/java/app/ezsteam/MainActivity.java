@@ -93,7 +93,6 @@ public class MainActivity extends Activity {
             prefs.edit().putInt(KEY_SCREEN_SIZE, next).apply();
             size.setText(sizeLabel());
             log("Steam 화면 크기: " + SCREEN_SIZES[next][0] + "x" + SCREEN_SIZES[next][1]
-                    + (SCREEN_SIZES[next][0] < 1280 ? " (낮은 해상도로 그리고 앱이 확대, [확대: FSR] 권장)" : "")
                     + " (다음 Steam 시작부터)");
         });
         // Big Picture or the normal client window at start / 시작할 때 빅픽처 또는 일반 클라이언트 창
@@ -199,6 +198,20 @@ public class MainActivity extends Activity {
         });
         // Diagnosis: the client's file I/O summary with its busiest written paths, once a minute
         // 진단: 클라이언트 파일 입출력 요약과 쓰기가 많은 경로를 1분마다 기록
+        // Test switch: fewer controller (HID) discovery rounds in the Steam client. Big Picture
+        // printed "Using udev for HIDAPI joystick device discovery" 12,000-21,000 times a minute
+        // (normal window about 1,700) while PRoot sat near 70 % (normal window 10-20 %), 2026-10-23.
+        // Off by default; the Steam client only, games keep the defaults.
+        // 시험 스위치: Steam 클라이언트의 컨트롤러(HID) 찾기 횟수 줄이기. 빅픽처는 "Using udev for HIDAPI
+        // joystick device discovery"를 분당 12,000~21,000번(일반 창 약 1,700번) 남겼고 그동안 PRoot가 약 70%
+        // (일반 창 10~20%)였음(2026-10-23). 기본 끔. Steam 클라이언트에만 적용하고 게임은 기본값 그대로
+        Button hid = addButton(row4, "Steam HID 찾기: " + (steamHidLow(this) ? "줄임(시험)" : "기본"), null);
+        hid.setOnClickListener(v -> {
+            boolean on = !steamHidLow(this);
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_STEAM_HID_LOW, on).apply();
+            hid.setText("Steam HID 찾기: " + (on ? "줄임(시험)" : "기본"));
+            log("Steam HID 찾기: " + (on ? "줄임(시험)" : "기본") + " (다음 Steam 시작부터)");
+        });
         Button io = addButton(row4, "IO 통계: " + (ioStat(this) ? "켬" : "끔"), null);
         io.setOnClickListener(v -> {
             boolean on = !ioStat(this);
@@ -336,23 +349,28 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * X screen sizes for the Steam session. Below 1280x800 games (and the Steam screen) are drawn
-     * at fewer pixels, which lowers GPU and CPU load, and the app scales the picture up to the
-     * display (FSR 1 among the scale modes). The whole session uses the size: Valve's Proton has
-     * no fullscreen scaling hack any more (removed after Proton 8 in favour of gamescope), so a
-     * size per game would need a Wine virtual desktop plus cropping (not done yet).
-     * Steam 세션의 X 화면 크기. 1280x800보다 작으면 게임(과 Steam 화면)을 더 적은 화소로 그려 GPU·CPU
-     * 부하가 줄고, 앱이 화면 크기로 확대함(확대 방식에 FSR 1 있음). 세션 전체가 이 크기를 씀: Valve Proton에는
-     * 전체 화면 확대 기능이 더는 없음(Proton 8 이후 gamescope로 대체되며 제거). 게임별 크기는 Wine 가상
-     * 데스크톱 + 잘라 보이기가 필요함(아직 안 함)
+     * X screen sizes for the Steam session; the app scales the picture to the display (FSR 1
+     * among the scale modes). 1024x640 and 960x600 were tried and taken out again: on a
+     * 3040-pixel-wide panel they are scaled up more than 3 times and text was blurred even with
+     * FSR 1 (user report 2026-10-24; FSR 1's strongest mode is 2x). Valve's Proton has no
+     * fullscreen scaling hack any more (removed after Proton 8 in favour of gamescope), so a
+     * lower size per game would need a Wine virtual desktop plus cropping (not done).
+     * Steam 세션의 X 화면 크기. 앱이 화면 크기로 확대함(확대 방식에 FSR 1 있음). 1024x640, 960x600은
+     * 시험 뒤 다시 뺌: 가로 3040화소 화면에서 3배 넘게 확대되어 FSR 1로도 글씨가 번졌음(사용자 제보
+     * 2026-10-24. FSR 1의 가장 큰 배율 모드가 2배). Valve Proton에는 전체 화면 확대 기능이 더는 없음
+     * (Proton 8 이후 gamescope로 대체되며 제거). 게임별로 낮추려면 Wine 가상 데스크톱 + 잘라 보이기가
+     * 필요함(안 함)
      */
-    static final int[][] SCREEN_SIZES = {{1280, 800}, {1024, 640}, {960, 600}, {1920, 1200}};
-    static final String KEY_SCREEN_SIZE = "steam.size";
+    static final int[][] SCREEN_SIZES = {{1280, 800}, {1920, 1200}};
+    /** Index into SCREEN_SIZES (new key, so the old four-size index is not misread)
+     *  SCREEN_SIZES 번호(새 키. 예전 네 가지 목록의 번호를 잘못 읽지 않게 함) */
+    static final String KEY_SCREEN_SIZE = "steam.size2";
 
-    /** Chosen size; the older on/off setting (1920x1200) is read once / 고른 크기. 예전 켬/끔 설정(1920x1200)도 읽음 */
+    /** Chosen size; older settings map to 1920x1200 or 1280x800 / 고른 크기. 예전 설정은 1920x1200 또는 1280x800으로 맞춤 */
     private int screenSizeIndex() {
         android.content.SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
-        int i = p.getInt(KEY_SCREEN_SIZE, p.getBoolean(KEY_BIG_SCREEN, false) ? 3 : 0);
+        boolean wasBig = p.getInt("steam.size", -1) == 3 || p.getBoolean(KEY_BIG_SCREEN, false);
+        int i = p.getInt(KEY_SCREEN_SIZE, wasBig ? 1 : 0);
         return i >= 0 && i < SCREEN_SIZES.length ? i : 0;
     }
 
@@ -362,7 +380,7 @@ public class MainActivity extends Activity {
 
     private String sizeLabel() {
         int[] s = steamSize();
-        return "화면 " + s[0] + "x" + s[1] + (s[0] < 1280 ? " (확대)" : "");
+        return "화면 " + s[0] + "x" + s[1];
     }
 
     private static String sharedLabel(boolean on) {
@@ -389,6 +407,12 @@ public class MainActivity extends Activity {
 
     private static String prevGameLabel(boolean end) {
         return "앞 게임 남으면: " + (end ? "자동 종료" : "알림");
+    }
+
+    static final String KEY_STEAM_HID_LOW = "steam.hidLow";
+
+    static boolean steamHidLow(android.content.Context ctx) {
+        return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_STEAM_HID_LOW, false);
     }
 
     static boolean bigPicture(android.content.Context ctx) {

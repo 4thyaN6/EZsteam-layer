@@ -63,6 +63,12 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
     // FSR 1 (two passes): EASU into an offscreen texture at output size, then RCAS to the screen
     // FSR 1(2단계): EASU로 출력 크기의 화면 밖 텍스처에 그린 뒤 RCAS로 화면에 그림
     private int easuProg, rcasProg, fsrFbo, fsrTex, fsrW, fsrH;
+    /** FSR to a middle size (e.g. 1920x1200), then a plain linear scale to the display; 0 = FSR to
+     *  the display size. Second offscreen target and the copy program for that last step.
+     *  중간 크기(예: 1920x1200)까지 FSR, 그다음 화면까지 단순 선형 확대. 0 = 화면 크기까지 FSR.
+     *  그 마지막 단계용 두 번째 화면 밖 대상과 복사 프로그램 */
+    private volatile int fsrTargetW, fsrTargetH;
+    private int fsrFbo2, fsrTex2, fsrW2, fsrH2, copyProg, cpPos, cpTex;
     private int eaPos, eaTex, eSrc, raPos, raTex, rOut, rCon;
     /** FSR shader or offscreen setup failed (that mode then draws like bicubic + sharpen)
      *  FSR 셰이더나 화면 밖 버퍼 준비가 실패함(그때 그 모드는 바이큐빅+선명처럼 그림) */
@@ -115,6 +121,20 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
 
     public void setFsrSharpness(float stops) {
         fsrSharpness = stops;
+    }
+
+    /**
+     * Size FSR scales up to before the last plain linear step; 0 = the display size. FSR 1 is made
+     * for up to 2x (its Performance mode); 1280x800 to a 3040-pixel panel is 2.4x, so 1920x1200
+     * (1.5x, its Quality mode) and then a small linear step can be compared (user request
+     * 2026-10-24). Kept to the display's aspect ratio inside the given box.
+     * 마지막 단순 선형 확대 전까지 FSR로 키울 크기. 0 = 화면 크기. FSR 1은 2배(Performance 모드)까지를
+     * 위한 것임. 1280x800 → 가로 3040화소 화면은 2.4배라, 1920x1200(1.5배, Quality 모드)까지 FSR 뒤 작은
+     * 선형 확대와 비교할 수 있게 함(사용자 요청 2026-10-24). 주어진 상자 안에서 화면 비율을 따름
+     */
+    public void setFsrTarget(int w, int h) {
+        fsrTargetW = Math.max(0, w);
+        fsrTargetH = Math.max(0, h);
     }
 
     public int getScaleMode() {
@@ -547,6 +567,45 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         raTex = GLES20.glGetAttribLocation(rcasProg, "aTex");
         rOut = GLES20.glGetUniformLocation(rcasProg, "uOut");
         rCon = GLES20.glGetUniformLocation(rcasProg, "uCon");
+        // Plain copy with linear filtering for the step after a middle-size FSR (colours already
+        // in order) / 중간 크기 FSR 뒤 단계용 선형 필터 단순 복사(색 순서는 이미 맞음)
+        copyProg = link(vs, "precision mediump float; uniform sampler2D uTex; varying vec2 vTex;\n"
+                + "void main() { gl_FragColor = vec4(texture2D(uTex, vTex).rgb, 1.0); }\n");
+        if (copyProg != 0) {
+            cpPos = GLES20.glGetAttribLocation(copyProg, "aPos");
+            cpTex = GLES20.glGetAttribLocation(copyProg, "aTex");
+        }
+        fsrFbo2 = fsrTex2 = fsrW2 = fsrH2 = 0;
+    }
+
+    /** Texture + framebuffer of a size (filter as given); 0 on failure / 크기만큼의 텍스처 + 프레임버퍼(필터 지정). 실패하면 0 */
+    private int[] makeTarget(int tex, int fbo, int w, int h, int filter) {
+        int[] a = new int[1];
+        if (tex == 0) {
+            GLES20.glGenTextures(1, a, 0);
+            tex = a[0];
+        }
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, filter);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, filter);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, h, 0,
+                GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null);
+        if (fbo == 0) {
+            GLES20.glGenFramebuffers(1, a, 0);
+            fbo = a[0];
+        }
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo);
+        GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
+                GLES20.GL_TEXTURE_2D, tex, 0);
+        int st = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER);
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+        if (st != GLES20.GL_FRAMEBUFFER_COMPLETE) {
+            shaderError = (shaderError == null ? "" : shaderError + " / ") + "fsr fbo: 0x" + Integer.toHexString(st);
+            return null;
+        }
+        return new int[]{tex, fbo};
     }
 
     /**
@@ -557,55 +616,70 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
      */
     private boolean drawFsr(XvfbFramebuffer f, int vx, int vy, int w, int h) {
         if (fsrFailed || w <= 0 || h <= 0) return false;
-        if (fsrW != w || fsrH != h) {
-            int[] a = new int[1];
-            if (fsrTex == 0) {
-                GLES20.glGenTextures(1, a, 0);
-                fsrTex = a[0];
+        // FSR output size: the display area, or the middle size kept to the area's aspect ratio
+        // FSR 출력 크기: 화면 영역, 또는 영역 비율을 따른 중간 크기
+        int tw = w, th = h;
+        int bw = fsrTargetW, bh = fsrTargetH;
+        if (bw > 0 && bh > 0 && copyProg != 0) {
+            float k = Math.min(bw / (float) w, bh / (float) h);
+            if (k < 1f) {
+                tw = Math.max(1, Math.round(w * k));
+                th = Math.max(1, Math.round(h * k));
             }
-            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fsrTex);
-            // Nearest: RCAS reads exact output pixels / 최근접: RCAS가 출력 픽셀을 정확히 읽음
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST);
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST);
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
-            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, h, 0,
-                    GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null);
-            if (fsrFbo == 0) {
-                GLES20.glGenFramebuffers(1, a, 0);
-                fsrFbo = a[0];
-            }
-            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fsrFbo);
-            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
-                    GLES20.GL_TEXTURE_2D, fsrTex, 0);
-            int st = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER);
-            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
-            if (st != GLES20.GL_FRAMEBUFFER_COMPLETE) {
+        }
+        boolean middle = tw != w || th != h;
+        if (fsrW != tw || fsrH != th) {
+            // Nearest: RCAS reads exact pixels / 최근접: RCAS가 픽셀을 정확히 읽음
+            int[] t = makeTarget(fsrTex, fsrFbo, tw, th, GLES20.GL_NEAREST);
+            if (t == null) {
                 fsrFailed = true;
-                shaderError = (shaderError == null ? "" : shaderError + " / ") + "fsr fbo: 0x" + Integer.toHexString(st);
                 return false;
             }
-            fsrW = w;
-            fsrH = h;
+            fsrTex = t[0];
+            fsrFbo = t[1];
+            fsrW = tw;
+            fsrH = th;
+        }
+        if (middle && (fsrW2 != tw || fsrH2 != th)) {
+            // Linear: the last step scales this up / 선형: 마지막 단계가 이것을 키움
+            int[] t = makeTarget(fsrTex2, fsrFbo2, tw, th, GLES20.GL_LINEAR);
+            if (t == null) {
+                fsrFailed = true;
+                return false;
+            }
+            fsrTex2 = t[0];
+            fsrFbo2 = t[1];
+            fsrW2 = tw;
+            fsrH2 = th;
         }
         // Pass 1: EASU, X screen → offscreen texture / 1단계: EASU, X 화면 → 화면 밖 텍스처
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fsrFbo);
-        GLES20.glViewport(0, 0, w, h);
+        GLES20.glViewport(0, 0, tw, th);
         GLES20.glUseProgram(easuProg);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture);
         GLES20.glUniform2f(eSrc, f.width, f.height);
         drawQuad(eaPos, eaTex);
-        // Pass 2: RCAS, offscreen texture → screen area / 2단계: RCAS, 화면 밖 텍스처 → 화면 영역
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
-        GLES20.glViewport(vx, vy, w, h);
+        // Pass 2: RCAS, to the screen area or to the second offscreen texture
+        // 2단계: RCAS, 화면 영역 또는 두 번째 화면 밖 텍스처로
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, middle ? fsrFbo2 : 0);
+        if (middle) GLES20.glViewport(0, 0, tw, th);
+        else GLES20.glViewport(vx, vy, w, h);
         GLES20.glUseProgram(rcasProg);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fsrTex);
-        GLES20.glUniform2f(rOut, w, h);
+        GLES20.glUniform2f(rOut, tw, th);
         // Sharpness in stops: 0 = strongest, each stop halves it; off = 0 (EASU only)
         // 선명도 단: 0 = 가장 강함, 1단마다 절반. 끔 = 0(EASU 확대만)
         float stops = fsrSharpness;
         GLES20.glUniform1f(rCon, stops < 0 ? 0f : (float) Math.pow(2.0, -stops));
         drawQuad(raPos, raTex);
+        if (middle) {
+            // Pass 3: plain linear scale to the screen area / 3단계: 화면 영역까지 단순 선형 확대
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+            GLES20.glViewport(vx, vy, w, h);
+            GLES20.glUseProgram(copyProg);
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fsrTex2);
+            drawQuad(cpPos, cpTex);
+        }
         return true;
     }
 
