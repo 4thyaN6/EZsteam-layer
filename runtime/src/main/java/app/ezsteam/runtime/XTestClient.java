@@ -431,7 +431,14 @@ public final class XTestClient implements Closeable {
             int n = ByteBuffer.wrap(r).order(ByteOrder.LITTLE_ENDIAN).getInt(16);
             if (n <= 0 || r.length < 32) return;
             String cls = new String(r, 32, Math.min(n, r.length - 32), StandardCharsets.ISO_8859_1).replace('\0', ' ').trim();
-            if (cls.toLowerCase(java.util.Locale.ROOT).contains("steam")) {
+            // Instance and class must be Steam's own ("steamwebhelper", "steam"): games started by
+            // Steam carry "steam_app_<id>" and were taken for Steam windows, so HOME did nothing
+            // (2026-10-24) / 인스턴스·클래스가 Steam 자체 것("steamwebhelper", "steam")이어야 함: Steam이
+            // 띄운 게임은 "steam_app_<id>"를 달고 있어 Steam 창으로 잘못 봤고, HOME이 아무것도 안 했음(2026-10-24)
+            boolean steam = false;
+            for (String part : cls.toLowerCase(java.util.Locale.ROOT).split(" "))
+                if (part.equals("steamwebhelper") || part.equals("steam")) steam = true;
+            if (steam) {
                 steamWindows.add(win);
                 Log l = log;
                 if (l != null) l.line(String.format(java.util.Locale.ROOT, "X 창 0x%x Steam 창 (%s)", win, cls));

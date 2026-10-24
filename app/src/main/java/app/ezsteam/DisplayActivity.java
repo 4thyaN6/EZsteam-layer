@@ -151,6 +151,8 @@ public class DisplayActivity extends Activity {
             return;
         }
         int f = x.focusedWindow();
+        // One line per press, so a report shows what HOME found / 누를 때마다 한 줄. 제보에서 HOME이 무엇을 봤는지 보임
+        log(String.format(Locale.ROOT, "HOME: 앞 창 0x%x%s", f, f == 0 ? " (없음)" : x.isSteamWindow(f) ? " (Steam, 그대로 둠)" : " (게임)"));
         if (f == 0 || x.isSteamWindow(f)) return;
         gameTopBeforeMenu = f;
         final long at = homeAt;
