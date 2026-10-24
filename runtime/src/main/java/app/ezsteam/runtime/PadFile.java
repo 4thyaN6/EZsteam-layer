@@ -131,6 +131,21 @@ public final class PadFile implements Closeable {
         buf.put((byte) 0);
     }
 
+    /** Byte 32 of the file: 1 = games read a released pad (the Steam client still reads it all)
+     *  파일 32번째 바이트: 1 = 게임은 뗀 패드로 읽음(Steam 클라이언트는 그대로 다 읽음) */
+    public static final int MUTE_OFFSET = 32;
+
+    /**
+     * Keep games from seeing the pad while a Steam menu or dialog is over them (HOME opened the
+     * Steam menu, and the game also took the presses, 2026-10-24).
+     * Steam 메뉴나 대화상자가 게임 위에 있는 동안 게임이 패드를 보지 않게 함(HOME으로 Steam 메뉴를 열었는데
+     * 게임도 입력을 받았음, 2026-10-24)
+     */
+    public synchronized void setGameMuted(boolean on) {
+        if (buf.get(MUTE_OFFSET) == (byte) (on ? 1 : 0)) return;
+        buf.put(MUTE_OFFSET, (byte) (on ? 1 : 0));
+    }
+
     /** Squared push of the stick whose x axis is index s / x축 번호가 s인 스틱을 민 정도의 제곱 */
     private static float mag(State st, int s) {
         return st.axes[s] * st.axes[s] + st.axes[s + 1] * st.axes[s + 1];

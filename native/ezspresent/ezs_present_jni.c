@@ -708,6 +708,8 @@ static void comp_start(int s, const struct ezp_msg *m, char *line, size_t cap)
     pthread_mutex_init(&c->wmu, NULL);
     uint32_t stride = 0;
     int ok = 1;
+    /* Which step failed, for the log / 어느 단계가 실패했는지(로그용) */
+    char why[96] = "";
     for (uint32_t i = 0; i < n && ok; i++) {
         AHardwareBuffer_Desc d;
         memset(&d, 0, sizeof d);
@@ -723,8 +725,10 @@ static void comp_start(int s, const struct ezp_msg *m, char *line, size_t cap)
         memset(&h, 0, sizeof h);
         h.type = EZP_SC_BUF;
         h.r0 = i;
-        if (AHardwareBuffer_allocate(&d, &c->ahb[i]) != 0 || !c->ahb[i]) {
+        int ar = AHardwareBuffer_allocate(&d, &c->ahb[i]);
+        if (ar != 0 || !c->ahb[i]) {
             ok = 0;
+            snprintf(why, sizeof why, "버퍼 %u 만들기 (%d)", i, ar);
             send_msg(s, &h, NULL, 0, NULL, 0);
             break;
         }
@@ -735,12 +739,20 @@ static void comp_start(int s, const struct ezp_msg *m, char *line, size_t cap)
         h.w = got.width;
         h.h = got.height;
         h.flags = 1;
-        if (send_msg(s, &h, NULL, 0, NULL, 0) != 0 || AHardwareBuffer_sendHandleToUnixSocket(c->ahb[i], s) != 0)
+        if (send_msg(s, &h, NULL, 0, NULL, 0) != 0) {
             ok = 0;
+            snprintf(why, sizeof why, "버퍼 %u 머리 보내기 (%s)", i, strerror(errno));
+        } else {
+            int sr = AHardwareBuffer_sendHandleToUnixSocket(c->ahb[i], s);
+            if (sr != 0) {
+                ok = 0;
+                snprintf(why, sizeof why, "버퍼 %u 핸들 보내기 (%d)", i, sr);
+            }
+        }
         c->count = i + 1;
     }
     if (!ok) {
-        snprintf(line, cap, "E 버퍼 만들기/보내기 실패 %ux%u", m->w, m->h);
+        snprintf(line, cap, "E %ux%u: %s 실패 (레이어가 끊었으면 레이어 쪽 로그 참고)", m->w, m->h, why);
         for (uint32_t i = 0; i < EZP_MAX_BUFFERS; i++)
             if (c->ahb[i]) AHardwareBuffer_release(c->ahb[i]);
         close(s);

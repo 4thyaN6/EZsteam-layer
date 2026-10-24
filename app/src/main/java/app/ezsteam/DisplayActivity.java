@@ -111,6 +111,9 @@ public class DisplayActivity extends Activity {
     private volatile app.ezsteam.runtime.AudioServer audio;
     /** Game frame path check, app side (answers ezs-present-probe) / 게임 프레임 경로 확인의 앱 쪽(ezs-present-probe에 답함) */
     private volatile app.ezsteam.runtime.PresentProbe present;
+    /** Sum and count of per-second new-frame rates since the last PERF line / 지난 PERF 줄 뒤 초당 새 프레임 수의 합과 개수 */
+    private volatile float changedSum;
+    private volatile int changedCount;
     /** Game controller state for the rootfs (Steam mode) / rootfs용 게임 컨트롤러 상태(Steam 모드) */
     private volatile app.ezsteam.runtime.PadFile pad;
     /** On-screen touch pad over the game ([패드]) / 게임 위 화면 터치 패드([패드]) */
@@ -360,6 +363,11 @@ public class DisplayActivity extends Activity {
         hideSystemBars();
 
         view.setStatsListener((fps, ms, changed, fw, fh) -> {
+            // Per-minute average of new frames for the PERF line (game frames with the direct path,
+            // changed X screens otherwise) / PERF 줄용 분당 새 프레임 평균(직접 전달이면 게임 프레임, 아니면
+            // 바뀐 X 화면)
+            changedSum += changed;
+            changedCount++;
             String err = view.shaderError;
             // Logged again when the text changes (FSR can fail later, at its first use)
             // 문구가 바뀌면 다시 기록함(FSR은 처음 쓸 때 늦게 실패할 수 있음)
@@ -693,9 +701,39 @@ public class DisplayActivity extends Activity {
                     present = app.ezsteam.runtime.PresentProbe.start(c.rootfs, this::log);
                     // Window places for game frames come from our X connection
                     // 게임 프레임의 창 위치는 우리 X 연결에서 얻음
-                    present.setWindowRects((win, cb) -> {
+                    present.setWindowRects(new app.ezsteam.runtime.PresentProbe.WindowRects() {
+                        @Override
+                        public void query(int win, app.ezsteam.runtime.PresentProbe.RectCallback cb) {
+                            XTestClient x = xtest;
+                            if (x != null && !x.isClosed()) x.windowRect(win, cb);
+                        }
+
+                        @Override
+                        public void topLevel(int win, java.util.function.IntConsumer cb) {
+                            XTestClient x = xtest;
+                            if (x != null && !x.isClosed()) x.topLevelOf(win, cb);
+                        }
+
+                        @Override
+                        public void above(int top, java.util.function.Consumer<int[]> cb) {
+                            XTestClient x = xtest;
+                            if (x != null && !x.isClosed()) x.windowsAbove(top, cb);
+                        }
+                    });
+                    // Windows over the game (Steam menu from HOME, dialogs) are drawn over the game
+                    // frame; while they cover a quarter of the screen or more the game gets no pad
+                    // input, like Steam's own overlay (the Steam client still gets it)
+                    // 게임 위의 창(HOME으로 연 Steam 메뉴, 대화상자)은 게임 프레임 위에 그림. 그 창들이 화면의
+                    // 4분의 1 이상을 덮는 동안 게임에는 패드 입력을 주지 않음(Steam 자체 오버레이처럼, Steam
+                    // 클라이언트는 계속 받음)
+                    present.setOverlayListener(rects -> {
+                        view.setOverlays(rects);
+                        long area = 0;
+                        for (int i = 0; i + 3 < rects.length; i += 4) area += (long) rects[i + 2] * rects[i + 3];
                         XTestClient x = xtest;
-                        if (x != null && !x.isClosed()) x.windowRect(win, cb);
+                        long screen = x != null ? (long) x.screenWidth * x.screenHeight : 1280L * 800L;
+                        app.ezsteam.runtime.PadFile pf = pad;
+                        if (pf != null) pf.setGameMuted(area * 4 >= screen);
                     });
                     log("PRESENT 대기 " + app.ezsteam.runtime.PresentProbe.GUEST_SOCKET);
                 } catch (IOException | RuntimeException e) {
@@ -1807,8 +1845,17 @@ public class DisplayActivity extends Activity {
                     float mbps = rx < 0 || lastRx < 0 ? -1f : (rx - lastRx) * 8f / ((ns - lastRxNs) / 1e3f);
                     lastRx = rx;
                     lastRxNs = ns;
-                    log(String.format(Locale.ROOT, "PERF %s  수신 %s  화면 %s  CPU 최고 클럭 %s  배터리 %s  여유 메모리 %.1fGB",
-                            cpuText, mbps < 0 ? "-" : String.format(Locale.ROOT, "%.1f Mbps", mbps),
+                    // New frames per second (average of the minute) and which output was shown:
+                    // direct = game frames from the present layer (with how much of the X screen the
+                    // window covers), X11 = the X screen / 초당 새 프레임(그 분의 평균)과 보인 출력:
+                    // 직접 = present 레이어 게임 프레임(창이 X 화면을 덮는 비율 포함), X11 = X 화면
+                    float avgChanged = changedCount > 0 ? changedSum / changedCount : 0f;
+                    changedSum = 0f;
+                    changedCount = 0;
+                    String out = view.showingGame
+                            ? String.format(Locale.ROOT, "직접(창 %.0f%%)", view.gameCover * 100f) : "X11";
+                    log(String.format(Locale.ROOT, "PERF %s  새 프레임 %.0f/s  출력 %s  수신 %s  화면 %s  CPU 최고 클럭 %s  배터리 %s  여유 메모리 %.1fGB",
+                            cpuText, avgChanged, out, mbps < 0 ? "-" : String.format(Locale.ROOT, "%.1f Mbps", mbps),
                             inFront ? "앞" : "뒤", maxCpuClock(), batteryTemp(), memFreeMb / 1024f));
                 }
                 SystemClock.sleep(2000);

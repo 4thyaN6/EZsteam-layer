@@ -116,6 +116,14 @@ static void SDLCALL pad_update(void *userdata)
     struct pad_state cur;
     if (pad_fd < 0 || !pad_js) return;
     if (pread(pad_fd, &cur, sizeof(cur), 0) != (ssize_t)sizeof(cur)) return;
+    /* Byte 32 set by the app while a Steam menu / dialog is over the game: the game sees a
+     * released pad (sticks centred, triggers released) / Steam 메뉴·대화상자가 게임 위에 있는 동안 앱이
+     * 32번째 바이트를 둠: 게임은 뗀 패드로 봄(스틱 가운데, 트리거 뗌) */
+    uint8_t mute = 0;
+    if (pread(pad_fd, &mute, 1, 32) == 1 && mute) {
+        memset(&cur, 0, sizeof(cur));
+        cur.axis[4] = cur.axis[5] = -32767;
+    }
     for (int i = 0; i < NAXES; i++) {
         if (cur.axis[i] != last.axis[i]) p_SDL_JoystickSetVirtualAxis(pad_js, i, cur.axis[i]);
     }

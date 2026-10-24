@@ -636,7 +636,10 @@ static struct swc *swc_create(struct dev *d, const VkSwapchainCreateInfoKHR *ci)
     m.flags = (uint32_t)order;
     m.r0 = surf_win(ci->surface);
     m.r1 = (uint32_t)getpid();
-    if (send_msg(s, &m, -1) != 0) goto fail;
+    if (send_msg(s, &m, -1) != 0) {
+        LOG("앱에 swapchain 요청 보내기 실패 (%s) — 기존 화면 경로", strerror(errno));
+        goto fail;
+    }
 
     /* Formats the image may be viewed as (mutable-format swapchains) / 이미지를 볼 수 있는 형식(가변 형식 swapchain) */
     const VkImageFormatListCreateInfo *fl = NULL;
@@ -651,7 +654,10 @@ static struct swc *swc_create(struct dev *d, const VkSwapchainCreateInfoKHR *ci)
         ssize_t k = recv_pkt(s, pkt, sizeof pkt, fds, &nf);
         for (int j = 0; j < nf; j++) close(fds[j]);
         struct ezp_msg h;
-        if (k < (ssize_t)sizeof h) goto fail;
+        if (k < (ssize_t)sizeof h) {
+            LOG("앱 답 받기 실패 (버퍼 %u, %s) — 기존 화면 경로", i, k < 0 ? strerror(errno) : "짧은 패킷");
+            goto fail;
+        }
         memcpy(&h, pkt, sizeof h);
         if (h.magic != EZP_MAGIC || h.type != EZP_SC_BUF || h.flags != 1 || h.r0 != i) {
             LOG("앱이 버퍼 %u을 만들지 못함 — 기존 화면 경로", i);
@@ -660,7 +666,10 @@ static struct swc *swc_create(struct dev *d, const VkSwapchainCreateInfoKHR *ci)
         /* AHardwareBuffer_sendHandleToUnixSocket packet: the dma-buf is the descriptor big enough
          * for the image / AHardwareBuffer_sendHandleToUnixSocket 패킷: dma-buf는 이미지를 담을 만큼 큰 것 */
         k = recv_pkt(s, pkt, sizeof pkt, fds, &nf);
-        if (k < 0) goto fail;
+        if (k < 0) {
+            LOG("앱 버퍼 핸들 받기 실패 (버퍼 %u, %s) — 기존 화면 경로", i, strerror(errno));
+            goto fail;
+        }
         int buf_fd = -1;
         for (int j = 0; j < nf; j++) {
             off_t sz = lseek(fds[j], 0, SEEK_END);

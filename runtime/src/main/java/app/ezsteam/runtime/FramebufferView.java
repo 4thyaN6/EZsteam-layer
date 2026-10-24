@@ -364,18 +364,39 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         XvfbFramebuffer f = fb;
         if (f == null) return;
 
-        // Game frame handed over by the present layer (zero copy, already on the GPU). When its
-        // window covers the whole X screen it replaces the X screen and the CPU upload is skipped;
-        // otherwise it is drawn over its window's place.
-        // present 레이어가 넘긴 게임 프레임(0복사, 이미 GPU에 있음). 그 창이 X 화면 전체를 덮으면 X 화면
-        // 대신 쓰고 CPU 업로드를 건너뜀. 아니면 그 창 자리에 겹쳐 그림
+        // Game frame handed over by the present layer (zero copy, already on the GPU), drawn at its
+        // window's place with the chosen scaling (FSR included). When the window covers at least
+        // 95 % of the X screen (borderless full screen; a 1280x787 game window was seen on the
+        // device, 2026-10-24) the X screen is not uploaded at all and the rest stays black.
+        // present 레이어가 넘긴 게임 프레임(0복사, 이미 GPU에 있음). 그 창 자리에 고른 확대 방식(FSR 포함)으로
+        // 그림. 창이 X 화면의 95% 이상을 덮으면(테두리 없는 전체화면. 기기에서 1280x787 게임 창이 보였음,
+        // 2026-10-24) X 화면은 아예 올리지 않고 나머지는 검게 둠
         boolean game = PresentProbe.frame(gf);
         int gTex = gf[0], gW = gf[1], gH = gf[2], rX = gf[3], rY = gf[4], rW = gf[5], rH = gf[6];
-        boolean full = game && (rW <= 0 || (rX <= 0 && rY <= 0 && rX + rW >= f.width && rY + rH >= f.height));
+        // Place not known yet: the whole screen / 위치를 아직 모름: 화면 전체
+        if (game && (rW <= 0 || rH <= 0)) {
+            rX = 0;
+            rY = 0;
+            rW = f.width;
+            rH = f.height;
+        }
+        float cover = 0f;
+        if (game) {
+            int cw = Math.min(f.width, rX + rW) - Math.max(0, rX), ch = Math.min(f.height, rY + rH) - Math.max(0, rY);
+            cover = cw > 0 && ch > 0 ? (float) cw * ch / ((float) f.width * f.height) : 0f;
+        }
+        boolean alone = game && cover >= 0.95f;
+        showingGame = game;
+        gameCover = cover;
+        // Windows stacked over the game (Steam menu opened with HOME, dialogs): the X screen is
+        // still needed for them. The menu stayed invisible behind the game frame (2026-10-24).
+        // 게임 위에 쌓인 창(HOME으로 연 Steam 메뉴, 대화상자): 그것들 때문에 X 화면이 여전히 필요함.
+        // 메뉴가 게임 프레임 뒤에 가려 보이지 않았음(2026-10-24)
+        int[] over = game ? overlays : NO_RECTS;
 
         boolean changed;
         long t0 = System.nanoTime(), t1 = t0;
-        if (full) {
+        if (alone && over.length == 0) {
             changed = gf[8] == 1;
         } else {
             // (Re)allocate the texture when the X screen size changes / X 화면 크기가 바뀌면 텍스처를 다시 잡음
@@ -398,8 +419,6 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
             GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0);
             t1 = System.nanoTime();
         }
-        // Source of the scaling passes: the game frame or the X screen / 확대 단계의 원본: 게임 프레임 또는 X 화면
-        int srcTex = full ? gTex : texture, srcW = full ? gW : f.width, srcH = full ? gH : f.height;
 
         // Fit with the aspect ratio kept (black bars) / 비율을 유지해 맞춤(남는 곳은 검은 띠)
         float s = Math.min((float) viewW / f.width, (float) viewH / f.height);
@@ -409,32 +428,35 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         dstY = y;
         dstW = w;
         dstH = h;
-        // GL viewport origin is bottom-left / GL 뷰포트 원점은 왼쪽 아래
-        GLES20.glViewport(x, viewH - y - h, w, h);
 
-        if (scaleMode == SCALE_FSR && drawFsr(srcTex, srcW, srcH, x, viewH - y - h, w, h)) {
-            // Drawn by the two FSR passes / FSR 2단계로 그림
-        } else {
-            GLES20.glUseProgram(program);
-            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, srcTex);
-            GLES20.glUniform2f(uSrc, srcW, srcH);
-            // FSR not available: same look as bicubic + sharpen / FSR을 못 쓰면 바이큐빅+선명과 같게 그림
-            GLES20.glUniform1i(uMode, scaleMode == SCALE_FSR ? SCALE_SHARP : scaleMode);
-            GLES20.glUniform1f(uSharp, 0.5f);
-            drawQuad(aPos, aTex);
+        if (!alone) {
+            // X screen. With a game frame on top, FSR is kept for the game (one FSR size per frame)
+            // and the X screen uses bicubic + sharpen / X 화면. 게임 프레임이 위에 있으면 FSR은 게임에 쓰고
+            // (프레임당 FSR 크기 하나) X 화면은 바이큐빅+선명으로 그림
+            int mode = game && scaleMode == SCALE_FSR ? SCALE_SHARP : scaleMode;
+            drawScaled(texture, f.width, f.height, x, viewH - y - h, w, h, mode);
         }
-        if (game && !full) {
-            // Windowed game: its frame over the window's place, scaled like the X screen
-            // 창 모드 게임: 그 창 자리에 프레임을 겹침. X 화면과 같은 배율
+        if (game) {
+            // Game frame at its window's place, same scale as the X screen (GL origin bottom-left)
+            // 게임 프레임을 그 창 자리에, X 화면과 같은 배율로(GL 원점은 왼쪽 아래)
             int px0 = x + Math.round(rX * (float) w / f.width), py0 = y + Math.round(rY * (float) h / f.height);
             int pw = Math.round(rW * (float) w / f.width), ph = Math.round(rH * (float) h / f.height);
-            GLES20.glViewport(px0, viewH - py0 - ph, pw, ph);
-            GLES20.glUseProgram(program);
-            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, gTex);
-            GLES20.glUniform2f(uSrc, gW, gH);
-            GLES20.glUniform1i(uMode, scaleMode == SCALE_LINEAR ? SCALE_LINEAR : SCALE_BICUBIC);
-            GLES20.glUniform1f(uSharp, 0.5f);
-            drawQuad(aPos, aTex);
+            drawScaled(gTex, gW, gH, px0, viewH - py0 - ph, pw, ph, scaleMode);
+            // Then the X screen again, only where windows over the game are (scissor)
+            // 그다음 게임 위 창이 있는 곳에만 X 화면을 다시 그림(가위 영역)
+            if (over.length > 0) {
+                GLES20.glEnable(GLES20.GL_SCISSOR_TEST);
+                for (int i = 0; i + 3 < over.length; i += 4) {
+                    int ox = x + Math.round(over[i] * (float) w / f.width);
+                    int oy = y + Math.round(over[i + 1] * (float) h / f.height);
+                    int ow = Math.round(over[i + 2] * (float) w / f.width), oh = Math.round(over[i + 3] * (float) h / f.height);
+                    if (ow <= 0 || oh <= 0) continue;
+                    GLES20.glScissor(ox, viewH - oy - oh, ow, oh);
+                    drawScaled(texture, f.width, f.height, x, viewH - y - h, w, h,
+                            scaleMode == SCALE_FSR ? SCALE_SHARP : scaleMode);
+                }
+                GLES20.glDisable(GLES20.GL_SCISSOR_TEST);
+            }
         }
         // Hand the previous game frame back with a GL fence / 이전 게임 프레임을 GL 펜스와 함께 돌려줌
         if (game) PresentProbe.frameDone();
@@ -482,6 +504,40 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         }
         return changed;
     }
+
+    /**
+     * Draw a source texture into a screen area with a scaling mode (SCALE_*); FSR falls back to
+     * bicubic + sharpen when it is not usable.
+     * 원본 텍스처를 화면 영역에 확대 방식(SCALE_*)으로 그림. FSR을 못 쓰면 바이큐빅+선명으로 대체함
+     */
+    private void drawScaled(int tex, int sw, int sh, int vx, int vy, int w, int h, int mode) {
+        if (w <= 0 || h <= 0) return;
+        if (mode == SCALE_FSR && drawFsr(tex, sw, sh, vx, vy, w, h)) return;
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+        GLES20.glViewport(vx, vy, w, h);
+        GLES20.glUseProgram(program);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex);
+        GLES20.glUniform2f(uSrc, sw, sh);
+        GLES20.glUniform1i(uMode, mode == SCALE_FSR ? SCALE_SHARP : mode);
+        GLES20.glUniform1f(uSharp, 0.5f);
+        drawQuad(aPos, aTex);
+    }
+
+    /** A game frame from the present layer was drawn in the last refresh, and how much of the X
+     *  screen its window covers (0..1), for the host's log / 지난 갱신에 present 레이어의 게임 프레임을
+     *  그렸는지, 그 창이 X 화면을 얼마나 덮는지(0..1). 호스트 로그용 */
+    public volatile boolean showingGame;
+
+    private static final int[] NO_RECTS = new int[0];
+    /** Windows over the game in X screen pixels, x y w h groups / 게임 위 창들(X 화면 화소, x y w h 묶음) */
+    private volatile int[] overlays = NO_RECTS;
+
+    /** Set the windows stacked over the shown game (from the host's X connection)
+     *  보이는 게임 위에 쌓인 창들을 지정함(호스트 X 연결에서 얻음) */
+    public void setOverlays(int[] rects) {
+        overlays = rects == null ? NO_RECTS : rects;
+    }
+    public volatile float gameCover;
 
     /** Last shader error (null when none), for the host's log / 마지막 셰이더 오류(없으면 null), 호스트 로그용 */
     public volatile String shaderError;

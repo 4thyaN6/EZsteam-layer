@@ -67,6 +67,24 @@ public final class PresentProbe implements Closeable {
         /** Ask the window's place in X screen pixels; answer may come later on any thread
          *  창 위치를 X 화면 화소로 물음. 답은 나중에 아무 스레드에서나 올 수 있음 */
         void query(int window, RectCallback cb);
+
+        /** Top-level window holding a window (0 = gone) / 창을 품은 최상위 창(0 = 없어짐) */
+        void topLevel(int window, java.util.function.IntConsumer cb);
+
+        /** Mapped windows above a top-level window, x y w h groups / 최상위 창 위의 매핑된 창들, x y w h 묶음 */
+        void above(int top, java.util.function.Consumer<int[]> cb);
+    }
+
+    /** Windows over the shown game (Steam menu, dialogs): x y w h groups, empty = none
+     *  보이는 게임 위의 창(Steam 메뉴, 대화상자): x y w h 묶음, 빈 배열 = 없음 */
+    public interface OverlayListener {
+        void overlays(int[] rects);
+    }
+
+    private volatile OverlayListener overlayListener;
+
+    public void setOverlayListener(OverlayListener l) {
+        overlayListener = l;
     }
 
     public interface RectCallback {
@@ -154,18 +172,52 @@ public final class PresentProbe implements Closeable {
         }, "ezs-present");
         t.setDaemon(true);
         t.start();
-        // Once a second: window places for live connections, and a line when a connection starts
-        // or stops showing frames / 1초마다: 살아 있는 연결의 창 위치, 연결이 프레임을 보이기 시작하거나
-        // 멈출 때 한 줄
+        // Every 250 ms: window places for live connections and the windows stacked over the
+        // newest game (so a Steam menu opened with HOME shows at once); a line when a connection
+        // starts or stops showing frames / 250ms마다: 살아 있는 연결의 창 위치와 가장 새 게임 위에 쌓인 창
+        // (HOME으로 연 Steam 메뉴가 바로 보이게), 연결이 프레임을 보이기 시작하거나 멈출 때 한 줄
         Thread w = new Thread(() -> {
             java.util.Map<Integer, int[]> seen = new java.util.HashMap<>();
+            java.util.Map<Integer, String> lastRect = new java.util.concurrent.ConcurrentHashMap<>();
+            java.util.Map<Integer, Integer> tops = new java.util.concurrent.ConcurrentHashMap<>();
+            final String[] lastOver = {""};
             while (!p.closed) {
                 try {
-                    Thread.sleep(1000);
+                    Thread.sleep(250);
                 } catch (InterruptedException e) {
                     return;
                 }
                 int[] c = nativeConnections();
+                WindowRects wrs = p.rects;
+                OverlayListener ol = p.overlayListener;
+                if (c.length >= 4 && wrs != null && ol != null) {
+                    // Newest connection = highest id (ids only grow) / 가장 새 연결 = 가장 큰 id(id는 늘기만 함)
+                    int nid = 0, nwin = 0;
+                    for (int i = 0; i + 3 < c.length; i += 4)
+                        if (c[i] > nid) {
+                            nid = c[i];
+                            nwin = c[i + 1];
+                        }
+                    final int fid = nid;
+                    Integer top = tops.get(nid);
+                    if (top == null && nwin != 0) {
+                        tops.put(nid, -1);
+                        wrs.topLevel(nwin, t2 -> tops.put(fid, t2));
+                    } else if (top != null && top > 0) {
+                        wrs.above(top, rs -> {
+                            ol.overlays(rs);
+                            String k = java.util.Arrays.toString(rs);
+                            if (!k.equals(lastOver[0])) {
+                                lastOver[0] = k;
+                                log.log(rs.length == 0 ? "PRESENT 게임 위 창 없음"
+                                        : "PRESENT 게임 위 창 " + (rs.length / 4) + "개 " + k);
+                            }
+                        });
+                    }
+                } else if (ol != null && !lastOver[0].isEmpty()) {
+                    lastOver[0] = "";
+                    ol.overlays(new int[0]);
+                }
                 java.util.Set<Integer> live = new java.util.HashSet<>();
                 for (int i = 0; i + 3 < c.length; i += 4) {
                     final int id = c[i], win = c[i + 1], presents = c[i + 2], shown = c[i + 3];
@@ -176,7 +228,13 @@ public final class PresentProbe implements Closeable {
                     }
                     seen.put(id, new int[]{presents, shown});
                     WindowRects wr = p.rects;
-                    if (wr != null && win != 0) wr.query(win, (x, y, ww, hh) -> nativeSetRect(id, x, y, ww, hh));
+                    if (wr != null && win != 0) wr.query(win, (x, y, ww, hh) -> {
+                        nativeSetRect(id, x, y, ww, hh);
+                        // One line when the window's place changes (decides full screen or window)
+                        // 창 위치가 바뀔 때 한 줄(전체 화면인지 창인지 판단 근거)
+                        String r = x + "," + y + " " + ww + "x" + hh;
+                        if (!r.equals(lastRect.put(id, r))) log.log("PRESENT 창 위치 (연결 " + id + ") " + r);
+                    });
                 }
                 for (java.util.Iterator<java.util.Map.Entry<Integer, int[]>> it = seen.entrySet().iterator(); it.hasNext(); ) {
                     java.util.Map.Entry<Integer, int[]> e = it.next();
@@ -184,6 +242,8 @@ public final class PresentProbe implements Closeable {
                         log.log("PRESENT 게임 화면 연결 끝 (연결 " + e.getKey() + ", present " + e.getValue()[0]
                                 + ", 표시 " + e.getValue()[1] + ")");
                         it.remove();
+                        lastRect.remove(e.getKey());
+                        tops.remove(e.getKey());
                     }
                 }
             }

@@ -52,6 +52,8 @@ public final class XTestClient implements Closeable {
     private int atomNetState, atomFullscreen;
     /** Top-level windows given WM_STATE by this client / 이 클라이언트가 WM_STATE를 준 최상위 창 */
     private final java.util.Set<Integer> managed = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** Root children now mapped (menus and tooltips included) / 지금 매핑된 루트 자식(메뉴·툴팁 포함) */
+    private final java.util.Set<Integer> mapped = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** Focus requests waiting for a server timestamp, in request order
      *  서버 시각을 기다리는 포커스 요청(요청 순서대로) */
     private final java.util.concurrent.ConcurrentLinkedQueue<Integer> timeWaiters = new java.util.concurrent.ConcurrentLinkedQueue<>();
@@ -434,6 +436,66 @@ public final class XTestClient implements Closeable {
     }
 
     /**
+     * Top-level window (child of the root) that holds a window: QueryTree up the parents.
+     * The callback gets 0 when the window is gone.
+     * 창을 품은 최상위 창(루트의 자식): QueryTree로 부모를 따라 올라감. 창이 없어졌으면 콜백에 0
+     */
+    public void topLevelOf(int window, java.util.function.IntConsumer cb) {
+        ByteBuffer q = le(8);
+        q.put((byte) 15).put((byte) 0).putShort((short) 2).putInt(window);
+        send(q.array(), r -> {
+            int parent = ByteBuffer.wrap(r).order(ByteOrder.LITTLE_ENDIAN).getInt(12);
+            if (parent == 0) cb.accept(0);
+            else if (parent == root) cb.accept(window);
+            else topLevelOf(parent, cb);
+        });
+    }
+
+    /**
+     * Mapped windows stacked above a top-level window (QueryTree of the root lists children from
+     * bottom to top), as x, y, w, h groups in root pixels; empty when none, or when the window is
+     * not a mapped root child any more. Used to show Steam menus and other windows over a game
+     * frame of the present layer.
+     * 최상위 창 위에 쌓인 매핑된 창들(루트의 QueryTree는 자식을 아래에서 위 순서로 줌)을 루트 화소
+     * x, y, w, h 묶음으로 줌. 없거나 그 창이 더 이상 매핑된 루트 자식이 아니면 빈 배열. present 레이어의
+     * 게임 프레임 위에 Steam 메뉴와 다른 창을 보이는 데 씀
+     */
+    public void windowsAbove(int top, Consumer<int[]> cb) {
+        ByteBuffer q = le(8);
+        q.put((byte) 15).put((byte) 0).putShort((short) 2).putInt(root);
+        send(q.array(), r -> {
+            ByteBuffer b = ByteBuffer.wrap(r).order(ByteOrder.LITTLE_ENDIAN);
+            int n = b.getShort(16) & 0xffff;
+            java.util.List<Integer> over = new java.util.ArrayList<>();
+            boolean seen = false;
+            for (int i = 0; i < n && 32 + i * 4 + 4 <= r.length; i++) {
+                int c = b.getInt(32 + i * 4);
+                if (c == top) seen = true;
+                else if (seen && mapped.contains(c)) over.add(c);
+            }
+            if (!seen || !mapped.contains(top) || over.isEmpty()) {
+                cb.accept(new int[0]);
+                return;
+            }
+            int[] out = new int[over.size() * 4];
+            java.util.concurrent.atomic.AtomicInteger left = new java.util.concurrent.atomic.AtomicInteger(over.size());
+            for (int i = 0; i < over.size(); i++) {
+                final int k = i;
+                ByteBuffer g = le(8);
+                g.put((byte) 14).put((byte) 0).putShort((short) 2).putInt(over.get(i));
+                send(g.array(), gr -> {
+                    ByteBuffer gb = ByteBuffer.wrap(gr).order(ByteOrder.LITTLE_ENDIAN);
+                    out[k * 4] = gb.getShort(12);
+                    out[k * 4 + 1] = gb.getShort(14);
+                    out[k * 4 + 2] = gb.getShort(16) & 0xffff;
+                    out[k * 4 + 3] = gb.getShort(18) & 0xffff;
+                    if (left.decrementAndGet() == 0) cb.accept(out);
+                });
+            }
+        });
+    }
+
+    /**
      * Queue one request on the send thread; it takes the next sequence number, and a reply handler
      * (requests with replies only) runs on the reader thread.
      * 요청 하나를 전송 스레드에 넣음. 다음 순번을 받으며, 응답 처리기(응답이 있는 요청만)는 읽기 스레드에서 돎
@@ -504,7 +566,7 @@ public final class XTestClient implements Closeable {
                         // (BadWindow 3, BadDrawable 9) / 막 닫힌 게임 창의 GetGeometry / TranslateCoordinates도
                         int code = p[1] & 0xff;
                         boolean benign = (code == 3 && (major == 42 || major == 25 || major == 18 || major == 40))
-                                || ((code == 3 || code == 9) && major == 14);
+                                || ((code == 3 || code == 9) && (major == 14 || major == 15));
                         if (log != null && !benign) log.line("X error code=" + (p[1] & 0xff) + " major=" + major
                                 + " minor=" + (pb.getShort(8) & 0xffff));
                     } else if (p[0] == 1) {
@@ -527,6 +589,7 @@ public final class XTestClient implements Closeable {
                         // (menus, tooltips: not managed, no focus) / 루트의 MapNotify: 8~11바이트 창,
                         // 12바이트 override-redirect(메뉴·툴팁: 관리 안 함, 포커스 안 줌)
                         int win = pb.getInt(8);
+                        if (win != 0) mapped.add(win);
                         if (p[12] == 0 && win != 0) {
                             managed.add(win);
                             setWmState(win, 1);
@@ -559,11 +622,13 @@ public final class XTestClient implements Closeable {
                         // UnmapNotify (real or synthetic from XWithdrawWindow): WM_STATE Withdrawn
                         // UnmapNotify(실제 또는 XWithdrawWindow의 합성): WM_STATE Withdrawn
                         int win = pb.getInt(8);
+                        mapped.remove(win);
                         if (managed.contains(win)) setWmState(win, 0);
                     } else if ((p[0] & 0x7f) == 17) {
                         // DestroyNotify: forget the window / DestroyNotify: 창을 잊음
                         int win = pb.getInt(8);
                         managed.remove(win);
+                        mapped.remove(win);
                         if (focused == win) focused = 0;
                     } else if ((p[0] & 0x7f) == 28) {
                         // PropertyNotify: window 4..7, atom 8..11, time 12..15. Our _EZS_TIME on the
