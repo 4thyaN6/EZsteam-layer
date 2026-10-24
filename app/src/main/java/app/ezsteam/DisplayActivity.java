@@ -691,6 +691,12 @@ public class DisplayActivity extends Activity {
                 // 0복사 프레임 경로 확인: steam-run.sh가 probe를 시작하기 전에 기다림
                 try {
                     present = app.ezsteam.runtime.PresentProbe.start(c.rootfs, this::log);
+                    // Window places for game frames come from our X connection
+                    // 게임 프레임의 창 위치는 우리 X 연결에서 얻음
+                    present.setWindowRects((win, cb) -> {
+                        XTestClient x = xtest;
+                        if (x != null && !x.isClosed()) x.windowRect(win, cb);
+                    });
                     log("PRESENT 대기 " + app.ezsteam.runtime.PresentProbe.GUEST_SOCKET);
                 } catch (IOException | RuntimeException e) {
                     log("PRESENT 시작 실패 (확인 없이 계속): " + e);

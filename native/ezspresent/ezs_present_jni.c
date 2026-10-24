@@ -493,8 +493,9 @@ static void send_e(int s)
     if (fd >= 0) close(fd);
 }
 
-/* One probe connection / probe 연결 하나 */
-static uint32_t session(int s)
+/* One probe connection; its first message was already read by the caller
+ * probe 연결 하나. 첫 메시지는 부른 쪽이 이미 읽었음 */
+static uint32_t session(int s, const struct ezp_msg *first)
 {
     uint32_t res = 0;
     AHardwareBuffer *ahb = NULL;
@@ -502,10 +503,18 @@ static uint32_t session(int s)
         /* Still answer, so the probe does not wait / 그래도 답해 probe가 기다리지 않게 함 */
     }
     int done = 0;
+    int use_first = first != NULL;
     while (!done) {
         struct ezp_msg m;
         int fds[EZP_MAX_FDS], nfds = 0;
-        ssize_t n = recv_msg(s, &m, fds, &nfds);
+        ssize_t n;
+        if (use_first) {
+            m = *first;
+            n = (ssize_t)sizeof m;
+            use_first = 0;
+        } else {
+            n = recv_msg(s, &m, fds, &nfds);
+        }
         if (n <= 0) {
             say("소켓: probe 메시지 받기 끝 (%s)", n == 0 ? "연결 닫힘" : strerror(errno));
             for (int i = 0; i < nfds; i++) close(fds[i]);
@@ -546,6 +555,462 @@ static uint32_t session(int s)
     return res;
 }
 
+
+/* ===================== compositor side of the game frame path =====================
+ * ===================== 게임 프레임 경로의 컴포지터 쪽 =====================
+ * One thread per present-layer connection owns the socket reads; the GL thread of the view
+ * (FramebufferView) takes the newest frame each display refresh, waits for its GPU fence on the
+ * GPU (eglWaitSyncKHR, no CPU wait), samples it, and hands the previous one back with a GL fence.
+ * Buffers: AHardwareBuffer RGBA8 with CPU usage bits so gralloc keeps them linear (the layout the
+ * probe confirmed with Vulkan); the game writes them, the compositor only reads.
+ * present 레이어 연결마다 스레드 하나가 소켓 읽기를 맡음. 뷰(FramebufferView)의 GL 스레드는 화면 갱신마다
+ * 가장 새 프레임을 가져와 GPU 펜스를 GPU에서 기다리고(eglWaitSyncKHR, CPU 대기 없음) 샘플한 뒤, 이전 것을
+ * GL 펜스와 함께 돌려줌. 버퍼: CPU 용도 비트를 넣은 AHardwareBuffer RGBA8(gralloc이 linear로 유지, probe가
+ * Vulkan으로 확인한 배치). 게임이 쓰고 컴포지터는 읽기만 함
+ */
+#include <GLES3/gl3.h>
+#include <pthread.h>
+
+#define MAX_SC 8
+struct csc {
+    int used, alive, sock, id;
+    uint32_t w, h, count, order, window, pid;
+    AHardwareBuffer *ahb[EZP_MAX_BUFFERS];
+    EGLImageKHR img[EZP_MAX_BUFFERS];
+    GLuint tex[EZP_MAX_BUFFERS];
+    int queued, queued_fence, shown, to_release;
+    int64_t last_ns;
+    int rx, ry, rw, rh; /* window rect in X screen pixels, rw 0 = unknown / X 화면 화소 창 위치, rw 0 = 모름 */
+    uint64_t frames, shown_frames;
+    pthread_mutex_t wmu; /* socket writes / 소켓 쓰기 */
+};
+static struct csc g_sc[MAX_SC];
+static pthread_mutex_t g_cmu = PTHREAD_MUTEX_INITIALIZER;
+static int g_next_id = 1;
+/* GL-thread state / GL 스레드 상태 */
+static int g_cur = -1; /* slot shown last frame / 지난 프레임에 보인 슬롯 */
+static PFNEGLCREATEIMAGEKHRPROC cCreateImage;
+static PFNEGLDESTROYIMAGEKHRPROC cDestroyImage;
+static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC cImageTarget;
+static PFNEGLGETNATIVECLIENTBUFFERANDROIDPROC cClientBuffer;
+static PFNEGLCREATESYNCKHRPROC cCreateSync;
+static PFNEGLDESTROYSYNCKHRPROC cDestroySync;
+static PFNEGLWAITSYNCKHRPROC cWaitSync;
+static PFNEGLCLIENTWAITSYNCKHRPROC cClientWait;
+static PFNEGLDUPNATIVEFENCEFDANDROIDPROC cDupFence;
+
+static int64_t mono_ns(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int64_t)t.tv_sec * 1000000000ll + t.tv_nsec;
+}
+
+static void sc_send(struct csc *c, uint32_t type, uint32_t idx, int fd)
+{
+    struct ezp_msg m;
+    memset(&m, 0, sizeof m);
+    m.type = type;
+    m.r0 = idx;
+    m.flags = fd >= 0 ? 1u : 0u;
+    int f[1] = {fd};
+    pthread_mutex_lock(&c->wmu);
+    send_msg(c->sock, &m, f, 1, NULL, 0);
+    pthread_mutex_unlock(&c->wmu);
+}
+
+/* Reader thread of one layer connection / 레이어 연결 하나의 읽기 스레드 */
+static void *sc_reader(void *arg)
+{
+    struct csc *c = arg;
+    struct timeval tv = {0, 0};
+    setsockopt(c->sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    for (;;) {
+        struct ezp_msg m;
+        int fds[EZP_MAX_FDS], nf = 0;
+        ssize_t n = recv_msg(c->sock, &m, fds, &nf);
+        if (n <= 0) {
+            for (int i = 0; i < nf; i++) close(fds[i]);
+            break;
+        }
+        int fence = (m.flags & 1u) && nf > 0 ? fds[0] : -1;
+        for (int i = fence >= 0 ? 1 : 0; i < nf; i++) close(fds[i]);
+        if (m.type != EZP_PRESENT || m.r0 >= c->count) {
+            if (fence >= 0) close(fence);
+            continue;
+        }
+        pthread_mutex_lock(&g_cmu);
+        int drop = c->queued;
+        int drop_fence = c->queued_fence;
+        c->queued = (int)m.r0;
+        c->queued_fence = fence;
+        c->last_ns = mono_ns();
+        c->frames++;
+        pthread_mutex_unlock(&g_cmu);
+        /* A newer frame came before the old one was shown: give the old one back at once
+         * (mailbox: no waiting for the game, no tearing) / 이전 것이 보이기 전에 새 프레임이 옴: 이전 것을
+         * 바로 돌려줌(mailbox: 게임은 기다리지 않고 찢김도 없음) */
+        if (drop >= 0) {
+            if (drop_fence >= 0) close(drop_fence);
+            sc_send(c, EZP_RELEASE, (uint32_t)drop, -1);
+        }
+    }
+    pthread_mutex_lock(&g_cmu);
+    c->alive = 0;
+    if (c->queued_fence >= 0) close(c->queued_fence);
+    c->queued_fence = -1;
+    c->queued = -1;
+    pthread_mutex_unlock(&g_cmu);
+    return NULL;
+}
+
+/* New layer connection: allocate and send the buffers, start its reader
+ * 새 레이어 연결: 버퍼를 만들어 보내고 읽기 스레드를 시작함 */
+static void comp_start(int s, const struct ezp_msg *m, char *line, size_t cap)
+{
+    uint32_t n = m->pattern;
+    if (n < 1 || n > EZP_MAX_BUFFERS || m->w == 0 || m->h == 0 || m->w > 8192 || m->h > 8192) {
+        snprintf(line, cap, "E 잘못된 swapchain 요청 %ux%u 버퍼 %u", m->w, m->h, n);
+        struct ezp_msg f;
+        memset(&f, 0, sizeof f);
+        f.type = EZP_SC_BUF;
+        send_msg(s, &f, NULL, 0, NULL, 0);
+        close(s);
+        return;
+    }
+    pthread_mutex_lock(&g_cmu);
+    struct csc *c = NULL;
+    for (int i = 0; i < MAX_SC; i++)
+        if (!g_sc[i].used) { c = &g_sc[i]; break; }
+    if (c) {
+        memset(c, 0, sizeof *c);
+        c->used = 1;
+        c->id = g_next_id++;
+        c->queued = c->shown = c->to_release = -1;
+        c->queued_fence = -1;
+    }
+    pthread_mutex_unlock(&g_cmu);
+    if (!c) {
+        snprintf(line, cap, "E swapchain 자리 없음");
+        struct ezp_msg f;
+        memset(&f, 0, sizeof f);
+        f.type = EZP_SC_BUF;
+        send_msg(s, &f, NULL, 0, NULL, 0);
+        close(s);
+        return;
+    }
+    c->sock = s;
+    c->w = m->w;
+    c->h = m->h;
+    c->order = m->flags;
+    c->window = m->r0;
+    c->pid = m->r1;
+    pthread_mutex_init(&c->wmu, NULL);
+    uint32_t stride = 0;
+    int ok = 1;
+    for (uint32_t i = 0; i < n && ok; i++) {
+        AHardwareBuffer_Desc d;
+        memset(&d, 0, sizeof d);
+        d.width = m->w;
+        d.height = m->h;
+        d.layers = 1;
+        d.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
+        /* GPU write + sample; CPU bits keep gralloc's layout linear (what the probe verified)
+         * GPU 쓰기 + 샘플. CPU 비트는 gralloc 배치를 linear로 유지(probe가 확인한 것) */
+        d.usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
+                  AHARDWAREBUFFER_USAGE_CPU_READ_RARELY | AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY;
+        struct ezp_msg h;
+        memset(&h, 0, sizeof h);
+        h.type = EZP_SC_BUF;
+        h.r0 = i;
+        if (AHardwareBuffer_allocate(&d, &c->ahb[i]) != 0 || !c->ahb[i]) {
+            ok = 0;
+            send_msg(s, &h, NULL, 0, NULL, 0);
+            break;
+        }
+        AHardwareBuffer_Desc got;
+        AHardwareBuffer_describe(c->ahb[i], &got);
+        stride = got.stride * 4;
+        h.stride = stride;
+        h.w = got.width;
+        h.h = got.height;
+        h.flags = 1;
+        if (send_msg(s, &h, NULL, 0, NULL, 0) != 0 || AHardwareBuffer_sendHandleToUnixSocket(c->ahb[i], s) != 0)
+            ok = 0;
+        c->count = i + 1;
+    }
+    if (!ok) {
+        snprintf(line, cap, "E 버퍼 만들기/보내기 실패 %ux%u", m->w, m->h);
+        for (uint32_t i = 0; i < EZP_MAX_BUFFERS; i++)
+            if (c->ahb[i]) AHardwareBuffer_release(c->ahb[i]);
+        close(s);
+        pthread_mutex_lock(&g_cmu);
+        c->used = 0;
+        pthread_mutex_unlock(&g_cmu);
+        return;
+    }
+    c->alive = 1;
+    pthread_t t;
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&t, &at, sc_reader, c) != 0) {
+        c->alive = 0;
+    }
+    pthread_attr_destroy(&at);
+    snprintf(line, cap, "S %d %u %u %u %u %u %u %u", c->id, c->w, c->h, c->count, m->fourcc, c->window, c->pid, stride);
+}
+
+static void gl_procs(void)
+{
+    if (cCreateImage) return;
+    cCreateImage = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+    cDestroyImage = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
+    cImageTarget = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
+    cClientBuffer = (PFNEGLGETNATIVECLIENTBUFFERANDROIDPROC)eglGetProcAddress("eglGetNativeClientBufferANDROID");
+    cCreateSync = (PFNEGLCREATESYNCKHRPROC)eglGetProcAddress("eglCreateSyncKHR");
+    cDestroySync = (PFNEGLDESTROYSYNCKHRPROC)eglGetProcAddress("eglDestroySyncKHR");
+    cWaitSync = (PFNEGLWAITSYNCKHRPROC)eglGetProcAddress("eglWaitSyncKHR");
+    cClientWait = (PFNEGLCLIENTWAITSYNCKHRPROC)eglGetProcAddress("eglClientWaitSyncKHR");
+    cDupFence = (PFNEGLDUPNATIVEFENCEFDANDROIDPROC)eglGetProcAddress("eglDupNativeFenceFDANDROID");
+}
+
+/* Free the GL side and the buffers of a finished connection (GL thread)
+ * 끝난 연결의 GL 쪽과 버퍼를 놓음(GL 스레드) */
+static void sc_cleanup(struct csc *c, EGLDisplay dpy_)
+{
+    for (uint32_t i = 0; i < EZP_MAX_BUFFERS; i++) {
+        if (c->tex[i]) glDeleteTextures(1, &c->tex[i]);
+        if (c->img[i] && cDestroyImage) cDestroyImage(dpy_, c->img[i]);
+        if (c->ahb[i]) AHardwareBuffer_release(c->ahb[i]);
+        c->tex[i] = 0;
+        c->img[i] = NULL;
+        c->ahb[i] = NULL;
+    }
+    close(c->sock);
+    pthread_mutex_destroy(&c->wmu);
+    c->used = 0;
+}
+
+/* Texture of one buffer, made once (GL thread) / 버퍼 하나의 텍스처, 한 번만 만듦(GL 스레드) */
+static GLuint sc_texture(struct csc *c, int i, EGLDisplay d)
+{
+    if (c->tex[i]) return c->tex[i];
+    if (!cCreateImage || !cImageTarget || !cClientBuffer) return 0;
+    if (!c->img[i]) {
+        EGLClientBuffer cb = cClientBuffer(c->ahb[i]);
+        const EGLint a[] = {EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE};
+        c->img[i] = cb ? cCreateImage(d, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, cb, a) : EGL_NO_IMAGE_KHR;
+        if (c->img[i] == EGL_NO_IMAGE_KHR) {
+            c->img[i] = NULL;
+            return 0;
+        }
+    }
+    GLuint t;
+    glGenTextures(1, &t);
+    glBindTexture(GL_TEXTURE_2D, t);
+    cImageTarget(GL_TEXTURE_2D, (GLeglImageOES)c->img[i]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    /* The view's shaders read colours as .bgr (Xvfb's B G R X bytes). A game frame in B G R A
+     * order already matches; R G B A order gets red and blue swapped here so the same shaders work.
+     * 뷰 셰이더는 색을 .bgr로 읽음(Xvfb의 B G R X 바이트). B G R A 순서 게임 프레임은 그대로 맞고,
+     * R G B A 순서는 여기서 빨강·파랑을 바꿔 같은 셰이더로 그림 */
+    if (c->order == EZP_ORDER_RGBA) {
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, GL_BLUE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_B, GL_RED);
+    }
+    c->tex[i] = t;
+    return t;
+}
+
+/* GPU-side wait on a game sync fd (EGL owns the fd on success) / 게임 sync fd를 GPU 쪽에서 기다림 */
+static void gpu_wait(EGLDisplay d, int fd)
+{
+    if (fd < 0) return;
+    if (!cCreateSync) {
+        close(fd);
+        return;
+    }
+    const EGLint a[] = {EGL_SYNC_NATIVE_FENCE_FD_ANDROID, fd, EGL_NONE};
+    EGLSyncKHR s = cCreateSync(d, EGL_SYNC_NATIVE_FENCE_ANDROID, a);
+    if (s == EGL_NO_SYNC_KHR) {
+        close(fd);
+        return;
+    }
+    if (!cWaitSync || cWaitSync(d, s, 0) != EGL_TRUE) {
+        if (cClientWait) cClientWait(d, s, 0, 100000000ll);
+    }
+    cDestroySync(d, s);
+}
+
+/*
+ * Frame for this refresh (GL thread). out: tex, w, h, rx, ry, rw, rh, id, new(1 = a new game frame).
+ * Returns 1 when a game frame should be shown.
+ * 이번 갱신의 프레임(GL 스레드). out: tex, w, h, rx, ry, rw, rh, id, new(1 = 새 게임 프레임).
+ * 게임 프레임을 보여야 하면 1
+ */
+static int comp_frame(jint o[9])
+{
+    EGLDisplay d = eglGetCurrentDisplay();
+    if (d == EGL_NO_DISPLAY) return 0;
+    gl_procs();
+    int64_t now = mono_ns();
+    pthread_mutex_lock(&g_cmu);
+    /* Forget finished connections that are no longer shown / 더 보이지 않는 끝난 연결을 정리 */
+    for (int i = 0; i < MAX_SC; i++)
+        if (g_sc[i].used && !g_sc[i].alive && i != g_cur) sc_cleanup(&g_sc[i], d);
+    /* Newest presenter among live connections. A game that stops presenting for a while (loading)
+     * keeps its last frame on screen instead of falling back to its empty X window.
+     * 살아 있는 연결 중 가장 늦게 present한 것. 잠시 present를 멈춘 게임(로딩)은 빈 X 창으로 돌아가지
+     * 않고 마지막 프레임을 그대로 보임 */
+    (void)now;
+    int best = -1;
+    for (int i = 0; i < MAX_SC; i++) {
+        struct csc *c = &g_sc[i];
+        if (!c->used || !c->alive || (c->shown < 0 && c->queued < 0)) continue;
+        if (best < 0 || c->last_ns > g_sc[best].last_ns) best = i;
+    }
+    if (g_cur >= 0 && g_cur != best) {
+        /* Switched away: the old connection's shown buffer goes back / 다른 것으로 바뀜: 이전 표시 버퍼를 돌려줌 */
+        struct csc *o = &g_sc[g_cur];
+        if (o->used && o->shown >= 0) {
+            int idx = o->shown;
+            o->shown = -1;
+            if (o->alive) {
+                pthread_mutex_unlock(&g_cmu);
+                sc_send(o, EZP_RELEASE, (uint32_t)idx, -1);
+                pthread_mutex_lock(&g_cmu);
+            }
+        }
+        if (o->used && !o->alive) sc_cleanup(o, d);
+    }
+    g_cur = best;
+    if (best < 0) {
+        pthread_mutex_unlock(&g_cmu);
+        return 0;
+    }
+    struct csc *c = &g_sc[best];
+    int fresh = 0, fence = -1;
+    if (c->queued >= 0) {
+        if (c->shown >= 0) c->to_release = c->shown;
+        c->shown = c->queued;
+        fence = c->queued_fence;
+        c->queued = -1;
+        c->queued_fence = -1;
+        c->shown_frames++;
+        fresh = 1;
+    }
+    int idx = c->shown;
+    o[0] = 0;
+    o[1] = (jint)c->w;
+    o[2] = (jint)c->h;
+    o[3] = c->rx;
+    o[4] = c->ry;
+    o[5] = c->rw;
+    o[6] = c->rh;
+    o[7] = c->id;
+    o[8] = fresh;
+    pthread_mutex_unlock(&g_cmu);
+    gpu_wait(d, fence);
+    o[0] = (jint)sc_texture(c, idx, d);
+    return o[0] ? 1 : 0;
+}
+
+JNIEXPORT jint JNICALL Java_app_ezsteam_runtime_PresentProbe_nativeFrame(JNIEnv *env, jclass cls, jintArray out)
+{
+    (void)cls;
+    jint o[9] = {0};
+    int r = comp_frame(o);
+    if (r) (*env)->SetIntArrayRegion(env, out, 0, 9, o);
+    return r;
+}
+
+/* After the frame is drawn: give the previously shown buffer back with a GL fence (GL thread)
+ * 프레임을 그린 뒤: 이전에 보인 버퍼를 GL 펜스와 함께 돌려줌(GL 스레드) */
+static void comp_frame_done(void)
+{
+    pthread_mutex_lock(&g_cmu);
+    struct csc *c = g_cur >= 0 ? &g_sc[g_cur] : NULL;
+    int idx = c && c->used && c->alive ? c->to_release : -1;
+    if (c) c->to_release = -1;
+    pthread_mutex_unlock(&g_cmu);
+    if (idx < 0) return;
+    int fd = -1;
+    EGLDisplay d = eglGetCurrentDisplay();
+    if (cCreateSync && cDupFence && d != EGL_NO_DISPLAY) {
+        EGLSyncKHR s = cCreateSync(d, EGL_SYNC_NATIVE_FENCE_ANDROID, NULL);
+        glFlush();
+        if (s != EGL_NO_SYNC_KHR) {
+            fd = cDupFence(d, s);
+            cDestroySync(d, s);
+        }
+    }
+    if (fd < 0) glFinish(); /* no fence: make sure GL is done reading / 펜스 없음: GL이 다 읽었는지 확실히 함 */
+    sc_send(c, EZP_RELEASE, (uint32_t)idx, fd);
+    if (fd >= 0) close(fd);
+}
+
+JNIEXPORT void JNICALL Java_app_ezsteam_runtime_PresentProbe_nativeFrameDone(JNIEnv *env, jclass cls)
+{
+    (void)env;
+    (void)cls;
+    comp_frame_done();
+}
+
+/* New GL context (view recreated): old textures are gone with it (GL thread)
+ * 새 GL 컨텍스트(뷰 다시 만듦): 이전 텍스처는 함께 사라짐(GL 스레드) */
+JNIEXPORT void JNICALL Java_app_ezsteam_runtime_PresentProbe_nativeGlReset(JNIEnv *env, jclass cls)
+{
+    (void)env;
+    (void)cls;
+    pthread_mutex_lock(&g_cmu);
+    for (int i = 0; i < MAX_SC; i++)
+        for (int k = 0; k < EZP_MAX_BUFFERS; k++) g_sc[i].tex[k] = 0;
+    pthread_mutex_unlock(&g_cmu);
+}
+
+/* Window rect of a connection in X screen pixels (from the app's X connection)
+ * 연결의 창 위치(X 화면 화소, 앱 X 연결에서 구함) */
+JNIEXPORT void JNICALL Java_app_ezsteam_runtime_PresentProbe_nativeSetRect(JNIEnv *env, jclass cls, jint id, jint x,
+                                                                          jint y, jint w, jint h)
+{
+    (void)env;
+    (void)cls;
+    pthread_mutex_lock(&g_cmu);
+    for (int i = 0; i < MAX_SC; i++)
+        if (g_sc[i].used && g_sc[i].id == id) {
+            g_sc[i].rx = x;
+            g_sc[i].ry = y;
+            g_sc[i].rw = w;
+            g_sc[i].rh = h;
+        }
+    pthread_mutex_unlock(&g_cmu);
+}
+
+/* Live connections: id, window, presents so far, frames shown so far (4 ints each)
+ * 살아 있는 연결: id, 창, 지금까지 present 수, 지금까지 보인 수(각 4개) */
+JNIEXPORT jintArray JNICALL Java_app_ezsteam_runtime_PresentProbe_nativeConnections(JNIEnv *env, jclass cls)
+{
+    (void)cls;
+    jint v[MAX_SC * 4];
+    int n = 0;
+    pthread_mutex_lock(&g_cmu);
+    for (int i = 0; i < MAX_SC; i++)
+        if (g_sc[i].used && g_sc[i].alive) {
+            v[n++] = g_sc[i].id;
+            v[n++] = (jint)g_sc[i].window;
+            v[n++] = (jint)g_sc[i].frames;
+            v[n++] = (jint)g_sc[i].shown_frames;
+        }
+    pthread_mutex_unlock(&g_cmu);
+    jintArray a = (*env)->NewIntArray(env, n);
+    if (a && n) (*env)->SetIntArrayRegion(env, a, 0, n, v);
+    return a;
+}
+
 JNIEXPORT jint JNICALL Java_app_ezsteam_runtime_PresentProbe_nativeListen(JNIEnv *env, jclass cls, jstring path)
 {
     (void)cls;
@@ -571,18 +1036,38 @@ JNIEXPORT jint JNICALL Java_app_ezsteam_runtime_PresentProbe_nativeListen(JNIEnv
     return s >= 0 ? s : -err;
 }
 
-/* Blocks for one probe connection, answers it, returns the report (null when the listener is
- * closed) / probe 연결 하나를 기다려 답하고 보고를 돌려줌(듣는 소켓이 닫히면 null) */
+/* Blocks for one connection. A probe is answered here and its report returned; a present layer
+ * (first message EZP_SWAPCHAIN) gets its own thread and "S ..." is returned for the log; null when
+ * the listener is closed.
+ * 연결 하나를 기다림. probe는 여기서 답하고 보고를 돌려줌. present 레이어(첫 메시지 EZP_SWAPCHAIN)는
+ * 자기 스레드를 받고 로그용 "S ..."를 돌려줌. 듣는 소켓이 닫히면 null */
 JNIEXPORT jstring JNICALL Java_app_ezsteam_runtime_PresentProbe_nativeServe(JNIEnv *env, jclass cls, jint lfd)
 {
     (void)cls;
-    int c = accept4(lfd, NULL, NULL, SOCK_CLOEXEC);
-    if (c < 0) return NULL;
+    int c;
+    for (;;) {
+        c = accept4(lfd, NULL, NULL, SOCK_CLOEXEC);
+        if (c >= 0) break;
+        if (errno != EINTR && errno != ECONNABORTED) return NULL;
+    }
     struct timeval tv = {8, 0};
     setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    struct ezp_msg first;
+    int ffds[EZP_MAX_FDS], fn = 0;
+    ssize_t fr = recv_msg(c, &first, ffds, &fn);
+    for (int i = 0; i < fn; i++) close(ffds[i]);
+    if (fr <= 0) {
+        close(c);
+        return (*env)->NewStringUTF(env, "E 첫 메시지 없음");
+    }
+    if (first.type == EZP_SWAPCHAIN) {
+        char line[160];
+        comp_start(c, &first, line, sizeof line);
+        return (*env)->NewStringUTF(env, line);
+    }
     rep_len = 0;
     rep[0] = 0;
-    uint32_t res = session(c);
+    uint32_t res = session(c, &first);
     struct ezp_msg m;
     memset(&m, 0, sizeof m);
     m.type = EZP_REPORT;

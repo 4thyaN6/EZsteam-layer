@@ -25,6 +25,7 @@
 | `runtime/src/main/jniLibs/arm64-v8a/` | `libproot.so`, `libproot-loader.so`, `libezs_present.so`(CI가 만듦, 저장소에는 없음) |
 | `native/ezspresent/` | 게임 프레임 경로(계획: 앱이 AHardwareBuffer를 만들고 게임 Vulkan이 그곳에 바로 그림, 앱이 EGL로 표시). `ezs_present_proto.h` 소켓 메시지 형식(나중 present 레이어·컴포지터도 씀), `ezs_present_probe.c` rootfs 쪽 확인 도구(Vulkan dma-buf 내보내기·가져오기, DRM modifier, sync fd), `ezs_present_jni.c` 앱 쪽(EGL dma-buf·AHB 가져오기, 펜스, NDK). steam-run.sh가 시작마다 실행해 `INFO present :` 줄과 결론 한 줄을 남김 |
 | `tools/build-present-jni.sh` | 위 앱 쪽을 NDK(API 26)로 `libezs_present.so` 빌드 |
+| `native/ezspresent/ezs_present_layer.c`, `rootfs-overlay/opt/ezsteam/present/` | **게임 화면 직접 전달(0복사)**: Vulkan 레이어 `VK_LAYER_EZS_present`가 게임 swapchain을 앱이 만든 AHardwareBuffer(linear RGBA8, dma-buf)로 바꿈. 게임 GPU가 그곳에 바로 그리고 present마다 버퍼 번호 + sync fd를 앱으로 보냄. 앱(`ezs_present_jni.c` 컴포지터 + `FramebufferView`)은 GPU 쪽 펜스 대기 후 EGL 텍스처로 FSR·확대, 이전 버퍼는 GL 펜스와 함께 돌려줌(mailbox: 게임은 기다리지 않고 찢김 없음). 창이 X 화면 전체면 Xvfb 업로드를 건너뜀, 창 모드면 그 창 자리에 겹침(XTestClient GetGeometry/TranslateCoordinates). EZ Proton이 게임에만 켬(`VK_INSTANCE_LAYERS` 맨 뒤), 메인 [게임 화면 직접 전달: 켬/끔](기본 켬, 끔 = `~/.local/share/ezsteam/present-off`). 확장·소켓·가져오기 중 하나라도 안 되면 레이어가 스스로 기존 X11 출력으로 돌아감. Proton 로그 `ezs-present:` 줄, 앱 로그 `PRESENT` 줄 |
 | `app/` | 시험용 호스트 앱(targetSdk 28): rootfs 설치, 환경 시험, 자식 프로세스 수, Steam 준비, PRoot 상태, 실시간 화면(`DisplayActivity`) |
 | `.github/workflows/build.yml` | NDK로 PRoot, arm64 실행기에서 rootfs, 이어서 APK 빌드. 태그 빌드는 Release에 올림 |
 | `tools/build-proot-android.sh` | termux/proot 고정 커밋 + `tools/patches/proot-*.patch` + talloc 단일 파일본을 NDK(API 26)로 빌드 |

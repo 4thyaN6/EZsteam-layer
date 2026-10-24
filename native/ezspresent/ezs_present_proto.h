@@ -48,7 +48,31 @@ enum ezp_type {
     EZP_E_FENCE_DONE = 7,
     /* app -> probe: report text (len bytes after the header) / 보고 글(머리 뒤 len 바이트) */
     EZP_REPORT = 8,
+
+    /* ---- game frame path (present layer <-> app compositor) / 게임 프레임 경로(present 레이어 <-> 앱 컴포지터) ---- */
+    /* layer -> app, first packet of a layer connection: w h, pattern = buffer count, fourcc = VkFormat,
+     * flags = byte order (EZP_ORDER_*), r0 = X window (0 = unknown), r1 = pid
+     * 레이어 -> 앱, 레이어 연결의 첫 패킷: w h, pattern = 버퍼 수, fourcc = VkFormat, flags = 바이트 순서,
+     * r0 = X 창(0 = 모름), r1 = pid */
+    EZP_SWAPCHAIN = 9,
+    /* app -> layer, once per buffer: r0 = index, stride = row bytes, flags 1 = ok (0 = failed, the
+     * layer falls back); the next packet is AHardwareBuffer_sendHandleToUnixSocket's
+     * 앱 -> 레이어, 버퍼마다: r0 = 번호, stride = 줄 바이트, flags 1 = 성공(0 = 실패, 레이어는 기존 경로로).
+     * 다음 패킷은 AHardwareBuffer_sendHandleToUnixSocket 패킷 */
+    EZP_SC_BUF = 10,
+    /* layer -> app: r0 = index just presented, flags 1 = sync fd attached (GPU done -> signalled)
+     * 레이어 -> 앱: r0 = 방금 present한 번호, flags 1 = sync fd 첨부(GPU 끝나면 신호) */
+    EZP_PRESENT = 11,
+    /* app -> layer: r0 = index the compositor no longer reads, flags 1 = sync fd attached (GL done)
+     * 앱 -> 레이어: r0 = 컴포지터가 더 읽지 않는 번호, flags 1 = sync fd 첨부(GL 끝나면 신호) */
+    EZP_RELEASE = 12,
 };
+
+/* Byte order of a 32-bit game frame in memory / 32비트 게임 프레임의 메모리 바이트 순서 */
+#define EZP_ORDER_BGRA 0u
+#define EZP_ORDER_RGBA 1u
+/* Most buffers per swapchain / swapchain당 최대 버퍼 수 */
+#define EZP_MAX_BUFFERS 8
 
 struct ezp_msg {
     uint32_t magic, type, w, h;

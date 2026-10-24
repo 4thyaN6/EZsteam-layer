@@ -116,6 +116,13 @@ nm -D "$OUT/libezs_fsync.so" | grep -q ' T syscall$'
 gcc -O2 -Wall -Wextra -o "$OUT/ezs-present-probe" native/ezspresent/ezs_present_probe.c -ldl
 strip --strip-unneeded "$OUT/ezs-present-probe"
 objdump -p "$OUT/ezs-present-probe" | grep NEEDED
+# Present layer (game frames straight to the app compositor), only its negotiate entry exported
+# present 레이어(게임 프레임을 앱 컴포지터로 바로 보냄). 협상 진입점만 내보냄
+gcc -shared -fPIC -O2 -Wall -Wextra -fvisibility=hidden -o "$OUT/libezs_present_layer.so" \
+    native/ezspresent/ezs_present_layer.c -lpthread
+strip --strip-unneeded "$OUT/libezs_present_layer.so"
+nm -D "$OUT/libezs_present_layer.so" | grep -q ' T ezs_NegotiateLoaderLayerInterfaceVersion$'
+objdump -p "$OUT/libezs_present_layer.so" | grep NEEDED
 
 dpkg-query -W -f='libasound2-dev ${Version}\n' libasound2-dev > "$OUT/alsa-plugin.version"
 echo "SDL $SDL_TAG, SDL3 headers $SDL3_TAG" >> "$OUT/alsa-plugin.version"

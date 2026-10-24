@@ -245,6 +245,29 @@ public class MainActivity extends Activity {
                 log("빠른 동기화 설정 실패: " + e.getMessage());
             }
         });
+        // Game frames straight to the app compositor (present layer, zero copy). On by default
+        // (the device check passed: path 1-b); the file "present-off" turns it off, then the X11
+        // software output is used as before. EZ Proton reads it at every game start.
+        // 게임 프레임을 앱 컴포지터로 바로 보냄(present 레이어, 0복사). 기본 켬(기기 확인 통과: 1-b 경로).
+        // "present-off" 파일이 있으면 끄고 지금까지의 X11 소프트웨어 출력을 씀. EZ Proton이 게임 시작마다 읽음
+        File presentOff = new File(dxNativeFile().getParentFile(), "present-off");
+        Button direct = addButton(row4, "게임 화면 직접 전달: " + (presentOff.isFile() ? "끔" : "켬"), null);
+        direct.setOnClickListener(v -> {
+            boolean on = presentOff.isFile();
+            try {
+                if (on) {
+                    if (!presentOff.delete()) throw new IOException("지울 수 없음");
+                } else {
+                    File d = presentOff.getParentFile();
+                    if (d != null && !d.isDirectory() && !d.mkdirs()) throw new IOException("폴더 없음");
+                    if (!presentOff.createNewFile() && !presentOff.isFile()) throw new IOException("만들 수 없음");
+                }
+                direct.setText("게임 화면 직접 전달: " + (on ? "켬" : "끔"));
+                log("게임 화면 직접 전달: " + (on ? "켬(0복사)" : "끔(기존 X11 출력)") + " (다음 게임 시작부터)");
+            } catch (IOException e) {
+                log("게임 화면 직접 전달 설정 실패: " + e.getMessage());
+            }
+        });
         Button io = addButton(row4, "IO 통계: " + (ioStat(this) ? "켬" : "끔"), null);
         io.setOnClickListener(v -> {
             boolean on = !ioStat(this);

@@ -411,6 +411,29 @@ public final class XTestClient implements Closeable {
     }
 
     /**
+     * Place of a window in root (X screen) pixels: GetGeometry for the size, TranslateCoordinates
+     * for the position; the callback runs on the reader thread, not at all when the window is gone.
+     * Used to put a game frame of the present layer where its window is.
+     * 창의 루트(X 화면) 화소 위치: 크기는 GetGeometry, 위치는 TranslateCoordinates. 콜백은 읽기 스레드에서
+     * 돌고, 창이 없어졌으면 부르지 않음. present 레이어의 게임 프레임을 그 창 자리에 놓을 때 씀
+     */
+    public void windowRect(int window, PresentProbe.RectCallback cb) {
+        ByteBuffer g = le(8);
+        g.put((byte) 14).put((byte) 0).putShort((short) 2).putInt(window);
+        send(g.array(), geo -> {
+            ByteBuffer gb = ByteBuffer.wrap(geo).order(ByteOrder.LITTLE_ENDIAN);
+            int w = gb.getShort(16) & 0xffff, h = gb.getShort(18) & 0xffff;
+            ByteBuffer t = le(16);
+            t.put((byte) 40).put((byte) 0).putShort((short) 4).putInt(window).putInt(root)
+                    .putShort((short) 0).putShort((short) 0);
+            send(t.array(), tr -> {
+                ByteBuffer tb = ByteBuffer.wrap(tr).order(ByteOrder.LITTLE_ENDIAN);
+                cb.rect(tb.getShort(12), tb.getShort(14), w, h);
+            });
+        });
+    }
+
+    /**
      * Queue one request on the send thread; it takes the next sequence number, and a reply handler
      * (requests with replies only) runs on the reader thread.
      * 요청 하나를 전송 스레드에 넣음. 다음 순번을 받으며, 응답 처리기(응답이 있는 요청만)는 읽기 스레드에서 돎
@@ -477,7 +500,11 @@ public final class XTestClient implements Closeable {
                         // BadWindow (3) on focus requests is normal when a window just closed
                         // 창이 막 닫혔을 때 포커스 요청의 BadWindow(3)는 정상
                         int major = p[10] & 0xff;
-                        boolean benign = (p[1] & 0xff) == 3 && (major == 42 || major == 25 || major == 18);
+                        // Also GetGeometry / TranslateCoordinates of a game window that just closed
+                        // (BadWindow 3, BadDrawable 9) / 막 닫힌 게임 창의 GetGeometry / TranslateCoordinates도
+                        int code = p[1] & 0xff;
+                        boolean benign = (code == 3 && (major == 42 || major == 25 || major == 18 || major == 40))
+                                || ((code == 3 || code == 9) && major == 14);
                         if (log != null && !benign) log.line("X error code=" + (p[1] & 0xff) + " major=" + major
                                 + " minor=" + (pb.getShort(8) & 0xffff));
                     } else if (p[0] == 1) {

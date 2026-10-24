@@ -239,6 +239,25 @@ if [ -f "$HOME/.local/share/ezsteam/fsync-shim" ]; then
         echo "ezproton: 빠른 동기화(시험) 선택, libezs_fsync.so 없음" >&2
     fi
 fi
+# Game frames straight to the app compositor (VK_LAYER_EZS_present, /opt/ezsteam/present): on
+# unless the app wrote ~/.local/share/ezsteam/present-off, and only while the app is listening
+# (its socket exists). Added last to VK_INSTANCE_LAYERS = next to the driver, so other layers
+# (LSFG) present into it. The layer falls back to the X11 output by itself when anything fails.
+# 게임 프레임을 앱 컴포지터로 바로 보냄(VK_LAYER_EZS_present, /opt/ezsteam/present): 앱이
+# ~/.local/share/ezsteam/present-off를 쓰지 않았고 앱이 기다리는 중(소켓 있음)일 때만 켬.
+# VK_INSTANCE_LAYERS 맨 뒤 = 드라이버 바로 위에 두어 다른 레이어(LSFG)가 그 위로 present함. 무엇이든
+# 실패하면 레이어가 스스로 X11 출력으로 돌아감
+if [ -f "$HOME/.local/share/ezsteam/present-off" ]; then
+    echo "ezproton: 게임 화면 직접 전달 끔 (기존 X11 출력)" >&2
+elif [ ! -f /opt/ezsteam/present/libezs_present_layer.so ]; then
+    echo "ezproton: 게임 화면 직접 전달 레이어 없음 (/opt/ezsteam/present)" >&2
+elif [ ! -S /tmp/ezs-present.sock ]; then
+    echo "ezproton: 게임 화면 직접 전달: 앱 소켓 없음, 기존 X11 출력" >&2
+else
+    export VK_ADD_LAYER_PATH="${VK_ADD_LAYER_PATH:+$VK_ADD_LAYER_PATH:}/opt/ezsteam/present"
+    export VK_INSTANCE_LAYERS="${VK_INSTANCE_LAYERS:+$VK_INSTANCE_LAYERS:}VK_LAYER_EZS_present"
+    echo "ezproton: 게임 화면 직접 전달 켬 (VK_INSTANCE_LAYERS=$VK_INSTANCE_LAYERS)" >&2
+fi
 # The client-only HID test switch (steam-run.sh) is not passed on to games
 # 클라이언트 전용 HID 시험 스위치(steam-run.sh)는 게임에 넘기지 않음
 if [ "${EZS_STEAM_HID_LOW:-0}" = 1 ]; then

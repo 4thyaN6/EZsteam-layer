@@ -217,6 +217,10 @@ jobs:
           # 게임 프레임 경로 확인 도구, rootfs 쪽(native/ezspresent)
           mkdir -p rootfs-overlay/opt/ezsteam/bin
           cp alsa-artifact/ezs-present-probe rootfs-overlay/opt/ezsteam/bin/
+          # Present layer next to its manifest (rootfs-overlay/opt/ezsteam/present)
+          # present 레이어를 설명 파일 옆에 둠(rootfs-overlay/opt/ezsteam/present)
+          mkdir -p rootfs-overlay/opt/ezsteam/present
+          cp alsa-artifact/libezs_present_layer.so rootfs-overlay/opt/ezsteam/present/
           cat alsa-artifact/alsa-plugin.version
 
       # App side of the game frame path into the runtime module's jniLibs (next to PRoot)

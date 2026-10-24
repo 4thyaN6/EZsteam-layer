@@ -78,6 +78,9 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
     /** Area of the view that shows the X screen (letterbox) / X 화면이 그려지는 뷰 영역(레터박스) */
     private volatile int dstX, dstY, dstW, dstH;
 
+    /** Game frame of this refresh from the present layer (PresentProbe.frame) / 이번 갱신의 게임 프레임(PresentProbe.frame) */
+    private final int[] gf = new int[9];
+
     private final FloatBuffer quad;
     private long statStart;
     private int statFrames, statChanged;
@@ -343,6 +346,8 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
         texW = texH = 0;
         statStart = System.nanoTime();
+        // Textures of game frames belonged to the old context / 게임 프레임 텍스처는 이전 컨텍스트 것이었음
+        PresentProbe.glReset();
     }
 
     @Override
@@ -359,25 +364,42 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         XvfbFramebuffer f = fb;
         if (f == null) return;
 
-        // (Re)allocate the texture when the X screen size changes / X 화면 크기가 바뀌면 텍스처를 다시 잡음
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture);
-        if (texW != f.width || texH != f.height) {
-            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, f.width, f.height, 0,
-                    GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null);
-            texW = f.width;
-            texH = f.height;
-        }
+        // Game frame handed over by the present layer (zero copy, already on the GPU). When its
+        // window covers the whole X screen it replaces the X screen and the CPU upload is skipped;
+        // otherwise it is drawn over its window's place.
+        // present 레이어가 넘긴 게임 프레임(0복사, 이미 GPU에 있음). 그 창이 X 화면 전체를 덮으면 X 화면
+        // 대신 쓰고 CPU 업로드를 건너뜀. 아니면 그 창 자리에 겹쳐 그림
+        boolean game = PresentProbe.frame(gf);
+        int gTex = gf[0], gW = gf[1], gH = gf[2], rX = gf[3], rY = gf[4], rW = gf[5], rH = gf[6];
+        boolean full = game && (rW <= 0 || (rX <= 0 && rY <= 0 && rX + rW >= f.width && rY + rH >= f.height));
 
-        // Upload the whole screen; row length covers padded rows / 화면 전체 업로드. 줄 길이로 줄 끝 여백 처리
-        ByteBuffer px = f.pixels();
-        boolean changed = sampleChanged(px.asIntBuffer(), f);
-        long t0 = System.nanoTime();
-        GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 4);
-        GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, f.bytesPerLine / 4);
-        GLES20.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, f.width, f.height,
-                GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, px);
-        GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0);
-        long t1 = System.nanoTime();
+        boolean changed;
+        long t0 = System.nanoTime(), t1 = t0;
+        if (full) {
+            changed = gf[8] == 1;
+        } else {
+            // (Re)allocate the texture when the X screen size changes / X 화면 크기가 바뀌면 텍스처를 다시 잡음
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture);
+            if (texW != f.width || texH != f.height) {
+                GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, f.width, f.height, 0,
+                        GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null);
+                texW = f.width;
+                texH = f.height;
+            }
+
+            // Upload the whole screen; row length covers padded rows / 화면 전체 업로드. 줄 길이로 줄 끝 여백 처리
+            ByteBuffer px = f.pixels();
+            changed = sampleChanged(px.asIntBuffer(), f) || (game && gf[8] == 1);
+            t0 = System.nanoTime();
+            GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 4);
+            GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, f.bytesPerLine / 4);
+            GLES20.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, f.width, f.height,
+                    GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, px);
+            GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0);
+            t1 = System.nanoTime();
+        }
+        // Source of the scaling passes: the game frame or the X screen / 확대 단계의 원본: 게임 프레임 또는 X 화면
+        int srcTex = full ? gTex : texture, srcW = full ? gW : f.width, srcH = full ? gH : f.height;
 
         // Fit with the aspect ratio kept (black bars) / 비율을 유지해 맞춤(남는 곳은 검은 띠)
         float s = Math.min((float) viewW / f.width, (float) viewH / f.height);
@@ -390,16 +412,32 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         // GL viewport origin is bottom-left / GL 뷰포트 원점은 왼쪽 아래
         GLES20.glViewport(x, viewH - y - h, w, h);
 
-        if (scaleMode == SCALE_FSR && drawFsr(f, x, viewH - y - h, w, h)) {
+        if (scaleMode == SCALE_FSR && drawFsr(srcTex, srcW, srcH, x, viewH - y - h, w, h)) {
             // Drawn by the two FSR passes / FSR 2단계로 그림
         } else {
             GLES20.glUseProgram(program);
-            GLES20.glUniform2f(uSrc, f.width, f.height);
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, srcTex);
+            GLES20.glUniform2f(uSrc, srcW, srcH);
             // FSR not available: same look as bicubic + sharpen / FSR을 못 쓰면 바이큐빅+선명과 같게 그림
             GLES20.glUniform1i(uMode, scaleMode == SCALE_FSR ? SCALE_SHARP : scaleMode);
             GLES20.glUniform1f(uSharp, 0.5f);
             drawQuad(aPos, aTex);
         }
+        if (game && !full) {
+            // Windowed game: its frame over the window's place, scaled like the X screen
+            // 창 모드 게임: 그 창 자리에 프레임을 겹침. X 화면과 같은 배율
+            int px0 = x + Math.round(rX * (float) w / f.width), py0 = y + Math.round(rY * (float) h / f.height);
+            int pw = Math.round(rW * (float) w / f.width), ph = Math.round(rH * (float) h / f.height);
+            GLES20.glViewport(px0, viewH - py0 - ph, pw, ph);
+            GLES20.glUseProgram(program);
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, gTex);
+            GLES20.glUniform2f(uSrc, gW, gH);
+            GLES20.glUniform1i(uMode, scaleMode == SCALE_LINEAR ? SCALE_LINEAR : SCALE_BICUBIC);
+            GLES20.glUniform1f(uSharp, 0.5f);
+            drawQuad(aPos, aTex);
+        }
+        // Hand the previous game frame back with a GL fence / 이전 게임 프레임을 GL 펜스와 함께 돌려줌
+        if (game) PresentProbe.frameDone();
 
         // Statistics / 통계
         statFrames++;
@@ -614,12 +652,14 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
     }
 
     /**
-     * Draw with FSR 1 into the given screen area; false when FSR is not usable (caller draws the
-     * normal way). The offscreen texture follows the output size.
-     * 주어진 화면 영역에 FSR 1로 그림. FSR을 못 쓰면 false(호출한 쪽이 보통 방식으로 그림).
+     * Draw with FSR 1 into the given screen area from the given source (X screen or game frame);
+     * false when FSR is not usable (caller draws the normal way). The offscreen texture follows
+     * the output size.
+     * 주어진 원본(X 화면 또는 게임 프레임)을 주어진 화면 영역에 FSR 1로 그림. FSR을 못 쓰면 false(호출한
+     * 쪽이 보통 방식으로 그림).
      * 화면 밖 텍스처는 출력 크기를 따름
      */
-    private boolean drawFsr(XvfbFramebuffer f, int vx, int vy, int w, int h) {
+    private boolean drawFsr(int srcTex, int srcW, int srcH, int vx, int vy, int w, int h) {
         if (fsrFailed || w <= 0 || h <= 0) return false;
         // FSR output size: the display area, or the middle size kept to the area's aspect ratio
         // FSR 출력 크기: 화면 영역, 또는 영역 비율을 따른 중간 크기
@@ -661,8 +701,8 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fsrFbo);
         GLES20.glViewport(0, 0, tw, th);
         GLES20.glUseProgram(easuProg);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture);
-        GLES20.glUniform2f(eSrc, f.width, f.height);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, srcTex);
+        GLES20.glUniform2f(eSrc, srcW, srcH);
         drawQuad(eaPos, eaTex);
         // Pass 2: RCAS, to the screen area or to the second offscreen texture
         // 2단계: RCAS, 화면 영역 또는 두 번째 화면 밖 텍스처로
