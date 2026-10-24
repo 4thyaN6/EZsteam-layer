@@ -113,8 +113,22 @@ public final class PadFile implements Closeable {
         return physical.button(i);
     }
 
+    /** Called when HOME (GUIDE) goes down, from either source / 어느 입력원이든 HOME(GUIDE)을 누르는 순간 부름 */
+    private volatile Runnable guideListener;
+    private boolean guideWas;
+
+    public void setGuideListener(Runnable r) {
+        guideListener = r;
+    }
+
     /** Write the whole state to the shared file / 전체 상태를 공유 파일에 씀 */
     public synchronized void write() {
+        boolean guide = physical.buttons[GUIDE] || touch.buttons[GUIDE];
+        if (guide && !guideWas) {
+            Runnable r = guideListener;
+            if (r != null) r.run();
+        }
+        guideWas = guide;
         buf.position(0);
         // Each stick from the source that pushes it further / 스틱마다 더 많이 민 입력원 값
         for (int s = 0; s < 4; s += 2) {

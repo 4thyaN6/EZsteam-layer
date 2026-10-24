@@ -111,6 +111,73 @@ public class DisplayActivity extends Activity {
     private volatile app.ezsteam.runtime.AudioServer audio;
     /** Game frame path check, app side (answers ezs-present-probe) / 게임 프레임 경로 확인의 앱 쪽(ezs-present-probe에 답함) */
     private volatile app.ezsteam.runtime.PresentProbe present;
+    /** Game pad input held back: windows cover the game (direct path) / Steam menu raised by HOME
+     *  게임 패드 입력을 멈춤: 창이 게임을 덮음(직접 전달) / HOME으로 Steam 메뉴를 올림 */
+    private volatile boolean overlayMuted, steamMenuUp;
+    /** Game top-level window that was in front when HOME raised Steam (to bring it back)
+     *  HOME으로 Steam을 올렸을 때 앞에 있던 게임 최상위 창(되돌릴 때 씀) */
+    private volatile int gameTopBeforeMenu;
+    /** Time of the last HOME press / 마지막 HOME 누른 시각 */
+    private volatile long homeAt;
+
+    private void applyGameMute() {
+        app.ezsteam.runtime.PadFile pf = pad;
+        if (pf != null) pf.setGameMuted(overlayMuted || steamMenuUp);
+    }
+
+    /**
+     * HOME (GUIDE) while a game is in front: the Steam client opens its menu in its own window, but
+     * without a window manager that window stayed under the game, invisible, while both the menu
+     * and the game took the pad (2026-10-24). Here: if Steam does not ask for its window to be
+     * raised itself (_NET_ACTIVE_WINDOW, handled in XTestClient) within 400 ms, its window is raised;
+     * the game gets no pad input while the menu is up. HOME again brings the game back.
+     * 게임이 앞에 있을 때 HOME(GUIDE): Steam 클라이언트는 자기 창에 메뉴를 열지만, 창 관리자가 없어 그 창이
+     * 게임 아래에 남아 보이지 않았고 메뉴와 게임이 함께 패드를 받았음(2026-10-24). 여기서는: Steam이 400ms
+     * 안에 스스로 창을 올려 달라고 하지 않으면(_NET_ACTIVE_WINDOW, XTestClient에서 처리) 그 창을 올림.
+     * 메뉴가 올라와 있는 동안 게임에는 패드 입력을 주지 않음. HOME을 다시 누르면 게임을 되돌림
+     */
+    private void onHome() {
+        XTestClient x = xtest;
+        if (x == null || x.isClosed()) return;
+        homeAt = SystemClock.elapsedRealtime();
+        if (steamMenuUp) {
+            int g = gameTopBeforeMenu;
+            steamMenuUp = false;
+            applyGameMute();
+            if (g != 0) {
+                log(String.format(Locale.ROOT, "HOME: 게임 창 0x%x로 돌아감", g));
+                x.activate(g);
+            }
+            return;
+        }
+        int f = x.focusedWindow();
+        if (f == 0 || x.isSteamWindow(f)) return;
+        gameTopBeforeMenu = f;
+        final long at = homeAt;
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+            if (steamMenuUp || homeAt != at) return;
+            int sw = x.steamWindow();
+            if (sw == 0) {
+                log("HOME: Steam 창을 찾지 못함");
+                return;
+            }
+            log(String.format(Locale.ROOT, "HOME: Steam 창 0x%x을 게임 위로 올림", sw));
+            x.activate(sw);
+        }, 400);
+    }
+
+    /** A window was raised and focused (by Steam's request or by us) / 창을 올리고 포커스를 줌(Steam 요청 또는 우리) */
+    private void onActivated(int win) {
+        XTestClient x = xtest;
+        if (x == null) return;
+        boolean steam = x.isSteamWindow(win);
+        if (steam && gameTopBeforeMenu != 0 && SystemClock.elapsedRealtime() - homeAt < 5000) {
+            steamMenuUp = true;
+        } else if (!steam) {
+            steamMenuUp = false;
+        }
+        applyGameMute();
+    }
     /** Sum and count of per-second new-frame rates since the last PERF line / 지난 PERF 줄 뒤 초당 새 프레임 수의 합과 개수 */
     private volatile float changedSum;
     private volatile int changedCount;
@@ -732,8 +799,8 @@ public class DisplayActivity extends Activity {
                         for (int i = 0; i + 3 < rects.length; i += 4) area += (long) rects[i + 2] * rects[i + 3];
                         XTestClient x = xtest;
                         long screen = x != null ? (long) x.screenWidth * x.screenHeight : 1280L * 800L;
-                        app.ezsteam.runtime.PadFile pf = pad;
-                        if (pf != null) pf.setGameMuted(area * 4 >= screen);
+                        overlayMuted = area * 4 >= screen;
+                        applyGameMute();
                     });
                     log("PRESENT 대기 " + app.ezsteam.runtime.PresentProbe.GUEST_SOCKET);
                 } catch (IOException | RuntimeException e) {
@@ -745,6 +812,8 @@ public class DisplayActivity extends Activity {
                 // native/ezspad가 Wine 안의 가상 Xbox 360 패드로 바꿈
                 try {
                     pad = app.ezsteam.runtime.PadFile.open(c.rootfs);
+                    // HOME (GUIDE) from the touch pad or a real controller / 터치 패드나 실제 컨트롤러의 HOME(GUIDE)
+                    pad.setGuideListener(this::onHome);
                     final app.ezsteam.runtime.PadFile opened = pad;
                     runOnUiThread(() -> touchPad.setPad(opened));
                     log("PAD 공유 파일 " + app.ezsteam.runtime.PadFile.GUEST_PATH);
@@ -834,6 +903,8 @@ public class DisplayActivity extends Activity {
         try {
             File sock = new File(c.rootfs, "tmp/.X11-unix/X" + DISPLAY);
             xtest = XTestClient.connect(sock, this::log);
+            // Raises done as a window manager (Steam menu on HOME) / 창 관리자처럼 한 올리기(HOME의 Steam 메뉴)
+            xtest.setActivationListener(this::onActivated);
             log("XTEST " + xtest.xtestMajor + "." + xtest.xtestMinor + " 연결, 서버 " + xtest.vendor
                     + " " + xtest.screenWidth + "x" + xtest.screenHeight);
         } catch (IOException e) {

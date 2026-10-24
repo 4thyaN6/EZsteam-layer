@@ -50,6 +50,51 @@ public final class XTestClient implements Closeable {
     private final int atomWmState, atomTime;
     /** Atoms _NET_WM_STATE and _NET_WM_STATE_FULLSCREEN / 아톰 _NET_WM_STATE, _NET_WM_STATE_FULLSCREEN */
     private int atomNetState, atomFullscreen;
+    private int atomActive;
+    /** Top-level windows whose WM_CLASS names Steam (its client UI and menus)
+     *  WM_CLASS가 Steam인 최상위 창(클라이언트 화면과 메뉴) */
+    private final java.util.Set<Integer> steamWindows = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** Called with each window raised and focused as a window manager would (activation request or activate())
+     *  창 관리자처럼 올리고 포커스를 준 창마다 부름(활성화 요청 또는 activate()) */
+    private volatile java.util.function.IntConsumer activationListener;
+
+    public void setActivationListener(java.util.function.IntConsumer l) {
+        activationListener = l;
+    }
+
+    /** Window focused last (0 = none) / 마지막으로 포커스를 준 창(0 = 없음) */
+    public int focusedWindow() {
+        return focused;
+    }
+
+    public boolean isSteamWindow(int w) {
+        return steamWindows.contains(w);
+    }
+
+    /** A mapped Steam top-level window, preferring the largest known one (0 = none)
+     *  매핑된 Steam 최상위 창. 알려진 것 중 큰 것을 우선(0 = 없음) */
+    public int steamWindow() {
+        int best = 0;
+        for (int w : steamWindows) if (mapped.contains(w) && (best == 0 || w < best)) best = w;
+        return best;
+    }
+
+    /**
+     * Raise a top-level window above all others and give it the focus (window manager job; none
+     * here). ConfigureWindow stack-mode Above.
+     * 최상위 창을 맨 위로 올리고 포커스를 줌(창 관리자 일. 여기에는 없음). ConfigureWindow 쌓기 Above
+     */
+    public void activate(int window) {
+        if (closed || window == 0) return;
+        ByteBuffer c = le(16);
+        c.put((byte) 12).put((byte) 0).putShort((short) 4).putInt(window).putShort((short) 0x40).putShort((short) 0)
+                .putInt(0);
+        send(c.array(), null);
+        focused = window;
+        requestFocus(window, " (올림)", true);
+        java.util.function.IntConsumer l = activationListener;
+        if (l != null) l.accept(window);
+    }
     /** Top-level windows given WM_STATE by this client / 이 클라이언트가 WM_STATE를 준 최상위 창 */
     private final java.util.Set<Integer> managed = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** Root children now mapped (menus and tooltips included) / 지금 매핑된 루트 자식(메뉴·툴팁 포함) */
@@ -166,12 +211,17 @@ public final class XTestClient implements Closeable {
             //     full screen / 4c. 전체 화면을 요청하는 창용(순번 7, 8)
             int aNet = internAtom(out, in, "_NET_WM_STATE");
             int aFull = internAtom(out, in, "_NET_WM_STATE_FULLSCREEN");
+            // 4d. _NET_ACTIVE_WINDOW (sequence 9): programs ask a window manager to raise and focus
+            //     a window with it (Steam's menu on HOME stayed under the game, 2026-10-24)
+            // 4d. _NET_ACTIVE_WINDOW(순번 9): 프로그램이 창 관리자에게 창을 올리고 포커스를 달라고 할 때 씀
+            //     (HOME으로 연 Steam 메뉴가 게임 아래에 남았음, 2026-10-24)
+            int aActive = internAtom(out, in, "_NET_ACTIVE_WINDOW");
 
-            // 5. Watch top-level windows appearing (SubstructureNotify on the root, sequence 9), so a
+            // 5. Watch top-level windows appearing (SubstructureNotify on the root, sequence 10), so a
             //    newly shown window gets the focus like under a window manager. Measured: a game
             //    window shown while the focus was still on the Steam window stayed black on its
             //    movie and took no keys until it was clicked.
-            // 5. 최상위 창이 나타나는 것을 지켜봄(루트에 SubstructureNotify, 순번 9). 창 관리자처럼 새로
+            // 5. 최상위 창이 나타나는 것을 지켜봄(루트에 SubstructureNotify, 순번 10). 창 관리자처럼 새로
             //    보인 창에 포커스를 주기 위함. 실측: 포커스가 Steam 창에 남은 채 뜬 게임 창이 동영상에서
             //    검은 화면으로 멈추고, 클릭하기 전까지 키를 받지 않았음
             ByteBuffer cw = le(16);
@@ -181,7 +231,8 @@ public final class XTestClient implements Closeable {
             out.write(cw.array());
             out.flush();
 
-            XTestClient c = new XTestClient(s, out, op, w, h, vendor, vmaj, vmin, rootWin, aProt, aTake, aState, aTime, 9);
+            XTestClient c = new XTestClient(s, out, op, w, h, vendor, vmaj, vmin, rootWin, aProt, aTake, aState, aTime, 10);
+            c.atomActive = aActive;
             c.atomNetState = aNet;
             c.atomFullscreen = aFull;
             c.log = log;
@@ -370,6 +421,20 @@ public final class XTestClient implements Closeable {
                 send(c.array(), null);
                 if (l != null) l.line(String.format(java.util.Locale.ROOT, "X 창 0x%x 화면보다 큼 → %dx%d로 맞춤",
                         win, screenWidth, screenHeight));
+            }
+        });
+        // GetProperty(win, WM_CLASS (67), STRING (31), 0, 64 words): Steam's own windows are told
+        // apart by it (HOME raises them over a game) / Steam 자체 창을 이것으로 구분함(HOME이 게임 위로 올림)
+        ByteBuffer wc = le(24);
+        wc.put((byte) 20).put((byte) 0).putShort((short) 6).putInt(win).putInt(67).putInt(31).putInt(0).putInt(64);
+        send(wc.array(), r -> {
+            int n = ByteBuffer.wrap(r).order(ByteOrder.LITTLE_ENDIAN).getInt(16);
+            if (n <= 0 || r.length < 32) return;
+            String cls = new String(r, 32, Math.min(n, r.length - 32), StandardCharsets.ISO_8859_1).replace('\0', ' ').trim();
+            if (cls.toLowerCase(java.util.Locale.ROOT).contains("steam")) {
+                steamWindows.add(win);
+                Log l = log;
+                if (l != null) l.line(String.format(java.util.Locale.ROOT, "X 창 0x%x Steam 창 (%s)", win, cls));
             }
         });
         if (atomNetState == 0 || atomFullscreen == 0) return;
@@ -565,7 +630,7 @@ public final class XTestClient implements Closeable {
                         // Also GetGeometry / TranslateCoordinates of a game window that just closed
                         // (BadWindow 3, BadDrawable 9) / 막 닫힌 게임 창의 GetGeometry / TranslateCoordinates도
                         int code = p[1] & 0xff;
-                        boolean benign = (code == 3 && (major == 42 || major == 25 || major == 18 || major == 40))
+                        boolean benign = (code == 3 && (major == 42 || major == 25 || major == 18 || major == 40 || major == 12 || major == 20))
                                 || ((code == 3 || code == 9) && (major == 14 || major == 15));
                         if (log != null && !benign) log.line("X error code=" + (p[1] & 0xff) + " major=" + major
                                 + " minor=" + (pb.getShort(8) & 0xffff));
@@ -629,7 +694,20 @@ public final class XTestClient implements Closeable {
                         int win = pb.getInt(8);
                         managed.remove(win);
                         mapped.remove(win);
+                        steamWindows.remove(win);
                         if (focused == win) focused = 0;
+                    } else if ((p[0] & 0x7f) == 33) {
+                        // ClientMessage sent to the root: _NET_ACTIVE_WINDOW asks to raise and focus
+                        // the event's window (bytes 4..7), as a window manager would
+                        // 루트로 보낸 ClientMessage: _NET_ACTIVE_WINDOW는 이벤트 창(4~7바이트)을 올리고
+                        // 포커스를 달라는 요청. 창 관리자처럼 처리함
+                        int win = pb.getInt(4);
+                        if (atomActive != 0 && pb.getInt(8) == atomActive && win != 0 && win != root) {
+                            Log l = log;
+                            if (l != null) l.line(String.format(java.util.Locale.ROOT, "X 활성화 요청 → 창 0x%x%s",
+                                    win, steamWindows.contains(win) ? " (Steam)" : ""));
+                            activate(win);
+                        }
                     } else if ((p[0] & 0x7f) == 28) {
                         // PropertyNotify: window 4..7, atom 8..11, time 12..15. Our _EZS_TIME on the
                         // root answers the oldest waiting focus request with the server time
