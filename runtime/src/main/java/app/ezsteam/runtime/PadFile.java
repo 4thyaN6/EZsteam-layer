@@ -113,22 +113,46 @@ public final class PadFile implements Closeable {
         return physical.button(i);
     }
 
-    /** Called when HOME (GUIDE) goes down, from either source / 어느 입력원이든 HOME(GUIDE)을 누르는 순간 부름 */
-    private volatile Runnable guideListener;
-    private boolean guideWas;
+    /**
+     * Called with each button that goes down, from either source (SDL button order); the left
+     * stick pushed past 60 % also counts as the D-pad. Drives HOME and the app's own menu.
+     * 어느 입력원이든 버튼이 눌리는 순간 그 버튼으로 부름(SDL 버튼 순서). 왼쪽 스틱을 60% 넘게 밀어도
+     * D-pad로 셈. HOME과 앱 자체 메뉴가 씀
+     */
+    public interface ButtonListener {
+        void pressed(int button);
+    }
 
-    public void setGuideListener(Runnable r) {
-        guideListener = r;
+    private volatile ButtonListener buttonListener;
+    private final boolean[] was = new boolean[BUTTONS];
+
+    public void setButtonListener(ButtonListener l) {
+        buttonListener = l;
+    }
+
+    /** Byte 33 of the file: 1 = the Steam client reads a released pad (app menu open)
+     *  파일 33번째 바이트: 1 = Steam 클라이언트는 뗀 패드로 읽음(앱 메뉴가 열림) */
+    public static final int STEAM_MUTE_OFFSET = 33;
+
+    public synchronized void setSteamMuted(boolean on) {
+        buf.put(STEAM_MUTE_OFFSET, (byte) (on ? 1 : 0));
     }
 
     /** Write the whole state to the shared file / 전체 상태를 공유 파일에 씀 */
     public synchronized void write() {
-        boolean guide = physical.buttons[GUIDE] || touch.buttons[GUIDE];
-        if (guide && !guideWas) {
-            Runnable r = guideListener;
-            if (r != null) r.run();
+        ButtonListener bl = buttonListener;
+        for (int i = 0; i < BUTTONS; i++) {
+            boolean down = physical.buttons[i] || touch.buttons[i];
+            // Left stick as D-pad for menus / 메뉴용으로 왼쪽 스틱을 D-pad로
+            float lx = Math.abs(physical.axes[0]) > Math.abs(touch.axes[0]) ? physical.axes[0] : touch.axes[0];
+            float ly = Math.abs(physical.axes[1]) > Math.abs(touch.axes[1]) ? physical.axes[1] : touch.axes[1];
+            if (i == DPAD_UP) down |= ly < -0.6f;
+            if (i == DPAD_DOWN) down |= ly > 0.6f;
+            if (i == DPAD_LEFT) down |= lx < -0.6f;
+            if (i == DPAD_RIGHT) down |= lx > 0.6f;
+            if (down && !was[i] && bl != null) bl.pressed(i);
+            was[i] = down;
         }
-        guideWas = guide;
         buf.position(0);
         // Each stick from the source that pushes it further / 스틱마다 더 많이 민 입력원 값
         for (int s = 0; s < 4; s += 2) {

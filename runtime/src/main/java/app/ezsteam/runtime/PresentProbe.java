@@ -62,6 +62,30 @@ public final class PresentProbe implements Closeable {
 
     private static native int[] nativeConnections();
 
+    private static native void nativeSetFps(int fps);
+
+    private static native void nativeSetCompress(boolean on);
+
+    private static native int nativeGpuLayout();
+
+    /** Frame limit paced by the present layer, live for running games (0 = none)
+     *  present 레이어가 맞추는 프레임 제한. 실행 중인 게임에도 바로 적용(0 = 없음) */
+    public static void setFps(int fps) {
+        if (LOADED) nativeSetFps(fps);
+    }
+
+    /** Compression test switch: GPU-only buffers in the layout the start-up check found (next swapchains)
+     *  압축 시험 스위치: 시작 확인이 찾은 배치로 GPU 전용 버퍼(다음 swapchain부터) */
+    public static void setCompress(boolean on) {
+        if (LOADED) nativeSetCompress(on);
+    }
+
+    /** Layout the start-up check found for GPU-only buffers: 0 linear, 1 Qualcomm compressed, -1 not known
+     *  시작 확인이 찾은 GPU 전용 버퍼 배치: 0 linear, 1 Qualcomm 압축, -1 모름 */
+    public static int gpuLayout() {
+        return LOADED ? nativeGpuLayout() : -1;
+    }
+
     /** Window position source (the host's X connection) / 창 위치 출처(호스트의 X 연결) */
     public interface WindowRects {
         /** Ask the window's place in X screen pixels; answer may come later on any thread
@@ -160,7 +184,7 @@ public final class PresentProbe implements Closeable {
                     String[] v = r.split(" ");
                     log.log("PRESENT 게임 화면 직접 전달 연결 " + v[2] + "x" + v[3] + ", 버퍼 " + v[4]
                             + "개, 형식 " + v[5] + ", 창 0x" + Long.toHexString(Long.parseLong(v[6]))
-                            + ", pid " + v[7]);
+                            + ", pid " + v[7] + (v.length > 9 ? ", 배치 " + v[9] : ""));
                 } else if (r.startsWith("E ")) {
                     log.log("PRESENT 게임 화면 직접 전달 실패: " + r.substring(2));
                 } else {

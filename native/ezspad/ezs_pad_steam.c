@@ -69,6 +69,14 @@ static void SDLCALL pad_update(void *userdata)
     struct pad_state cur;
     if (pad_fd < 0 || !pad_js) return;
     if (pread(pad_fd, &cur, sizeof(cur), 0) != (ssize_t)sizeof(cur)) return;
+    /* Byte 33 set by the app while its own menu (HOME) is open: the Steam client sees a released
+     * pad, so Big Picture does not move behind the menu / 앱 자체 메뉴(HOME)가 열린 동안 앱이 33번째
+     * 바이트를 둠: Steam 클라이언트는 뗀 패드로 봄. 메뉴 뒤에서 빅픽처가 움직이지 않게 함 */
+    uint8_t mute = 0;
+    if (pread(pad_fd, &mute, 1, 33) == 1 && mute) {
+        memset(&cur, 0, sizeof(cur));
+        cur.axis[4] = cur.axis[5] = -32767;
+    }
     for (int i = 0; i < NAXES; i++)
         if (cur.axis[i] != last.axis[i]) p_SetJoystickVirtualAxis(pad_js, i, cur.axis[i]);
     for (int i = 0; i < NBUTTONS; i++)

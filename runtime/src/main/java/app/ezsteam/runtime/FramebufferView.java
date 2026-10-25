@@ -104,6 +104,33 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         quad.put(q).position(0);
     }
 
+    /** Display refresh asked from the system, 0 = its own choice / 시스템에 요청한 화면 주사율, 0 = 시스템이 정함 */
+    private volatile float displayRate;
+
+    /**
+     * Ask the panel to refresh at the game's frame limit (Surface.setFrameRate, Android 11+): with
+     * a 60 fps limit the 120 Hz panel can run at 60 Hz, every frame is shown for the same time and
+     * the display uses less power. 0 gives the choice back to the system.
+     * 패널 주사율을 게임 프레임 제한에 맞춰 달라고 요청함(Surface.setFrameRate, 안드로이드 11+): 60fps 제한이면
+     * 120Hz 패널이 60Hz로 돌 수 있어 프레임마다 같은 시간 보이고 화면 전력이 줄어듦. 0이면 시스템에 맡김
+     */
+    public void setDisplayRate(float fps) {
+        displayRate = fps;
+        post(this::applyDisplayRate);
+    }
+
+    private void applyDisplayRate() {
+        if (android.os.Build.VERSION.SDK_INT < 30) return;
+        android.view.Surface sf = getHolder().getSurface();
+        if (sf == null || !sf.isValid()) return;
+        try {
+            float r = displayRate;
+            sf.setFrameRate(r > 0 ? r : 0f, android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
+        } catch (RuntimeException ignored) {
+            // older or picky drivers: keep the system's rate / 오래되거나 까다로운 드라이버: 시스템 주사율 유지
+        }
+    }
+
     /** Set or clear the screen to show / 보여 줄 화면을 지정하거나 지움 */
     public void setFramebuffer(XvfbFramebuffer f) {
         fb = f;
@@ -354,6 +381,8 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
     public void onSurfaceChanged(GL10 unused, int w, int h) {
         viewW = w;
         viewH = h;
+        // New surface: ask the refresh rate again / 새 표면: 주사율을 다시 요청함
+        post(this::applyDisplayRate);
     }
 
     @Override

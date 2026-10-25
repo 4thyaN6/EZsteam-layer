@@ -62,6 +62,23 @@ static void *key_of(const void *h)
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
+/* Frame limit in frames per second, 0 = none. Start value from EZS_PRESENT_FPS (EZ Proton), later
+ * changed live by the app's menu (EZP_SET_FPS). The game's own DXVK / vkd3d limit is turned off
+ * by EZ Proton while this layer paces.
+ * 초당 프레임 제한, 0 = 없음. 처음 값은 EZS_PRESENT_FPS(EZ Proton), 이후 앱 메뉴가 실행 중에 바꿈
+ * (EZP_SET_FPS). 이 레이어가 간격을 맞추는 동안 게임 자체 DXVK / vkd3d 제한은 EZ Proton이 끔 */
+static volatile int g_fps = -1;
+
+static int fps_limit(void)
+{
+    if (g_fps < 0) {
+        const char *e = getenv("EZS_PRESENT_FPS");
+        int v = e ? atoi(e) : 0;
+        g_fps = v < 0 ? 0 : v > 240 ? 240 : v;
+    }
+    return g_fps;
+}
+
 /* ---- instance / 인스턴스 ---- */
 struct inst {
     void *key;
@@ -184,6 +201,7 @@ struct swc {
     uint32_t pool_fam;
     struct buf b[EZP_MAX_BUFFERS];
     pthread_mutex_t mu;
+    int64_t next_ns; /* earliest time of the next present (frame limit) / 다음 present 가장 이른 시각(프레임 제한) */
 };
 #define MAX_SWC 32
 static struct swc *g_swc[MAX_SWC];
@@ -678,10 +696,14 @@ static struct swc *swc_create(struct dev *d, const VkSwapchainCreateInfoKHR *ci)
         VkResult r = VK_ERROR_INVALID_EXTERNAL_HANDLE;
         if (buf_fd >= 0) {
             /* Explicit linear layout with the AHB row pitch / AHB 줄 간격으로 linear 배치를 명시 */
+            /* Layout the app chose (linear, or Qualcomm compressed when the app's compression test
+             * switch is on and the check found that layout) / 앱이 고른 배치(linear, 또는 앱 압축 시험
+             * 스위치가 켜졌고 확인에서 그 배치가 맞았을 때 Qualcomm 압축) */
             VkSubresourceLayout pl = {0, 0, h.stride, 0, 0};
             VkImageFormatListCreateInfo flc;
             VkImageDrmFormatModifierExplicitCreateInfoEXT exp = {
-                VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT, NULL, EZP_MOD_LINEAR, 1, &pl};
+                VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT, NULL, h.modifier, 1, &pl};
+            if (i == 0) LOG("버퍼 배치 modifier 0x%llx, 줄 간격 %u", (unsigned long long)h.modifier, h.stride);
             if (fl) {
                 flc = *fl;
                 flc.pNext = NULL;
@@ -823,7 +845,11 @@ static int pump(struct swc *sc, int ms)
         memcpy(&m, pkt, sizeof m);
         int fence = (m.flags & 1u) && nf > 0 ? fds[0] : -1;
         for (int j = (fence >= 0 ? 1 : 0); j < nf; j++) close(fds[j]);
-        if (m.type == EZP_RELEASE && m.r0 < sc->count) {
+        if (m.type == EZP_SET_FPS) {
+            int v = (int)m.pattern;
+            g_fps = v < 0 ? 0 : v > 240 ? 240 : v;
+            LOG("프레임 제한 %d (0 = 없음)", g_fps);
+        } else if (m.type == EZP_RELEASE && m.r0 < sc->count) {
             pthread_mutex_lock(&sc->mu);
             struct buf *b = &sc->b[m.r0];
             if (b->fence >= 0) close(b->fence);
@@ -976,6 +1002,27 @@ static VKAPI_ATTR VkResult VKAPI_CALL ezs_QueuePresentKHR(VkQueue q, const VkPre
         if (p->sType == VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT)
             pfences = ((const VkSwapchainPresentFenceInfoEXT *)p)->pFences;
 
+    /* Frame limit: wait until this swapchain's next slot (the game's present thread waits, as
+     * DXVK's own limiter does) / 프레임 제한: 이 swapchain의 다음 차례까지 기다림(DXVK 자체 제한처럼
+     * 게임의 present 스레드가 기다림) */
+    int fps = fps_limit();
+    if (fps > 0) {
+        struct swc *first = NULL;
+        for (uint32_t i = 0; i < pi->swapchainCount && !first; i++) first = swc_of(pi->pSwapchains[i]);
+        if (first) {
+            struct timespec t;
+            clock_gettime(CLOCK_MONOTONIC, &t);
+            int64_t now = (int64_t)t.tv_sec * 1000000000ll + t.tv_nsec, step = 1000000000ll / fps;
+            if (first->next_ns > now && first->next_ns - now < 1000000000ll) {
+                struct timespec ts = {(time_t)(first->next_ns / 1000000000ll), (long)(first->next_ns % 1000000000ll)};
+                clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL);
+                now = first->next_ns;
+            }
+            /* Keep the rhythm, but never build up debt after a slow frame / 박자는 지키되 느린 프레임 뒤에
+             * 밀린 몫을 쌓지 않음 */
+            first->next_ns = (first->next_ns > now - step ? first->next_ns : now) + step;
+        }
+    }
     uint32_t fam = queue_family(d, q);
     VkPipelineStageFlags stages[32];
     uint32_t nw = pi->waitSemaphoreCount < 32 ? pi->waitSemaphoreCount : 32;

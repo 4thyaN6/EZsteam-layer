@@ -42,6 +42,14 @@
 #define R_VE_FENCE  0x04u
 #define R_B_CPU     0x08u
 
+/* Result of check C (layout of a GPU-only AHB that Vulkan reads right), EZP_MOD_INVALID = not
+ * known; compression test switch; frame limit for layers (-1 = not set)
+ * 확인 C 결과(Vulkan이 맞게 읽는 GPU 전용 AHB 배치), EZP_MOD_INVALID = 모름. 압축 시험 스위치.
+ * 레이어용 프레임 제한(-1 = 정하지 않음) */
+static volatile uint64_t g_gpu_mod = EZP_MOD_INVALID;
+static volatile int g_compress;
+static volatile int g_fps_app = -1;
+
 /* ---- report text / 보고 글 ---- */
 static char rep[EZP_MAX_PACKET - 128];
 static size_t rep_len;
@@ -493,12 +501,74 @@ static void send_e(int s)
     if (fd >= 0) close(fd);
 }
 
+/* C: GPU-only AHB (no CPU usage bits), cleared with GL to the probe's colour, then sent
+ * C: GPU 전용 AHB(CPU 용도 비트 없음)를 probe 색으로 GL에서 칠한 뒤 보냄 */
+static AHardwareBuffer *on_c_req(int s, const struct ezp_msg *m)
+{
+    struct ezp_msg h;
+    memset(&h, 0, sizeof h);
+    h.type = EZP_C_BUF;
+    AHardwareBuffer_Desc d;
+    memset(&d, 0, sizeof d);
+    d.width = m->w;
+    d.height = m->h;
+    d.layers = 1;
+    d.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
+    d.usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE;
+    AHardwareBuffer *ahb = NULL;
+    int ok = ctx != EGL_NO_CONTEXT && pClientBuffer && pCreateImage && pImageTarget &&
+             AHardwareBuffer_allocate(&d, &ahb) == 0 && ahb;
+    if (ok) {
+        EGLClientBuffer cb = pClientBuffer(ahb);
+        const EGLint a[] = {EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE};
+        EGLImageKHR img = cb ? pCreateImage(dpy, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, cb, a) : EGL_NO_IMAGE_KHR;
+        ok = img != EGL_NO_IMAGE_KHR;
+        if (ok) {
+            GLuint tex, fbo;
+            glGenTextures(1, &tex);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            pImageTarget(GL_TEXTURE_2D, (GLeglImageOES)img);
+            glGenFramebuffers(1, &fbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+            ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+            if (ok) {
+                glViewport(0, 0, (GLsizei)m->w, (GLsizei)m->h);
+                glClearColor((m->pattern & 0xff) / 255.0f, ((m->pattern >> 8) & 0xff) / 255.0f,
+                             ((m->pattern >> 16) & 0xff) / 255.0f, ((m->pattern >> 24) & 0xff) / 255.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+                glFinish();
+            }
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glDeleteFramebuffers(1, &fbo);
+            glDeleteTextures(1, &tex);
+            pDestroyImage(dpy, img);
+        }
+    }
+    if (!ok) {
+        say("C: GPU 전용 AHB 만들기/칠하기 실패");
+        send_msg(s, &h, NULL, 0, NULL, 0);
+        if (ahb) AHardwareBuffer_release(ahb);
+        return NULL;
+    }
+    AHardwareBuffer_Desc got;
+    AHardwareBuffer_describe(ahb, &got);
+    h.w = got.width;
+    h.h = got.height;
+    h.stride = got.stride * 4;
+    h.flags = 1;
+    say("C: GPU 전용 AHB 만듦, 줄 간격 %u픽셀, GL로 칠함", got.stride);
+    send_msg(s, &h, NULL, 0, NULL, 0);
+    AHardwareBuffer_sendHandleToUnixSocket(ahb, s);
+    return ahb;
+}
+
 /* One probe connection; its first message was already read by the caller
  * probe 연결 하나. 첫 메시지는 부른 쪽이 이미 읽었음 */
 static uint32_t session(int s, const struct ezp_msg *first)
 {
     uint32_t res = 0;
-    AHardwareBuffer *ahb = NULL;
+    AHardwareBuffer *ahb = NULL, *cahb = NULL;
     if (egl_open() != 0) {
         /* Still answer, so the probe does not wait / 그래도 답해 probe가 기다리지 않게 함 */
     }
@@ -542,6 +612,16 @@ static uint32_t session(int s, const struct ezp_msg *first)
             break;
         case EZP_E_FENCE_DONE:
             say("E: Vulkan이 GL 펜스 기다림 %s", m.flags ? "성공" : "실패");
+            break;
+        case EZP_C_REQ:
+            if (cahb) AHardwareBuffer_release(cahb);
+            cahb = on_c_req(s, &m);
+            break;
+        case EZP_C_DONE:
+            g_gpu_mod = m.modifier;
+            say("C: GPU 전용 AHB 배치 %s (linear %s, 압축 %s)",
+                m.modifier == EZP_MOD_INVALID ? "모름" : m.modifier == EZP_MOD_QCOM_COMPRESSED ? "Qualcomm 압축" : "linear",
+                (m.flags & 1u) ? "맞음" : "안 맞음", (m.flags & 2u) ? "맞음" : "안 맞음");
             done = 1;
             break;
         default:
@@ -551,6 +631,7 @@ static uint32_t session(int s, const struct ezp_msg *first)
         }
     }
     if (ahb) AHardwareBuffer_release(ahb);
+    if (cahb) AHardwareBuffer_release(cahb);
     egl_close();
     return res;
 }
@@ -719,12 +800,19 @@ static void comp_start(int s, const struct ezp_msg *m, char *line, size_t cap)
         d.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
         /* GPU write + sample; CPU bits keep gralloc's layout linear (what the probe verified)
          * GPU 쓰기 + 샘플. CPU 비트는 gralloc 배치를 linear로 유지(probe가 확인한 것) */
-        d.usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
-                  AHARDWAREBUFFER_USAGE_CPU_READ_RARELY | AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY;
+        /* Compression test switch: GPU-only buffers in the layout check C found (Qualcomm
+         * compressed or linear); otherwise CPU bits that keep it linear
+         * 압축 시험 스위치: 확인 C가 찾은 배치(Qualcomm 압축 또는 linear)로 GPU 전용 버퍼. 아니면 linear를
+         * 유지하는 CPU 비트 */
+        uint64_t mod = g_gpu_mod;
+        int gpu_only = g_compress && mod != EZP_MOD_INVALID;
+        d.usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE;
+        if (!gpu_only) d.usage |= AHARDWAREBUFFER_USAGE_CPU_READ_RARELY | AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY;
         struct ezp_msg h;
         memset(&h, 0, sizeof h);
         h.type = EZP_SC_BUF;
         h.r0 = i;
+        h.modifier = gpu_only ? mod : EZP_MOD_LINEAR;
         int ar = AHardwareBuffer_allocate(&d, &c->ahb[i]);
         if (ar != 0 || !c->ahb[i]) {
             ok = 0;
@@ -770,7 +858,18 @@ static void comp_start(int s, const struct ezp_msg *m, char *line, size_t cap)
         c->alive = 0;
     }
     pthread_attr_destroy(&at);
-    snprintf(line, cap, "S %d %u %u %u %u %u %u %u", c->id, c->w, c->h, c->count, m->fourcc, c->window, c->pid, stride);
+    /* Current frame limit for the new swapchain / 새 swapchain에 지금 프레임 제한 */
+    if (g_fps_app >= 0) {
+        struct ezp_msg f;
+        memset(&f, 0, sizeof f);
+        f.type = EZP_SET_FPS;
+        f.pattern = (uint32_t)g_fps_app;
+        pthread_mutex_lock(&c->wmu);
+        send_msg(s, &f, NULL, 0, NULL, 0);
+        pthread_mutex_unlock(&c->wmu);
+    }
+    snprintf(line, cap, "S %d %u %u %u %u %u %u %u %s", c->id, c->w, c->h, c->count, m->fourcc, c->window, c->pid,
+             stride, g_compress && g_gpu_mod == EZP_MOD_QCOM_COMPRESSED ? "압축" : "linear");
 }
 
 static void gl_procs(void)
@@ -1000,6 +1099,44 @@ JNIEXPORT void JNICALL Java_app_ezsteam_runtime_PresentProbe_nativeSetRect(JNIEn
             g_sc[i].rh = h;
         }
     pthread_mutex_unlock(&g_cmu);
+}
+
+/* Frame limit for all layer connections, now and for new ones (0 = none)
+ * 모든 레이어 연결의 프레임 제한, 지금과 새 연결 모두(0 = 없음) */
+JNIEXPORT void JNICALL Java_app_ezsteam_runtime_PresentProbe_nativeSetFps(JNIEnv *env, jclass cls, jint fps)
+{
+    (void)env;
+    (void)cls;
+    g_fps_app = fps < 0 ? 0 : fps;
+    pthread_mutex_lock(&g_cmu);
+    for (int i = 0; i < MAX_SC; i++)
+        if (g_sc[i].used && g_sc[i].alive) {
+            struct ezp_msg f;
+            memset(&f, 0, sizeof f);
+            f.type = EZP_SET_FPS;
+            f.pattern = (uint32_t)g_fps_app;
+            pthread_mutex_lock(&g_sc[i].wmu);
+            send_msg(g_sc[i].sock, &f, NULL, 0, NULL, 0);
+            pthread_mutex_unlock(&g_sc[i].wmu);
+        }
+    pthread_mutex_unlock(&g_cmu);
+}
+
+/* Compression test switch (next swapchains) / 압축 시험 스위치(다음 swapchain부터) */
+JNIEXPORT void JNICALL Java_app_ezsteam_runtime_PresentProbe_nativeSetCompress(JNIEnv *env, jclass cls, jboolean on)
+{
+    (void)env;
+    (void)cls;
+    g_compress = on ? 1 : 0;
+}
+
+/* Layout check C found: 0 linear, 1 Qualcomm compressed, -1 not known / 확인 C 결과: 0 linear, 1 압축, -1 모름 */
+JNIEXPORT jint JNICALL Java_app_ezsteam_runtime_PresentProbe_nativeGpuLayout(JNIEnv *env, jclass cls)
+{
+    (void)env;
+    (void)cls;
+    uint64_t m = g_gpu_mod;
+    return m == EZP_MOD_INVALID ? -1 : m == EZP_MOD_QCOM_COMPRESSED ? 1 : 0;
 }
 
 /* Live connections: id, window, presents so far, frames shown so far (4 ints each)

@@ -268,6 +268,24 @@ public class MainActivity extends Activity {
                 log("게임 화면 직접 전달 설정 실패: " + e.getMessage());
             }
         });
+        // Test switches, each a file EZ Proton reads at every game start (see ezproton):
+        // FEX TSO off (x86 memory-order emulation, faster but some games break), big cores only
+        // (PROTON_CPU_TOPOLOGY), hidraw off (PROTON_DISABLE_HIDRAW)
+        // 시험 스위치. 각각 EZ Proton이 게임 시작마다 읽는 파일(ezproton 참고): FEX TSO 끔(x86 메모리 순서
+        // 흉내, 빠르지만 일부 게임이 깨짐), 큰 코어만(PROTON_CPU_TOPOLOGY), hidraw 끔(PROTON_DISABLE_HIDRAW)
+        fileSwitch(row4, "FEX TSO(시험)", "fex-tso-off", "끔", "기본");
+        fileSwitch(row4, "CPU 배치(시험)", "cpu-big", "큰 코어만", "기본");
+        fileSwitch(row4, "HIDRAW(시험)", "hidraw-off", "끔", "기본");
+        // AHB compression test: GPU-only game buffers in the layout the start-up check found
+        // (Qualcomm compressed), less memory traffic per frame. Off by default.
+        // AHB 압축 시험: 시작 확인이 찾은 배치(Qualcomm 압축)로 GPU 전용 게임 버퍼. 프레임당 메모리 이동 감소. 기본 끔
+        Button ahb = addButton(row4, "AHB 압축(시험): " + (ahbCompress(this) ? "켬" : "끔"), null);
+        ahb.setOnClickListener(v -> {
+            boolean on = !ahbCompress(this);
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_AHB_COMPRESS, on).apply();
+            ahb.setText("AHB 압축(시험): " + (on ? "켬" : "끔"));
+            log("AHB 압축(시험): " + (on ? "켬" : "끔") + " (다음 Steam 시작부터)");
+        });
         Button io = addButton(row4, "IO 통계: " + (ioStat(this) ? "켬" : "끔"), null);
         io.setOnClickListener(v -> {
             boolean on = !ioStat(this);
@@ -713,6 +731,37 @@ public class MainActivity extends Activity {
      *  클라이언트 파일 입출력 통계(네이티브 ezs_iostat, EZS_IOSTAT=1)와 PRoot 시스템 호출 통계
      *  (PROOT_SYSSTAT=60), 기본 끔 */
     static final String KEY_IOSTAT = "iostat";
+    static final String KEY_AHB_COMPRESS = "present.ahbCompress";
+
+    static boolean ahbCompress(android.content.Context ctx) {
+        return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_AHB_COMPRESS, false);
+    }
+
+    /**
+     * Button for a switch kept as a file in ~/.local/share/ezsteam (EZ Proton reads it at every game
+     * start): present = on.
+     * ~/.local/share/ezsteam 안 파일로 두는 스위치 버튼(EZ Proton이 게임 시작마다 읽음): 있으면 켬
+     */
+    private void fileSwitch(LinearLayout row, String name, String file, String onText, String offText) {
+        File f = new File(dxNativeFile().getParentFile(), file);
+        Button b = addButton(row, name + ": " + (f.isFile() ? onText : offText), null);
+        b.setOnClickListener(v -> {
+            boolean on = !f.isFile();
+            try {
+                if (on) {
+                    File d = f.getParentFile();
+                    if (d != null && !d.isDirectory() && !d.mkdirs()) throw new IOException("폴더 없음");
+                    if (!f.createNewFile() && !f.isFile()) throw new IOException("만들 수 없음");
+                } else if (!f.delete()) {
+                    throw new IOException("지울 수 없음");
+                }
+                b.setText(name + ": " + (on ? onText : offText));
+                log(name + ": " + (on ? onText : offText) + " (다음 게임 시작부터)");
+            } catch (IOException e) {
+                log(name + " 설정 실패: " + e.getMessage());
+            }
+        });
+    }
 
     static boolean ioStat(android.content.Context ctx) {
         return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_IOSTAT, false);

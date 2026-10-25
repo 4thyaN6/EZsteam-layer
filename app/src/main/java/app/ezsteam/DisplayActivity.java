@@ -122,50 +122,197 @@ public class DisplayActivity extends Activity {
 
     private void applyGameMute() {
         app.ezsteam.runtime.PadFile pf = pad;
-        if (pf != null) pf.setGameMuted(overlayMuted || steamMenuUp);
+        if (pf == null) return;
+        pf.setGameMuted(overlayMuted || steamMenuUp || menuOpen);
+        // The Steam client too while the app menu is open (Big Picture would move behind it)
+        // 앱 메뉴가 열린 동안에는 Steam 클라이언트도(빅픽처가 뒤에서 움직임)
+        pf.setSteamMuted(menuOpen);
+    }
+
+    /** The app's own menu over the game (HOME) / 게임 위의 앱 자체 메뉴(HOME) */
+    private app.ezsteam.runtime.CompositorMenu menu;
+    private volatile boolean menuOpen;
+    /** Second press needed to end the game from the menu / 메뉴에서 게임을 끝내려면 한 번 더 눌러야 함 */
+    private boolean quitArmed;
+
+    private static final String PREF_FPS = "game.fps";
+    private static final String PREF_MATCH_RATE = "view.matchRate";
+    /** Frame limits offered (0 = none) / 고를 수 있는 프레임 제한(0 = 없음) */
+    private static final int[] FPS_CHOICES = {30, 40, 45, 60, 90, 120, 0};
+    private static final String[] FSR_OUT_NAMES = {"화면 크기", "1920x1200", "1920x1080"};
+
+    private int fpsPref() {
+        return getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getInt(PREF_FPS, 60);
+    }
+
+    private boolean matchRatePref() {
+        return getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getBoolean(PREF_MATCH_RATE, false);
     }
 
     /**
-     * HOME (GUIDE) while a game is in front: the Steam client opens its menu in its own window, but
-     * without a window manager that window stayed under the game, invisible, while both the menu
-     * and the game took the pad (2026-10-24). Here: if Steam does not ask for its window to be
-     * raised itself (_NET_ACTIVE_WINDOW, handled in XTestClient) within 400 ms, its window is raised;
-     * the game gets no pad input while the menu is up. HOME again brings the game back.
-     * 게임이 앞에 있을 때 HOME(GUIDE): Steam 클라이언트는 자기 창에 메뉴를 열지만, 창 관리자가 없어 그 창이
-     * 게임 아래에 남아 보이지 않았고 메뉴와 게임이 함께 패드를 받았음(2026-10-24). 여기서는: Steam이 400ms
-     * 안에 스스로 창을 올려 달라고 하지 않으면(_NET_ACTIVE_WINDOW, XTestClient에서 처리) 그 창을 올림.
-     * 메뉴가 올라와 있는 동안 게임에는 패드 입력을 주지 않음. HOME을 다시 누르면 게임을 되돌림
+     * Apply the frame limit: the present layer paces running games at once (direct path); the file
+     * ~/.local/share/ezsteam/fps is read by EZ Proton at the next game start (DXVK / vkd3d limit when
+     * the direct path is off); the panel refresh follows when "match" is on.
+     * 프레임 제한 적용: present 레이어가 실행 중인 게임을 바로 맞춤(직접 전달). ~/.local/share/ezsteam/fps
+     * 파일은 다음 게임 시작 때 EZ Proton이 읽음(직접 전달이 꺼져 있으면 DXVK / vkd3d 제한). "맞춤"이 켜져 있으면
+     * 패널 주사율도 따라감
      */
-    private void onHome() {
+    private void applyFps(int fps, boolean logIt) {
+        app.ezsteam.runtime.PresentProbe.setFps(fps);
+        File f = new File(RootfsInstaller.rootfsDir(this), "home/steam/.local/share/ezsteam/fps");
+        try {
+            File d = f.getParentFile();
+            if (d != null && !d.isDirectory() && !d.mkdirs()) throw new IOException("폴더 없음");
+            try (java.io.FileOutputStream o = new java.io.FileOutputStream(f)) {
+                o.write((fps + "\n").getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+            }
+        } catch (IOException e) {
+            log("프레임 제한 파일 쓰기 실패: " + e.getMessage());
+        }
+        view.setDisplayRate(matchRatePref() && fps > 0 ? fps : 0);
+        if (logIt) log("프레임 제한: " + (fps == 0 ? "없음" : fps + "fps") + (matchRatePref() && fps > 0 ? ", 화면 주사율 맞춤" : ""));
+    }
+
+    /** Rows of the app menu / 앱 메뉴의 줄 */
+    private void buildMenu() {
+        java.util.List<app.ezsteam.runtime.CompositorMenu.Item> it = new java.util.ArrayList<>();
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item("게임으로 돌아가기", null, null, null, () -> menu.hide()));
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item("확대 방식", () -> SCALE_NAMES[view.getScaleMode()],
+                () -> setScale((view.getScaleMode() + SCALE_NAMES.length - 1) % SCALE_NAMES.length),
+                () -> setScale((view.getScaleMode() + 1) % SCALE_NAMES.length), null));
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item("FSR 출력", () -> FSR_OUT_NAMES[fsrTargetPref()],
+                () -> setFsrOut((fsrTargetPref() + FSR_OUT_NAMES.length - 1) % FSR_OUT_NAMES.length),
+                () -> setFsrOut((fsrTargetPref() + 1) % FSR_OUT_NAMES.length), null));
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item("프레임 제한", () -> fpsName(fpsPref()),
+                () -> stepFps(-1), () -> stepFps(1), null));
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item("화면 주사율 맞춤", () -> matchRatePref() ? "켬" : "끔",
+                this::toggleMatchRate, this::toggleMatchRate, null));
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item("터치 패드", () -> touchPad.getVisibility() == View.VISIBLE ? "보임" : "숨김",
+                () -> setTouchPadShown(touchPad.getVisibility() != View.VISIBLE),
+                () -> setTouchPadShown(touchPad.getVisibility() != View.VISIBLE), null));
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item("키보드 열기", null, null, null, () -> {
+            menu.hide();
+            toggleKeyboard();
+        }));
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item("Steam 메뉴", null, null, null, () -> {
+            menu.hide();
+            raiseSteamOverGame();
+        }));
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item("게임 종료", () -> quitArmed ? "A를 한 번 더 누르면 종료" : "",
+                null, null, this::quitFromMenu));
+        menu.setItems(it);
+    }
+
+    private static String fpsName(int fps) {
+        return fps == 0 ? "없음" : fps + "fps";
+    }
+
+    private int fsrTargetPref() {
+        int t = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getInt(PREF_FSR_TARGET, 0);
+        return t < 0 || t >= FSR_OUT_NAMES.length ? 0 : t;
+    }
+
+    private void setScale(int m) {
+        view.setScaleMode(m);
+        saveScale(m);
+        scaleButton.setText("확대: " + SCALE_NAMES[m]);
+        log("확대 방식: " + SCALE_NAMES[m] + " (메뉴)");
+    }
+
+    private void setFsrOut(int t) {
+        getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit().putInt(PREF_FSR_TARGET, t).apply();
+        applyFsrTarget(t);
+        log("FSR 출력: " + FSR_OUT_NAMES[t] + " (메뉴)");
+    }
+
+    private void stepFps(int dir) {
+        int cur = fpsPref(), k = 0;
+        for (int i = 0; i < FPS_CHOICES.length; i++) if (FPS_CHOICES[i] == cur) k = i;
+        k = (k + dir + FPS_CHOICES.length) % FPS_CHOICES.length;
+        getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit().putInt(PREF_FPS, FPS_CHOICES[k]).apply();
+        applyFps(FPS_CHOICES[k], true);
+    }
+
+    private void toggleMatchRate() {
+        boolean on = !matchRatePref();
+        getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit().putBoolean(PREF_MATCH_RATE, on).apply();
+        applyFps(fpsPref(), true);
+    }
+
+    /** End the game from the menu: first A arms, second A kills the game process
+     *  메뉴에서 게임 끝내기: 첫 A는 준비, 두 번째 A가 게임 프로세스를 끝냄 */
+    private void quitFromMenu() {
+        if (!quitArmed) {
+            quitArmed = true;
+            return;
+        }
+        quitArmed = false;
+        java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps = lastProcs;
+        app.ezsteam.runtime.ChildProcessCounter.Proc g = ps == null ? null : gameOf(ps);
+        menu.hide();
+        if (g == null) {
+            log("메뉴: 끝낼 게임 없음");
+            return;
+        }
+        log("메뉴: 게임 " + winExeName(g) + "(" + g.pid + ") 종료");
+        android.os.Process.killProcess(g.pid);
+    }
+
+    /** Raise the Steam client's window over the game (Big Picture), game pad input held back
+     *  Steam 클라이언트 창(빅픽처)을 게임 위로 올림. 게임 패드 입력은 멈춤 */
+    private void raiseSteamOverGame() {
         XTestClient x = xtest;
         if (x == null || x.isClosed()) return;
+        int f = x.focusedWindow();
+        if (f != 0 && !x.isSteamWindow(f)) gameTopBeforeMenu = f;
         homeAt = SystemClock.elapsedRealtime();
+        int sw = x.steamWindow();
+        if (sw == 0) {
+            log("메뉴: Steam 창을 찾지 못함");
+            return;
+        }
+        log(String.format(Locale.ROOT, "메뉴: Steam 창 0x%x을 게임 위로 올림 (HOME으로 게임에 돌아감)", sw));
+        x.activate(sw);
+    }
+
+    /**
+     * HOME (GUIDE). With a game in front: the app's own menu over the game (game and Steam client
+     * get no pad input while it is open). HOME again closes it. After "Steam 메뉴" raised the Steam
+     * window, HOME brings the game back. Without a game Steam handles HOME itself (Big Picture).
+     * Decided 2026-10-24: HOME calls the compositor's menu, like gamescope.
+     * HOME(GUIDE). 게임이 앞에 있으면: 게임 위에 앱 자체 메뉴(열린 동안 게임과 Steam 클라이언트에는 패드 입력을
+     * 주지 않음). HOME을 다시 누르면 닫음. "Steam 메뉴"로 Steam 창을 올린 뒤에는 HOME이 게임을 되돌림. 게임이
+     * 없으면 Steam이 HOME을 직접 처리함(빅픽처). 2026-10-24 결정: HOME은 gamescope처럼 컴포지터 메뉴를 부름
+     */
+    private void onHome() {
+        app.ezsteam.runtime.CompositorMenu m = menu;
+        if (m == null) return;
+        if (m.isOpen()) {
+            runOnUiThread(m::hide);
+            return;
+        }
+        XTestClient x = xtest;
         if (steamMenuUp) {
             int g = gameTopBeforeMenu;
             steamMenuUp = false;
             applyGameMute();
-            if (g != 0) {
+            if (g != 0 && x != null) {
                 log(String.format(Locale.ROOT, "HOME: 게임 창 0x%x로 돌아감", g));
                 x.activate(g);
             }
             return;
         }
-        int f = x.focusedWindow();
-        // One line per press, so a report shows what HOME found / 누를 때마다 한 줄. 제보에서 HOME이 무엇을 봤는지 보임
-        log(String.format(Locale.ROOT, "HOME: 앞 창 0x%x%s", f, f == 0 ? " (없음)" : x.isSteamWindow(f) ? " (Steam, 그대로 둠)" : " (게임)"));
-        if (f == 0 || x.isSteamWindow(f)) return;
-        gameTopBeforeMenu = f;
-        final long at = homeAt;
-        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
-            if (steamMenuUp || homeAt != at) return;
-            int sw = x.steamWindow();
-            if (sw == 0) {
-                log("HOME: Steam 창을 찾지 못함");
-                return;
-            }
-            log(String.format(Locale.ROOT, "HOME: Steam 창 0x%x을 게임 위로 올림", sw));
-            x.activate(sw);
-        }, 400);
+        java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps = lastProcs;
+        boolean game = ps != null && gameOf(ps) != null;
+        int f = x != null ? x.focusedWindow() : 0;
+        log(String.format(Locale.ROOT, "HOME: 게임 %s, 앞 창 0x%x%s", game ? "실행 중" : "없음", f,
+                x != null && x.isSteamWindow(f) ? " (Steam)" : ""));
+        if (!game || (x != null && x.isSteamWindow(f))) return;
+        if (f != 0) gameTopBeforeMenu = f;
+        runOnUiThread(() -> {
+            quitArmed = false;
+            m.show();
+        });
     }
 
     /** A window was raised and focused (by Steam's request or by us) / 창을 올리고 포커스를 줌(Steam 요청 또는 우리) */
@@ -279,6 +426,17 @@ public class DisplayActivity extends Activity {
             }
         });
         root.addView(touchPad, new FrameLayout.LayoutParams(-1, -1));
+        // App menu over everything (HOME) / 모든 것 위의 앱 메뉴(HOME)
+        menu = new app.ezsteam.runtime.CompositorMenu(this);
+        menu.setListener(shown -> {
+            menuOpen = shown;
+            applyGameMute();
+            log("메뉴 " + (shown ? "열림 (게임·Steam 패드 입력 멈춤)" : "닫힘"));
+        });
+        root.post(() -> {
+            root.addView(menu, new FrameLayout.LayoutParams(-1, -1));
+            buildMenu();
+        });
 
         overlay = new LinearLayout(this);
         overlay.setOrientation(LinearLayout.VERTICAL);
@@ -805,6 +963,12 @@ public class DisplayActivity extends Activity {
                         applyGameMute();
                     });
                     log("PRESENT 대기 " + app.ezsteam.runtime.PresentProbe.GUEST_SOCKET);
+                    // Frame limit (file for EZ Proton, live for the layer) and the compression test
+                    // switch, before any game starts / 프레임 제한(EZ Proton용 파일, 레이어에는 바로)과 압축 시험
+                    // 스위치. 게임이 시작하기 전에 둠
+                    applyFps(fpsPref(), true);
+                    app.ezsteam.runtime.PresentProbe.setCompress(MainActivity.ahbCompress(this));
+                    if (MainActivity.ahbCompress(this)) log("PRESENT AHB 압축(시험) 켬: 시작 확인 C 결과가 압축이면 다음 게임부터");
                 } catch (IOException | RuntimeException e) {
                     log("PRESENT 시작 실패 (확인 없이 계속): " + e);
                 }
@@ -815,7 +979,14 @@ public class DisplayActivity extends Activity {
                 try {
                     pad = app.ezsteam.runtime.PadFile.open(c.rootfs);
                     // HOME (GUIDE) from the touch pad or a real controller / 터치 패드나 실제 컨트롤러의 HOME(GUIDE)
-                    pad.setGuideListener(this::onHome);
+                    pad.setButtonListener(b -> {
+                        if (b == app.ezsteam.runtime.PadFile.GUIDE) {
+                            onHome();
+                            return;
+                        }
+                        app.ezsteam.runtime.CompositorMenu mm = menu;
+                        if (mm != null) mm.onButton(b);
+                    });
                     final app.ezsteam.runtime.PadFile opened = pad;
                     runOnUiThread(() -> touchPad.setPad(opened));
                     log("PAD 공유 파일 " + app.ezsteam.runtime.PadFile.GUEST_PATH);

@@ -257,7 +257,45 @@ else
     export VK_ADD_LAYER_PATH="${VK_ADD_LAYER_PATH:+$VK_ADD_LAYER_PATH:}/opt/ezsteam/present"
     export VK_INSTANCE_LAYERS="${VK_INSTANCE_LAYERS:+$VK_INSTANCE_LAYERS:}VK_LAYER_EZS_present"
     echo "ezproton: 게임 화면 직접 전달 켬 (VK_INSTANCE_LAYERS=$VK_INSTANCE_LAYERS)" >&2
+    EZS_DIRECT=1
 fi
+# Steam in-game overlay check (HOME showed the Big Picture window, not the overlay, 2026-10-24):
+# the implicit Vulkan layers the game's loader will see that belong to Valve, the library each
+# one points to, whether it exists and its CPU type (ELF e_machine: b7 = aarch64, 3e = x86_64).
+# The overlay is drawn inside the game's frames by such a layer.
+# Steam 게임 내 오버레이 확인(HOME이 오버레이가 아니라 빅픽처 창을 보였음, 2026-10-24): 게임의 로더가 볼
+# Valve 소유 암시적 Vulkan 레이어, 각각이 가리키는 라이브러리, 그 파일이 있는지와 CPU 종류(ELF e_machine:
+# b7 = aarch64, 3e = x86_64). 오버레이는 이런 레이어가 게임 프레임 안에 그림
+for d in "$HOME/.local/share/vulkan/implicit_layer.d" /etc/vulkan/implicit_layer.d /usr/share/vulkan/implicit_layer.d \
+         /usr/local/share/vulkan/implicit_layer.d; do
+    for j in "$d"/*.json; do
+        [ -f "$j" ] || continue
+        grep -qi 'valve\|steam' "$j" 2>/dev/null || continue
+        nm=$(grep -o '"name"[^,]*' "$j" | head -n 1 | sed 's/.*: *"//; s/"$//')
+        lib=$(grep -o '"library_path"[^,]*' "$j" | head -n 1 | sed 's/.*: *"//; s/"$//')
+        case "$lib" in /*) lp=$lib ;; *) lp="$d/$lib" ;; esac
+        if [ -f "$lp" ]; then
+            mach=$(od -An -tx1 -j18 -N1 "$lp" 2>/dev/null | tr -d ' ')
+            st="있음, e_machine $mach"
+        else
+            st="없음"
+        fi
+        echo "ezproton: 오버레이 확인: 레이어 $nm ($j) → $lib ($st)" >&2
+    done
+done
+# Steam's overlay library in LD_PRELOAD (the Linux side of the overlay), same check
+# LD_PRELOAD 안의 Steam 오버레이 라이브러리(오버레이의 리눅스 쪽), 같은 확인
+for lp in $(echo "${LD_PRELOAD:-}" | tr ':' ' '); do
+    case "$lp" in
+        *gameoverlayrenderer*)
+            if [ -f "$lp" ]; then
+                echo "ezproton: 오버레이 확인: $lp (있음, e_machine $(od -An -tx1 -j18 -N1 "$lp" 2>/dev/null | tr -d ' '))" >&2
+            else
+                echo "ezproton: 오버레이 확인: $lp (없음)" >&2
+            fi
+            ;;
+    esac
+done
 # The client-only HID test switch (steam-run.sh) is not passed on to games
 # 클라이언트 전용 HID 시험 스위치(steam-run.sh)는 게임에 넘기지 않음
 if [ "${EZS_STEAM_HID_LOW:-0}" = 1 ]; then
@@ -270,8 +308,67 @@ fi
 # D3D12 게임 프레임 제한(vkd3d-proton, vkd3d-proton 2.14부터 VKD3D_FRAME_RATE. 0 = 제한 없음): 기본 60.
 # DX9~11용 DXVK_CONFIG 제한과 같게 함(vkd3d-proton은 그것을 읽지 않음). DX12 게임은 제한 없이 돌아
 # 기기가 뜨거워졌음(2026-10-23). EZS_FPS_LIMIT로 바꿈(나중에 제한을 푸는 앱 옵션용)
-export VKD3D_FRAME_RATE="${VKD3D_FRAME_RATE:-${EZS_FPS_LIMIT:-60}}"
-echo "ezproton: VKD3D_FRAME_RATE=$VKD3D_FRAME_RATE (DX12 프레임 제한, 0 = 없음)" >&2
+# Frame limit chosen in the app's menu (file ~/.local/share/ezsteam/fps, 0 = none, default 60).
+# With the direct path the present layer paces every API the same way and the app can change it
+# while the game runs, so DXVK's and vkd3d's own limits are turned off; otherwise they get it.
+# 앱 메뉴에서 고른 프레임 제한(파일 ~/.local/share/ezsteam/fps, 0 = 없음, 기본 60). 직접 전달이면 present
+# 레이어가 모든 API를 같은 방식으로 맞추고 게임 중에도 앱이 바꿀 수 있어 DXVK·vkd3d 자체 제한은 끔.
+# 아니면 그쪽에 줌
+FPS=${EZS_FPS_LIMIT:-$(cat "$HOME/.local/share/ezsteam/fps" 2>/dev/null || echo 60)}
+case "$FPS" in ''|*[!0-9]*) FPS=60 ;; esac
+if [ "${EZS_DIRECT:-0}" = 1 ]; then
+    export EZS_PRESENT_FPS="$FPS"
+    LIM=0
+else
+    LIM=$FPS
+fi
+[ -n "${DXVK_CONFIG:-}" ] && export DXVK_CONFIG="$(echo "$DXVK_CONFIG" | sed "s/maxFrameRate=[0-9]*/maxFrameRate=$LIM/g")"
+export VKD3D_FRAME_RATE="${VKD3D_FRAME_RATE:-$LIM}"
+echo "ezproton: 프레임 제한 ${FPS} (0 = 없음, $([ "${EZS_DIRECT:-0}" = 1 ] && echo "present 레이어가 맞춤" || echo "DXVK/vkd3d가 맞춤")), VKD3D_FRAME_RATE=$VKD3D_FRAME_RATE, DXVK_CONFIG=${DXVK_CONFIG:-}" >&2
+
+# Proton / FEX test switches (files written by the app) / Proton·FEX 시험 스위치(앱이 쓰는 파일)
+# FEX TSO off: x86 strong memory ordering is no longer emulated (faster; some games may break).
+# FEX reads its options also from FEX_<OPTION> environment variables.
+# FEX TSO 끔: x86의 강한 메모리 순서를 더 흉내 내지 않음(빠름, 일부 게임은 깨질 수 있음). FEX는 옵션을
+# FEX_<옵션> 환경 변수로도 읽음
+if [ -f "$HOME/.local/share/ezsteam/fex-tso-off" ]; then
+    export FEX_TSOENABLED=0
+    echo "ezproton: FEX TSO 끔(시험) FEX_TSOENABLED=0" >&2
+fi
+# Big cores only: the CPUs whose highest clock is above the lowest cluster's, as Wine's CPU
+# topology (PROTON_CPU_TOPOLOGY = count:list) / 큰 코어만: 최고 클럭이 가장 낮은 묶음보다 높은 CPU들을
+# Wine CPU 구성으로(PROTON_CPU_TOPOLOGY = 개수:목록)
+if [ -f "$HOME/.local/share/ezsteam/cpu-big" ]; then
+    MINF=""
+    for f in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/cpuinfo_max_freq; do
+        [ -r "$f" ] || continue
+        v=$(cat "$f")
+        [ -z "$MINF" ] || [ "$v" -lt "$MINF" ] && MINF=$v
+    done
+    BIG=""
+    N=0
+    for f in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/cpuinfo_max_freq; do
+        [ -r "$f" ] || continue
+        v=$(cat "$f")
+        c=$(echo "$f" | sed 's|.*/cpu\([0-9]*\)/cpufreq.*|\1|')
+        if [ "$v" -gt "$MINF" ]; then
+            BIG="${BIG:+$BIG,}$c"
+            N=$((N + 1))
+        fi
+    done
+    if [ "$N" -gt 0 ]; then
+        export PROTON_CPU_TOPOLOGY="$N:$BIG"
+        echo "ezproton: CPU 배치 큰 코어만(시험) PROTON_CPU_TOPOLOGY=$PROTON_CPU_TOPOLOGY" >&2
+    else
+        echo "ezproton: CPU 배치 큰 코어만(시험): 코어 클럭을 읽지 못했거나 모두 같음, 기본 유지" >&2
+    fi
+fi
+# hidraw off: Wine does not open /dev/hidraw devices (controllers go through SDL only)
+# hidraw 끔: Wine이 /dev/hidraw 장치를 열지 않음(컨트롤러는 SDL로만)
+if [ -f "$HOME/.local/share/ezsteam/hidraw-off" ]; then
+    export PROTON_DISABLE_HIDRAW=1
+    echo "ezproton: HIDRAW 끔(시험) PROTON_DISABLE_HIDRAW=1" >&2
+fi
 # Diagnosis: controller settings Steam hands to the game (SDL hints such as the list of devices to
 # ignore, Steam Input virtual pads). In one start Wine never set up its XInput device for the
 # virtual pad (no winexinput.sys in the Proton log) while earlier starts did (2026-10-23). Only

@@ -55,9 +55,11 @@ enum ezp_type {
      * 레이어 -> 앱, 레이어 연결의 첫 패킷: w h, pattern = 버퍼 수, fourcc = VkFormat, flags = 바이트 순서,
      * r0 = X 창(0 = 모름), r1 = pid */
     EZP_SWAPCHAIN = 9,
-    /* app -> layer, once per buffer: r0 = index, stride = row bytes, flags 1 = ok (0 = failed, the
-     * layer falls back); the next packet is AHardwareBuffer_sendHandleToUnixSocket's
-     * 앱 -> 레이어, 버퍼마다: r0 = 번호, stride = 줄 바이트, flags 1 = 성공(0 = 실패, 레이어는 기존 경로로).
+    /* app -> layer, once per buffer: r0 = index, stride = row bytes, modifier = DRM layout,
+     * flags 1 = ok (0 = failed, the layer falls back); the next packet is
+     * AHardwareBuffer_sendHandleToUnixSocket's
+     * 앱 -> 레이어, 버퍼마다: r0 = 번호, stride = 줄 바이트, modifier = DRM 배치, flags 1 = 성공(0 = 실패,
+     * 레이어는 기존 경로로).
      * 다음 패킷은 AHardwareBuffer_sendHandleToUnixSocket 패킷 */
     EZP_SC_BUF = 10,
     /* layer -> app: r0 = index just presented, flags 1 = sync fd attached (GPU done -> signalled)
@@ -66,7 +68,24 @@ enum ezp_type {
     /* app -> layer: r0 = index the compositor no longer reads, flags 1 = sync fd attached (GL done)
      * 앱 -> 레이어: r0 = 컴포지터가 더 읽지 않는 번호, flags 1 = sync fd 첨부(GL 끝나면 신호) */
     EZP_RELEASE = 12,
+    /* app -> layer: frame limit, pattern = frames per second (0 = none); paced in the layer
+     * 앱 -> 레이어: 프레임 제한, pattern = 초당 프레임(0 = 없음). 레이어가 간격을 맞춤 */
+    EZP_SET_FPS = 13,
+
+    /* ---- check C: GPU-only AHardwareBuffer layout (compression) / 확인 C: GPU 전용 AHB 배치(압축) ---- */
+    /* probe -> app: allocate an AHB without CPU usage and clear it with GL to pattern
+     * probe -> 앱: CPU 용도 없는 AHB를 만들고 GL로 pattern 색을 칠해 달라 */
+    EZP_C_REQ = 14,
+    /* app -> probe: header (stride, flags 1 = ok), then the AHB handle packet / 머리, 그다음 AHB 핸들 패킷 */
+    EZP_C_BUF = 15,
+    /* probe -> app: which layout read back right: flags 1 = linear, 2 = Qualcomm compressed;
+     * modifier = the one to use (EZP_MOD_INVALID = none) / 어느 배치로 맞게 읽혔는지: flags 1 = linear,
+     * 2 = Qualcomm 압축. modifier = 쓸 것(EZP_MOD_INVALID = 없음) */
+    EZP_C_DONE = 16,
 };
+
+/* Qualcomm compressed (UBWC) DRM modifier / Qualcomm 압축(UBWC) DRM modifier */
+#define EZP_MOD_QCOM_COMPRESSED 0x0500000000000001ull
 
 /* Byte order of a 32-bit game frame in memory / 32비트 게임 프레임의 메모리 바이트 순서 */
 #define EZP_ORDER_BGRA 0u

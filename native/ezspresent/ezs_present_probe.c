@@ -103,6 +103,9 @@ static int can_export_dmabuf, can_import_dmabuf, can_export_syncfd, can_import_s
 /* Use the DRM-modifier tiling (explicit row pitch on import) only when Turnip accepted it
  * Turnip이 받아들였을 때만 DRM modifier 배치(가져올 때 줄 간격 명시)를 씀 */
 static int use_drm;
+/* Memory planes of the Qualcomm compressed modifier for R8G8B8A8 (0 = not offered)
+ * R8G8B8A8용 Qualcomm 압축 modifier의 메모리 평면 수(0 = 제공 안 함) */
+static uint32_t ubwc_planes;
 
 static const char *vkr(VkResult r)
 {
@@ -241,7 +244,9 @@ static int open_device(void)
         char ml_s[512] = "";
         for (uint32_t i = 0; i < ml.drmFormatModifierCount && i < 16; i++) {
             size_t l = strlen(ml_s);
-            snprintf(ml_s + l, sizeof ml_s - l, " 0x%llx", (unsigned long long)mods[i].drmFormatModifier);
+            snprintf(ml_s + l, sizeof ml_s - l, " 0x%llx(평면 %u)", (unsigned long long)mods[i].drmFormatModifier,
+                     mods[i].drmFormatModifierPlaneCount);
+            if (mods[i].drmFormatModifier == EZP_MOD_QCOM_COMPRESSED) ubwc_planes = mods[i].drmFormatModifierPlaneCount;
         }
         P("R8G8B8A8 DRM modifier %u개:%s", ml.drmFormatModifierCount, ml_s);
     }
@@ -505,12 +510,12 @@ static int connect_app(void)
  * pitch (explicit DRM modifier layout when available, else plain linear and compare the pitch).
  * dma-buf 공유용 색 이미지. 내보내기: Turnip이 정한 linear 배치. 가져오기: 주어진 줄 간격(DRM modifier
  * 명시 배치가 있으면 그것, 없으면 일반 linear 후 간격 비교) */
-static VkImage make_image(int import, uint32_t pitch)
+static VkImage make_image_mod(int import, uint32_t pitch, uint64_t modifier)
 {
     VkSubresourceLayout pl = {0, 0, pitch, 0, 0};
     uint64_t lin = EZP_MOD_LINEAR;
     VkImageDrmFormatModifierExplicitCreateInfoEXT exp = {
-        VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT, NULL, EZP_MOD_LINEAR, 1, &pl};
+        VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT, NULL, modifier, 1, &pl};
     VkImageDrmFormatModifierListCreateInfoEXT lst = {
         VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT, NULL, 1, &lin};
     VkExternalMemoryImageCreateInfo emi = {VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO, NULL,
@@ -529,6 +534,11 @@ static VkImage make_image(int import, uint32_t pitch)
         return VK_NULL_HANDLE;
     }
     return img;
+}
+
+static VkImage make_image(int import, uint32_t pitch)
+{
+    return make_image_mod(import, pitch, EZP_MOD_LINEAR);
 }
 
 static void image_layout(VkImage img, uint32_t *pitch, uint32_t *offset, uint64_t *mod)
@@ -796,6 +806,90 @@ static int test_e(int s)
     return ok;
 }
 
+/*
+ * C: layout of a GPU-only AHardwareBuffer (no CPU usage bits, so gralloc may compress it). The app
+ * clears it with GL; Vulkan imports it once as linear and once as Qualcomm compressed and reads it
+ * back. The layout that reads right is what the compositor may use with its compression test
+ * switch (less memory traffic per frame).
+ * C: GPU 전용 AHardwareBuffer 배치(CPU 용도 비트가 없어 gralloc이 압축할 수 있음). 앱이 GL로 칠하고,
+ * Vulkan이 linear로 한 번, Qualcomm 압축으로 한 번 가져와 다시 읽음. 맞게 읽히는 배치를 컴포지터가 압축 시험
+ * 스위치에서 씀(프레임당 메모리 이동 감소)
+ */
+#define PAT_C 0xff197f2au
+static void test_c(int s)
+{
+    if (s < 0) return;
+    struct ezp_msg m = {0};
+    m.type = EZP_C_REQ;
+    m.w = TW; m.h = TH; m.pattern = PAT_C;
+    if (send_msg(s, &m, NULL, 0, NULL, 0) != 0) return;
+    int fds[EZP_MAX_FDS], nfds = 0;
+    uint32_t ok = 0;
+    uint64_t pick = EZP_MOD_INVALID;
+    struct ezp_msg h;
+    if (recv_msg(s, &h, EZP_C_BUF, fds, &nfds, NULL, 0) < 0 || h.flags == 0) {
+        P("C: 앱이 GPU 전용 AHB를 만들지 못함 — 앱 줄 참고");
+        goto out;
+    }
+    for (int i = 0; i < nfds; i++) close(fds[i]);
+    static char pkt[EZP_MAX_PACKET];
+    ssize_t n = recv_pkt(s, pkt, sizeof pkt, fds, &nfds);
+    int buf_fd = -1;
+    for (int i = 0; n >= 0 && i < nfds; i++)
+        if (buf_fd < 0 && lseek(fds[i], 0, SEEK_END) >= (off_t)h.stride * TH) buf_fd = fds[i];
+    if (buf_fd < 0 || !pGetMemoryFdProperties || !use_drm) {
+        P("C: 건너뜀 — %s", buf_fd < 0 ? "버퍼 디스크립터 없음" : "DRM modifier 가져오기 불가");
+        goto out;
+    }
+    uint64_t cand[2] = {EZP_MOD_LINEAR, EZP_MOD_QCOM_COMPRESSED};
+    for (int k = 0; k < 2; k++) {
+        if (k == 1 && ubwc_planes != 1) {
+            P("C: Qualcomm 압축 modifier 시험 안 함 (평면 %u)", ubwc_planes);
+            continue;
+        }
+        VkMemoryFdPropertiesKHR fp = {VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR, NULL, 0};
+        VkResult r = pGetMemoryFdProperties(dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, buf_fd, &fp);
+        VkImage img = r == VK_SUCCESS ? make_image_mod(1, h.stride, cand[k]) : VK_NULL_HANDLE;
+        if (!img) {
+            P("C: modifier 0x%llx 이미지 만들기 실패", (unsigned long long)cand[k]);
+            continue;
+        }
+        VkMemoryRequirements mr;
+        vkGetImageMemoryRequirements(dev, img, &mr);
+        VkMemoryDedicatedAllocateInfo ded = {VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, NULL, img, VK_NULL_HANDLE};
+        VkImportMemoryFdInfoKHR imp = {VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR, &ded,
+                                       VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, dup(buf_fd)};
+        int mt = find_mem(mr.memoryTypeBits & fp.memoryTypeBits, 0);
+        VkMemoryAllocateInfo mai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &imp, mr.size, (uint32_t)mt};
+        VkDeviceMemory mem = VK_NULL_HANDLE;
+        r = mt < 0 ? VK_ERROR_FORMAT_NOT_SUPPORTED : vkAllocateMemory(dev, &mai, NULL, &mem);
+        if (r != VK_SUCCESS && imp.fd >= 0) close(imp.fd);
+        if (r == VK_SUCCESS) r = vkBindImageMemory(dev, img, mem, 0);
+        uint32_t got = 0;
+        int match = r == VK_SUCCESS && readback_matches(img, VK_IMAGE_LAYOUT_GENERAL, outside_family(), PAT_C, &got);
+        P("C: GPU 전용 AHB를 modifier 0x%llx로 읽기 %s (0x%08x, 기대 0x%08x%s)", (unsigned long long)cand[k],
+          r != VK_SUCCESS ? "가져오기 실패" : match ? "일치" : "불일치", got, PAT_C, r != VK_SUCCESS ? "" : "");
+        if (match) {
+            ok |= k == 0 ? 1u : 2u;
+            /* Compressed wins when it reads right (that is the point) / 압축이 맞으면 압축을 씀(그게 목적) */
+            if (k == 1 || pick == EZP_MOD_INVALID) pick = cand[k];
+        }
+        vkQueueWaitIdle(queue);
+        vkDestroyImage(dev, img, NULL);
+        if (mem) vkFreeMemory(dev, mem, NULL);
+    }
+out:
+    for (int i = 0; i < nfds; i++) close(fds[i]);
+    struct ezp_msg d = {0};
+    d.type = EZP_C_DONE;
+    d.flags = ok;
+    d.modifier = pick;
+    send_msg(s, &d, NULL, 0, NULL, 0);
+    P("C: 결론 GPU 전용 버퍼 배치 %s", pick == EZP_MOD_INVALID ? "모름 (압축 시험 스위치를 켜도 linear 그대로)"
+                                       : pick == EZP_MOD_QCOM_COMPRESSED ? "Qualcomm 압축 (압축 시험 가능)"
+                                                                         : "linear (gralloc이 압축하지 않음)");
+}
+
 int main(void)
 {
     check_node("/dev/kgsl-3d0");
@@ -815,6 +909,7 @@ int main(void)
     int b_imp = 0, b_read = 0;
     int b = test_b(s, &b_imp, &b_read);
     int e = test_e(s);
+    test_c(s);
     uint32_t app = 0;
     if (s >= 0) {
         static char text[EZP_MAX_PACKET];
