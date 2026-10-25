@@ -139,7 +139,12 @@ public class DisplayActivity extends Activity {
     private static final String PREF_MATCH_RATE = "view.matchRate";
     /** Frame limits offered (0 = none) / 고를 수 있는 프레임 제한(0 = 없음) */
     private static final int[] FPS_CHOICES = {30, 40, 45, 60, 90, 120, 0};
-    private static final String[] FSR_OUT_NAMES = {"화면 크기", "1920x1200", "1920x1080"};
+    /** FSR output choices (names in R.array.fsr_out) / FSR 출력 선택(이름은 R.array.fsr_out) */
+    private static final int FSR_OUT_COUNT = 3;
+
+    private String[] fsrOutNames() {
+        return getResources().getStringArray(R.array.fsr_out);
+    }
 
     private int fpsPref() {
         return getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getInt(PREF_FPS, 60);
@@ -173,56 +178,183 @@ public class DisplayActivity extends Activity {
         if (logIt) log("프레임 제한: " + (fps == 0 ? "없음" : fps + "fps") + (matchRatePref() && fps > 0 ? ", 화면 주사율 맞춤" : ""));
     }
 
-    /** Rows of the app menu / 앱 메뉴의 줄 */
+    /** String resource, with format arguments when given / 문자열 리소스. 인자가 있으면 형식 적용 */
+    private String s(int id, Object... a) {
+        return a.length == 0 ? getString(id) : getString(id, a);
+    }
+
+    private String onOff(boolean on) {
+        return s(on ? R.string.v_on : R.string.v_off);
+    }
+
+    private static final String PREF_STATS = "view.stats";
+
+    /**
+     * Rows of the app menu. The top-bar buttons of earlier versions all live here now (user
+     * decision 2026-10-26: no bar over the game): display settings, input, diagnosis as submenus,
+     * frequent actions at the top level.
+     * 앱 메뉴의 줄. 이전 버전의 위쪽 막대 버튼은 모두 여기로 옮김(사용자 결정 2026-10-26: 게임 위 막대 없음):
+     * 화면 설정·입력·진단은 하위 메뉴, 자주 쓰는 동작은 맨 위
+     */
     private void buildMenu() {
-        java.util.List<app.ezsteam.runtime.CompositorMenu.Item> it = new java.util.ArrayList<>();
-        it.add(new app.ezsteam.runtime.CompositorMenu.Item("게임으로 돌아가기", null, null, null, () -> menu.hide()));
-        it.add(new app.ezsteam.runtime.CompositorMenu.Item("확대 방식", () -> SCALE_NAMES[view.getScaleMode()],
-                () -> setScale((view.getScaleMode() + SCALE_NAMES.length - 1) % SCALE_NAMES.length),
-                () -> setScale((view.getScaleMode() + 1) % SCALE_NAMES.length), null));
-        it.add(new app.ezsteam.runtime.CompositorMenu.Item("FSR 출력", () -> FSR_OUT_NAMES[fsrTargetPref()],
-                () -> setFsrOut((fsrTargetPref() + FSR_OUT_NAMES.length - 1) % FSR_OUT_NAMES.length),
-                () -> setFsrOut((fsrTargetPref() + 1) % FSR_OUT_NAMES.length), null));
-        it.add(new app.ezsteam.runtime.CompositorMenu.Item("프레임 제한", () -> fpsName(fpsPref()),
+        menu.setTexts(s(R.string.menu_title), s(R.string.menu_hint), s(R.string.menu_back));
+        java.util.List<app.ezsteam.runtime.CompositorMenu.Item> display = new java.util.ArrayList<>();
+        display.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_scale), () -> scaleNames()[view.getScaleMode()],
+                () -> setScale((view.getScaleMode() + SCALE_COUNT - 1) % SCALE_COUNT),
+                () -> setScale((view.getScaleMode() + 1) % SCALE_COUNT), null));
+        display.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_fsr_out), () -> fsrOutNames()[fsrTargetPref()],
+                () -> setFsrOut((fsrTargetPref() + FSR_OUT_COUNT - 1) % FSR_OUT_COUNT),
+                () -> setFsrOut((fsrTargetPref() + 1) % FSR_OUT_COUNT), null));
+        display.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_fsr_sharp), () -> fsrSharpNames()[fsrSharpIndex()],
+                () -> setFsrSharp((fsrSharpIndex() + FSR_SHARP.length - 1) % FSR_SHARP.length),
+                () -> setFsrSharp((fsrSharpIndex() + 1) % FSR_SHARP.length), null));
+        display.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_fps), () -> fpsName(fpsPref()),
                 () -> stepFps(-1), () -> stepFps(1), null));
-        it.add(new app.ezsteam.runtime.CompositorMenu.Item("화면 주사율 맞춤", () -> matchRatePref() ? "켬" : "끔",
+        display.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_match_rate), () -> onOff(matchRatePref()),
                 this::toggleMatchRate, this::toggleMatchRate, null));
-        it.add(new app.ezsteam.runtime.CompositorMenu.Item("터치 패드", () -> touchPad.getVisibility() == View.VISIBLE ? "보임" : "숨김",
+        // LSFG: the choice file EZ Proton reads at the next game start (the layer is set up per game)
+        // LSFG: 다음 게임 시작 때 EZ Proton이 읽는 선택 파일(레이어는 게임마다 설정됨)
+        display.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_lsfg), this::lsfgName,
+                () -> stepLsfg(-1), () -> stepLsfg(1), null));
+        display.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_stats), () -> onOff(statsShown),
+                this::toggleStats, this::toggleStats, null));
+
+        java.util.List<app.ezsteam.runtime.CompositorMenu.Item> input = new java.util.ArrayList<>();
+        input.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_touch_pad),
+                () -> s(touchPad.getVisibility() == View.VISIBLE ? R.string.v_shown : R.string.v_hidden),
                 () -> setTouchPadShown(touchPad.getVisibility() != View.VISIBLE),
                 () -> setTouchPadShown(touchPad.getVisibility() != View.VISIBLE), null));
-        it.add(new app.ezsteam.runtime.CompositorMenu.Item("키보드 열기", null, null, null, () -> {
+        input.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_pad_settings), null, null, null, () -> {
+            menu.hide();
+            showPadSettings();
+        }));
+        input.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_keyboard), null, null, null, () -> {
             menu.hide();
             toggleKeyboard();
         }));
-        it.add(new app.ezsteam.runtime.CompositorMenu.Item("Steam 메뉴", null, null, null, () -> {
+        input.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_mouse_lock), () -> onOff(view.hasPointerCapture()),
+                null, null, () -> {
+            menu.hide();
+            toggleMouseLock();
+        }));
+
+        java.util.List<app.ezsteam.runtime.CompositorMenu.Item> diag = new java.util.ArrayList<>();
+        diag.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_processes), null, null, null, () -> {
+            menu.hide();
+            showProcesses();
+        }));
+        diag.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_proton_log), null, null, null, () -> {
+            menu.hide();
+            showProtonLog();
+        }));
+        diag.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_app_log), () -> onOff(logScroll.getVisibility() == View.VISIBLE),
+                this::toggleLogView, this::toggleLogView, null));
+        diag.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_save_logs_pick), null, null, null, () -> {
+            menu.hide();
+            pickLogFile("ezsteam-logs-" + new java.text.SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.ROOT)
+                    .format(new java.util.Date()) + ".zip");
+        }));
+
+        java.util.List<app.ezsteam.runtime.CompositorMenu.Item> it = new java.util.ArrayList<>();
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_resume), null, null, null, () -> menu.hide()));
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_display), display));
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_input), input));
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_steam), null, null, null, () -> {
             menu.hide();
             raiseSteamOverGame();
         }));
-        it.add(new app.ezsteam.runtime.CompositorMenu.Item("게임 종료", () -> quitArmed ? "A를 한 번 더 누르면 종료" : "",
-                null, null, this::quitFromMenu));
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_save_logs), null, null, null, () -> {
+            menu.hide();
+            saveLogs();
+        }));
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_diag), diag));
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_quit_game),
+                () -> quitArmed ? s(R.string.menu_quit_again) : "", null, null, this::quitFromMenu));
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_close), null, null, null, () -> {
+            menu.hide();
+            confirmClose();
+        }));
         menu.setItems(it);
     }
 
-    private static String fpsName(int fps) {
-        return fps == 0 ? "없음" : fps + "fps";
+    /** Open the menu from touch or the screen's back (no game needed) / 터치나 화면 뒤로 가기로 메뉴를 엶(게임 없어도 됨) */
+    private void openMenu() {
+        app.ezsteam.runtime.CompositorMenu m = menu;
+        if (m == null) return;
+        if (m.isOpen()) {
+            m.onBack();
+            return;
+        }
+        XTestClient x = xtest;
+        int f = x != null ? x.focusedWindow() : 0;
+        if (f != 0 && x != null && !x.isSteamWindow(f)) gameTopBeforeMenu = f;
+        quitArmed = false;
+        m.show();
+    }
+
+    private String fpsName(int fps) {
+        return fps == 0 ? s(R.string.v_none) : s(R.string.v_fps, fps);
+    }
+
+    private String lsfgName() {
+        int n = MainActivity.lsfgMode(this);
+        return n == 0 ? s(R.string.v_off) : s(R.string.v_times, n);
+    }
+
+    /** LSFG off → 2x → 3x, for the next game start / LSFG 끔 → 2배 → 3배, 다음 게임 시작부터 */
+    private void stepLsfg(int dir) {
+        int[] modes = {0, 2, 3};
+        int cur = MainActivity.lsfgMode(this), k = 0;
+        for (int i = 0; i < modes.length; i++) if (modes[i] == cur) k = i;
+        int n = modes[(k + dir + modes.length) % modes.length];
+        String err = MainActivity.setLsfgMode(this, n);
+        log("LSFG: " + (n == 0 ? "끔" : n + "배") + " (메뉴, 다음 게임 시작부터)" + (err != null ? " 설정 실패: " + err : ""));
+        notice(s(R.string.notice_next_game));
+    }
+
+    /** Status strip on/off, kept for next time / 상태 띠 켬/끔, 다음에도 유지 */
+    private void toggleStats() {
+        statsShown = !statsShown;
+        getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit().putBoolean(PREF_STATS, statsShown).apply();
+        statsView.setVisibility(statsShown ? View.VISIBLE : View.GONE);
+    }
+
+    /** App log over the screen on/off / 화면 위 앱 로그 켬/끔 */
+    private void toggleLogView() {
+        logScroll.setVisibility(logScroll.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
     }
 
     private int fsrTargetPref() {
         int t = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getInt(PREF_FSR_TARGET, 0);
-        return t < 0 || t >= FSR_OUT_NAMES.length ? 0 : t;
+        return t < 0 || t >= FSR_OUT_COUNT ? 0 : t;
     }
 
     private void setScale(int m) {
         view.setScaleMode(m);
         saveScale(m);
-        scaleButton.setText("확대: " + SCALE_NAMES[m]);
-        log("확대 방식: " + SCALE_NAMES[m] + " (메뉴)");
+        log("확대 방식: " + scaleNames()[m] + " (메뉴)");
     }
 
     private void setFsrOut(int t) {
         getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit().putInt(PREF_FSR_TARGET, t).apply();
         applyFsrTarget(t);
-        log("FSR 출력: " + FSR_OUT_NAMES[t] + " (메뉴)");
+        log("FSR 출력: " + fsrOutNames()[t] + " (메뉴)");
+    }
+
+    /** Saved FSR sharpness as an index into FSR_SHARP / 저장된 FSR 선명도의 FSR_SHARP 번호 */
+    private int fsrSharpIndex() {
+        float v = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getFloat(PREF_FSR_SHARP, 0.2f);
+        for (int i = 0; i < FSR_SHARP.length; i++) if (Math.abs(FSR_SHARP[i] - v) < 1e-3f) return i;
+        return 1;
+    }
+
+    /** FSR 1 sharpness from the menu (RCAS stops: 0 strongest, each stop halves it), kept for next time
+     *  메뉴에서 FSR 1 선명도(RCAS 단: 0이 가장 강하고 1단마다 절반), 다음에도 유지 */
+    private void setFsrSharp(int i) {
+        float v = FSR_SHARP[i];
+        getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit().putFloat(PREF_FSR_SHARP, v).apply();
+        view.setFsrSharpness(v);
+        log("FSR 선명도: " + fsrSharpNames()[i] + " (메뉴)");
     }
 
     private void stepFps(int dir) {
@@ -334,7 +466,6 @@ public class DisplayActivity extends Activity {
     private volatile app.ezsteam.runtime.PadFile pad;
     /** On-screen touch pad over the game ([패드]) / 게임 위 화면 터치 패드([패드]) */
     private TouchPadView touchPad;
-    private Button padButton;
     /** Controller that last sent input, logged once / 마지막으로 입력한 컨트롤러, 한 번만 기록 */
     private int padDeviceLogged = -1;
     private volatile java.util.Map<Integer, Float> cpuPct = new java.util.HashMap<>();
@@ -344,9 +475,12 @@ public class DisplayActivity extends Activity {
     private final long startMs = SystemClock.elapsedRealtime();
     /** Turn on PRoot's crash report (PROOT_CRASH_LOG) / PRoot 크래시 보고(PROOT_CRASH_LOG) 켜기 */
     private static final boolean CRASH_LOG = false;
-    // Index = FramebufferView.SCALE_* / 순서 = FramebufferView.SCALE_*
-    private static final String[] SCALE_NAMES = {"선형", "바이큐빅", "바이큐빅+선명", "FSR 1"};
-    private Button scaleButton;
+    // Index = FramebufferView.SCALE_* (names in R.array.scale_modes) / 순서 = FramebufferView.SCALE_*(이름은 R.array.scale_modes)
+    private static final int SCALE_COUNT = 4;
+
+    private String[] scaleNames() {
+        return getResources().getStringArray(R.array.scale_modes);
+    }
 
     // Touch state / 터치 상태
     private boolean leftDown, twoFinger, scrolled;
@@ -357,7 +491,6 @@ public class DisplayActivity extends Activity {
     // 실제 마우스 상태: 누른 버튼(안드로이드 BUTTON_* 비트), 휠 나머지, 잠금 버튼
     private int mouseButtons;
     private float wheelV, wheelH, relRestX, relRestY;
-    private Button mouseLockButton;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -442,60 +575,17 @@ public class DisplayActivity extends Activity {
         overlay.setOrientation(LinearLayout.VERTICAL);
         root.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
 
-        LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
-        bar.setBackgroundColor(0x99000000);
+        // No button bar over the game (user decision 2026-10-26): everything is in the HOME menu,
+        // opened with the pad's HOME, the corner [≡] button or the screen's back gesture.
         // Scale mode: the last one chosen, FSR 1 when none was chosen yet (user request 2026-10-24)
-        // 확대 방식: 마지막으로 고른 것, 아직 고른 적 없으면 FSR 1(사용자 요청 2026-10-24)
+        // 게임 위 버튼 막대 없음(사용자 결정 2026-10-26): 모두 HOME 메뉴에 있음. 패드 HOME, 모서리 [≡] 버튼,
+        // 화면 뒤로 가기로 엶. 확대 방식: 마지막으로 고른 것, 아직 고른 적 없으면 FSR 1(사용자 요청 2026-10-24)
         int savedScale = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getInt(PREF_SCALE, FramebufferView.SCALE_FSR);
-        if (savedScale < 0 || savedScale >= SCALE_NAMES.length) savedScale = FramebufferView.SCALE_FSR;
+        if (savedScale < 0 || savedScale >= SCALE_COUNT) savedScale = FramebufferView.SCALE_FSR;
         view.setScaleMode(savedScale);
-        scaleButton = addButton(bar, "확대: " + SCALE_NAMES[savedScale], v -> cycleScale());
-        // Long press: FSR sharpness / 길게 누름: FSR 선명도
-        scaleButton.setOnLongClickListener(v -> {
-            chooseFsrSharpness();
-            return true;
-        });
         view.setFsrSharpness(getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getFloat(PREF_FSR_SHARP, 0.2f));
         applyFsrTarget(getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getInt(PREF_FSR_TARGET, 0));
-        addButton(bar, "키보드", v -> toggleKeyboard());
-        padButton = addButton(bar, "패드", v -> setTouchPadShown(touchPad.getVisibility() != View.VISIBLE));
-        // Long press: size (hand size) and opacity / 길게 누름: 크기(손 크기)와 투명도
-        padButton.setOnLongClickListener(v -> {
-            showPadSettings();
-            return true;
-        });
-        mouseLockButton = addButton(bar, "마우스 잠금", v -> toggleMouseLock());
-        addButton(bar, "프로세스", v -> showProcesses());
-        addButton(bar, "Proton", v -> showProtonLog());
-        addButton(bar, "로그", v -> logScroll.setVisibility(logScroll.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
-        Button saveBtn = addButton(bar, "로그 저장", v -> saveLogs());
-        // Long press: choose the place with the file picker / 길게 누름: 파일 선택 창으로 위치를 고름
-        saveBtn.setOnLongClickListener(v -> {
-            pickLogFile("ezsteam-logs-" + new java.text.SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.ROOT)
-                    .format(new java.util.Date()) + ".zip");
-            return true;
-        });
-        addButton(bar, "정보", v -> {
-            statsShown = !statsShown;
-            statsView.setVisibility(statsShown ? View.VISIBLE : View.GONE);
-        });
-        addButton(bar, "숨김", v -> setOverlayShown(false));
-        addButton(bar, "닫기", v -> confirmClose());
-        // Scrolls sideways when the buttons do not fit (narrow screens) / 버튼이 다 안 들어가면 옆으로 밀림(좁은 화면)
-        // Only as wide as the buttons, at the right: a full-width row covered the Steam client's
-        // menu (Steam, 보기, 친구 ...) in the top-left and took its touches (TOUCH log: taps above
-        // X y=32 never arrived, user report). The space left of the buttons now reaches the screen
-        // 버튼 폭만큼만, 오른쪽에 둠: 화면 전체 폭 줄이 왼쪽 위 Steam 클라이언트 메뉴(Steam, 보기, 친구 ...)를
-        // 덮어 터치를 가져갔음(TOUCH 로그: X y=32 위쪽 탭이 도착하지 않음, 사용자 보고). 이제 버튼 왼쪽
-        // 빈 곳은 화면으로 감
-        android.widget.HorizontalScrollView barScroll = new android.widget.HorizontalScrollView(this);
-        barScroll.setHorizontalScrollBarEnabled(false);
-        barScroll.addView(bar, new FrameLayout.LayoutParams(-2, -2));
-        LinearLayout.LayoutParams barLp = new LinearLayout.LayoutParams(-2, -2);
-        barLp.gravity = Gravity.END;
-        overlay.addView(barScroll, barLp);
+        statsShown = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getBoolean(PREF_STATS, true);
 
         logScroll = new ScrollView(this);
         logView = new TextView(this);
@@ -514,7 +604,8 @@ public class DisplayActivity extends Activity {
         statsView.setTypeface(Typeface.MONOSPACE);
         statsView.setTextSize(11);
         statsView.setBackgroundColor(0x99000000);
-        statsView.setText(w + "x" + h + " 시작 중");
+        statsView.setText(w + "x" + h + " " + s(R.string.stats_starting));
+        statsView.setVisibility(statsShown ? View.VISIBLE : View.GONE);
         root.addView(statsView, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START));
 
         // First-run preparation banner, top centre, shown only while an installer runs; it takes
@@ -577,14 +668,23 @@ public class DisplayActivity extends Activity {
         root.addView(setupPanel, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
         buildLaunchCover(root);
 
-        // Corner button that brings the bar back after [숨김] / [숨김] 뒤에 막대를 되돌리는 모서리 버튼
+        // Corner button that opens the HOME menu by touch (no bar any more); small and faint so it
+        // covers little of the Steam window / 터치로 HOME 메뉴를 여는 모서리 버튼(이제 막대 없음). Steam 창을
+        // 적게 가리도록 작고 흐림
         showButton = new Button(this);
         showButton.setText("≡");
         showButton.setAllCaps(false);
         showButton.setFocusable(false);
-        showButton.setAlpha(0.5f);
-        showButton.setOnClickListener(v -> setOverlayShown(true));
-        showButton.setVisibility(View.GONE);
+        showButton.setAlpha(0.35f);
+        showButton.setTextSize(13);
+        showButton.setMinWidth(0);
+        showButton.setMinimumWidth(0);
+        showButton.setMinHeight(0);
+        showButton.setMinimumHeight(0);
+        int cornerPad = (int) (8 * dp);
+        showButton.setPadding(cornerPad * 2, cornerPad / 2, cornerPad * 2, cornerPad / 2);
+        showButton.setContentDescription(s(R.string.menu_title));
+        showButton.setOnClickListener(v -> openMenu());
         root.addView(showButton, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END));
         setContentView(root);
         hideSystemBars();
@@ -639,42 +739,6 @@ public class DisplayActivity extends Activity {
         startMonitor();
     }
 
-    /** Show or hide the buttons, log and status strip / 버튼·로그·상태 띠를 보이거나 숨김 */
-    private void setOverlayShown(boolean shown) {
-        overlay.setVisibility(shown ? View.VISIBLE : View.GONE);
-        statsView.setVisibility(shown && statsShown ? View.VISIBLE : View.GONE);
-        showButton.setVisibility(shown ? View.GONE : View.VISIBLE);
-    }
-
-    private Button addButton(LinearLayout bar, String text, View.OnClickListener l) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setAllCaps(false);
-        // Compact: ten buttons in one row on a tablet / 작게: 태블릿 한 줄에 버튼 열 개
-        b.setTextSize(13);
-        b.setMinWidth(0);
-        b.setMinimumWidth(0);
-        b.setMinHeight(0);
-        b.setMinimumHeight(0);
-        int pad = (int) (10 * getResources().getDisplayMetrics().density);
-        b.setPadding(pad, pad / 2, pad, pad / 2);
-        b.setOnClickListener(l);
-        // Buttons must not take key focus from the screen view / 버튼이 화면 뷰의 키 포커스를 가져가지 않게 함
-        b.setFocusable(false);
-        bar.addView(b);
-        return b;
-    }
-
-    /** Next scaling mode: linear → bicubic → bicubic + sharpen → FSR 1 (EASU + RCAS)
-     *  다음 확대 방식: 선형 → 바이큐빅 → 바이큐빅 + 선명 → FSR 1(EASU + RCAS) */
-    private void cycleScale() {
-        int m = (view.getScaleMode() + 1) % SCALE_NAMES.length;
-        view.setScaleMode(m);
-        saveScale(m);
-        scaleButton.setText("확대: " + SCALE_NAMES[m]);
-        log("확대 방식: " + SCALE_NAMES[m]);
-    }
-
     /** Saved scale mode (FramebufferView.SCALE_*) / 저장된 확대 방식(FramebufferView.SCALE_*) */
     private static final String PREF_SCALE = "view.scale";
 
@@ -684,54 +748,19 @@ public class DisplayActivity extends Activity {
 
     private static final String PREF_FSR_SHARP = "fsr.sharp";
     private static final float[] FSR_SHARP = {0f, 0.2f, 0.5f, 1f, 2f, -1f};
-    private static final String[] FSR_SHARP_NAMES = {"0 (가장 선명)", "0.2 (FSR 기본)", "0.5", "1.0", "2.0 (약하게)", "선명화 끔 (확대만)"};
+    /** FSR sharpness names (R.array.fsr_sharp, same order as FSR_SHARP) / FSR 선명도 이름(R.array.fsr_sharp, FSR_SHARP와 같은 순서) */
+    private String[] fsrSharpNames() {
+        return getResources().getStringArray(R.array.fsr_sharp);
+    }
+
     /** FSR output: 0 = up to the display, 1 = up to 1920x1200 then linear, 2 = up to 1920x1080 then linear
      *  FSR 출력: 0 = 화면 크기까지, 1 = 1920x1200까지 뒤 선형, 2 = 1920x1080까지 뒤 선형 */
     private static final String PREF_FSR_TARGET = "fsr.target";
-    private static final String[] FSR_TARGET_NAMES = {"FSR 출력: 화면 크기까지", "FSR 출력: 1920x1200까지 + 선형 확대",
-            "FSR 출력: 1920x1080까지 + 선형 확대"};
 
     private void applyFsrTarget(int i) {
         if (i == 1) view.setFsrTarget(1920, 1200);
         else if (i == 2) view.setFsrTarget(1920, 1080);
         else view.setFsrTarget(0, 0);
-    }
-
-    /**
-     * FSR 1 sharpness (RCAS stops: 0 strongest, each stop halves it), saved for next time; also
-     * switches to FSR so the choice is seen
-     * FSR 1 선명도(RCAS 단: 0이 가장 강하고 1단마다 절반), 다음에도 유지. 고른 것이 보이도록 FSR로 바꿈
-     */
-    private void chooseFsrSharpness() {
-        new android.app.AlertDialog.Builder(this)
-                .setTitle("FSR 1 선명도 (숫자가 작을수록 선명) · 출력 크기")
-                .setItems(concat(FSR_SHARP_NAMES, FSR_TARGET_NAMES), (d, which) -> {
-                    if (which >= FSR_SHARP_NAMES.length) {
-                        // Output size items after the sharpness items / 선명도 항목 뒤의 출력 크기 항목
-                        int t = which - FSR_SHARP_NAMES.length;
-                        getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit().putInt(PREF_FSR_TARGET, t).apply();
-                        applyFsrTarget(t);
-                        view.setScaleMode(FramebufferView.SCALE_FSR);
-                    saveScale(FramebufferView.SCALE_FSR);
-                        scaleButton.setText("확대: " + SCALE_NAMES[FramebufferView.SCALE_FSR]);
-                        log("확대 방식: FSR 1, " + FSR_TARGET_NAMES[t]);
-                        return;
-                    }
-                    float v = FSR_SHARP[which];
-                    getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit().putFloat(PREF_FSR_SHARP, v).apply();
-                    view.setFsrSharpness(v);
-                    view.setScaleMode(FramebufferView.SCALE_FSR);
-                    saveScale(FramebufferView.SCALE_FSR);
-                    scaleButton.setText("확대: " + SCALE_NAMES[FramebufferView.SCALE_FSR]);
-                    log("확대 방식: FSR 1, 선명도 " + FSR_SHARP_NAMES[which]);
-                })
-                .show();
-    }
-
-    private static String[] concat(String[] a, String[] b) {
-        String[] r = java.util.Arrays.copyOf(a, a.length + b.length);
-        System.arraycopy(b, 0, r, a.length, b.length);
-        return r;
     }
 
     /** Immersive full screen (system bars hidden) / 몰입형 전체 화면(시스템 막대 숨김) */
@@ -1045,7 +1074,7 @@ public class DisplayActivity extends Activity {
                 // (2026-10-18)
                 c.rootId = true;
                 log("DEPS 필요한 라이브러리 설치 시작 (apt, 네트워크 사용)");
-                showSetup("필요한 라이브러리 설치 중", -1, "인터넷으로 시스템 라이브러리를 받음");
+                showSetup(s(R.string.setup_deps), -1, s(R.string.setup_deps_detail));
                 Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/steam-deps.sh",
                         Arrays.asList("install"), null, null);
                 try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
@@ -1054,7 +1083,7 @@ public class DisplayActivity extends Activity {
                 }
                 log("DEPS 끝 exit=" + p.waitFor());
                 // Back to the Steam start card / Steam 시작 카드로 돌아감
-                if (!steamWindowSeen) showSetup("Steam 시작 중", -1, "");
+                if (!steamWindowSeen) showSetup(s(R.string.setup_steam_start), -1, "");
             } catch (IOException | InterruptedException | RuntimeException e) {
                 log("DEPS 실패: " + e);
             } finally {
@@ -1087,7 +1116,7 @@ public class DisplayActivity extends Activity {
             log("X 입력 연결 실패: " + e);
         }
         if ("steam".equals(mode)) {
-            showSetup("Steam 시작 중", -1, "처음 실행은 Steam이 스스로 업데이트해 몇 분 걸릴 수 있음");
+            showSetup(s(R.string.setup_steam_start), -1, s(R.string.setup_steam_first));
             startSteamLogTail(c.rootfs);
         }
         // The log is hidden once the screen runs, in both modes ([로그] shows it, [로그 저장] keeps it)
@@ -1235,7 +1264,10 @@ public class DisplayActivity extends Activity {
                 }
                 return true;
             }
-            if (e.getAction() == KeyEvent.ACTION_UP) confirmClose();
+            // On-screen back opens the HOME menu (or goes back in it); closing the session is a
+            // menu row now (no bar any more) / 화면 뒤로 가기는 HOME 메뉴를 엶(열려 있으면 뒤로). 세션 닫기는 이제
+            // 메뉴 줄(막대 없음)
+            if (e.getAction() == KeyEvent.ACTION_UP) runOnUiThread(this::openMenu);
             return true;
         }
         // Text delivered as one event (some keyboards): split into key events
@@ -1292,10 +1324,10 @@ public class DisplayActivity extends Activity {
             return;
         }
         new android.app.AlertDialog.Builder(this)
-                .setTitle("Steam 종료")
-                .setMessage("화면을 닫으면 Steam과 실행 중인 게임이 모두 종료됩니다.")
-                .setPositiveButton("종료", (d, w) -> finish())
-                .setNegativeButton("취소", null)
+                .setTitle(s(R.string.dlg_close_title))
+                .setMessage(s(R.string.dlg_close_msg))
+                .setPositiveButton(s(R.string.btn_end), (d, w) -> finish())
+                .setNegativeButton(s(R.string.btn_cancel), null)
                 .show();
     }
 
@@ -1369,10 +1401,10 @@ public class DisplayActivity extends Activity {
                 out.write(data);
             }
             loadPadLayout();
-            notice("패드 배치를 불러옴");
+            notice(s(R.string.notice_pad_loaded));
         } catch (IOException | org.json.JSONException | RuntimeException e) {
             log("PAD 배치 불러오기 실패: " + e);
-            notice("패드 배치 파일이 아님: " + e.getMessage());
+            notice(s(R.string.notice_pad_bad, e.getMessage()));
         }
     }
 
@@ -1384,7 +1416,7 @@ public class DisplayActivity extends Activity {
         }
         if (!shown) touchPad.releaseAll();
         touchPad.setVisibility(shown ? View.VISIBLE : View.GONE);
-        padButton.setText(shown ? "패드 끄기" : "패드");
+        if (menu != null) menu.refresh();
     }
 
     /**
@@ -1417,9 +1449,9 @@ public class DisplayActivity extends Activity {
             cur[0] = (size.getProgress() + 50) / 100f;
             cur[1] = (alpha.getProgress() + 15) / 100f;
             cur[2] = (gapBar.getProgress() + 80) / 100f;
-            sizeText.setText("크기(손 크기) " + (size.getProgress() + 50) + "%");
-            gapText.setText("간격(조작부 사이) " + (gapBar.getProgress() + 80) + "%");
-            alphaText.setText("진하기 " + (alpha.getProgress() + 15) + "%");
+            sizeText.setText(s(R.string.pad_size, size.getProgress() + 50));
+            gapText.setText(s(R.string.pad_gap, gapBar.getProgress() + 80));
+            alphaText.setText(s(R.string.pad_alpha, alpha.getProgress() + 15));
             touchPad.setLook(cur[0], cur[1]);
             touchPad.setGap(cur[2]);
         };
@@ -1450,7 +1482,7 @@ public class DisplayActivity extends Activity {
         // 왼쪽 십자키·스틱 자리 바꾸기(바로 보이고, 저장으로 유지)
         boolean[] swap = {pp.getBoolean(PREF_PAD_SWAP, false)};
         android.widget.CheckBox swapBox = new android.widget.CheckBox(this);
-        swapBox.setText("십자키·왼쪽 스틱 자리 바꾸기");
+        swapBox.setText(s(R.string.pad_swap));
         swapBox.setChecked(swap[0]);
         swapBox.setOnCheckedChangeListener((b, on) -> {
             swap[0] = on;
@@ -1462,19 +1494,19 @@ public class DisplayActivity extends Activity {
         boolean wasShown = touchPad.getVisibility() == View.VISIBLE;
         if (!wasShown) setTouchPadShown(true);
         new android.app.AlertDialog.Builder(this)
-                .setTitle("터치 패드")
+                .setTitle(s(R.string.menu_touch_pad))
                 .setView(box)
-                .setPositiveButton("저장", (d, w) -> pp.edit()
+                .setPositiveButton(s(R.string.btn_save), (d, w) -> pp.edit()
                         .putFloat(PREF_PAD_SCALE, cur[0]).putFloat(PREF_PAD_OPACITY, cur[1])
                         .putFloat(PREF_PAD_GAP, cur[2]).putBoolean(PREF_PAD_SWAP, swap[0]).apply())
-                .setNeutralButton("배치 파일…", (d, w) -> {
+                .setNeutralButton(s(R.string.pad_layout_file), (d, w) -> {
                     // Keep the size and opacity being tried, then choose the layout
                     // 시험 중인 크기·진하기를 저장한 뒤 배치를 고름
                     pp.edit().putFloat(PREF_PAD_SCALE, cur[0]).putFloat(PREF_PAD_OPACITY, cur[1])
                             .putFloat(PREF_PAD_GAP, cur[2]).putBoolean(PREF_PAD_SWAP, swap[0]).apply();
                     showPadLayoutMenu();
                 })
-                .setNegativeButton("취소", (d, w) -> restorePadLook(pp))
+                .setNegativeButton(s(R.string.btn_cancel), (d, w) -> restorePadLook(pp))
                 .setOnCancelListener(d -> restorePadLook(pp))
                 .show();
     }
@@ -1489,9 +1521,9 @@ public class DisplayActivity extends Activity {
     /** Layout choices: import a .icp, back to the default, or default size and opacity
      *  배치 선택: .icp 불러오기, 기본 배치로, 크기·진하기 기본값 */
     private void showPadLayoutMenu() {
-        String[] items = {"배치 파일(.icp) 불러오기", "기본 배치로 되돌리기", "크기·간격·진하기·자리 기본값"};
+        String[] items = getResources().getStringArray(R.array.pad_layout_items);
         new android.app.AlertDialog.Builder(this)
-                .setTitle("터치 패드 배치")
+                .setTitle(s(R.string.pad_layout_title))
                 .setItems(items, (d, which) -> {
                     if (which == 0) {
                         pickPadLayout();
@@ -1777,8 +1809,9 @@ public class DisplayActivity extends Activity {
         }
         // The capture state changes asynchronously; show it shortly after
         // 캡처 상태는 비동기로 바뀌므로 잠시 뒤 표시함
-        view.postDelayed(() -> mouseLockButton.setText(view.hasPointerCapture() ? "마우스 잠금 해제" : "마우스 잠금"), 200);
-        log("마우스 잠금 " + (view.hasPointerCapture() ? "해제 요청" : "요청 (해제: 이 버튼을 터치)"));
+        boolean was = view.hasPointerCapture();
+        view.postDelayed(() -> notice(s(view.hasPointerCapture() ? R.string.notice_mouse_locked : R.string.notice_mouse_free)), 200);
+        log("마우스 잠금 " + (was ? "해제 요청" : "요청 (해제: 메뉴 > 입력 > 마우스 잠금)"));
     }
 
     /** Keys worth logging for input diagnosis (no text keys) / 입력 진단용으로 남길 키(글자 키 제외) */
@@ -2400,16 +2433,16 @@ public class DisplayActivity extends Activity {
             if (!replay && !steamWindowSeen) {
                 long got = Long.parseLong(m.group(1)), all = Long.parseLong(m.group(2));
                 int pct = all > 0 ? (int) (got * 100 / all) : -1;
-                showSetup("Steam 업데이트 받는 중", pct, String.format(Locale.ROOT, "%.0f / %.0f MB", got / 1024f, all / 1024f));
+                showSetup(s(R.string.setup_update_dl), pct, String.format(Locale.ROOT, "%.0f / %.0f MB", got / 1024f, all / 1024f));
             }
             return "download";
         }
         if (line.contains("Installing update") || line.contains("Extracting package")) {
-            if (!replay && !steamWindowSeen) showSetup("Steam 업데이트 설치 중", -1, "받은 파일을 풀고 있음");
+            if (!replay && !steamWindowSeen) showSetup(s(R.string.setup_update_install), -1, s(R.string.setup_update_install_detail));
             return "install";
         }
         if (line.contains("Verifying installation")) {
-            if (!replay && !steamWindowSeen) showSetup("Steam 파일 확인 중", -1, "");
+            if (!replay && !steamWindowSeen) showSetup(s(R.string.setup_verify), -1, "");
             return "verify";
         }
         if (line.contains("Set status message:") || line.matches("^\\[(----|\\s*\\d+%)\\].*")) return "status";
@@ -2420,10 +2453,10 @@ public class DisplayActivity extends Activity {
     private void onSessionLine(String line) {
         if (line.startsWith("INFO steam : 종료 rc=42")) {
             steamWindowSeen = false;
-            showSetup("Steam 업데이트 적용 중", -1, "Steam이 스스로 다시 시작함");
+            showSetup(s(R.string.setup_apply), -1, s(R.string.setup_apply_detail));
         } else if (line.startsWith("INFO steam : 시작 ") && !line.startsWith("INFO steam : 시작 1 ")) {
             steamWindowSeen = false;
-            showSetup("Steam 다시 시작 중", -1, "업데이트한 Steam을 엶");
+            showSetup(s(R.string.setup_restart), -1, s(R.string.setup_restart_detail));
         }
     }
 
@@ -2536,7 +2569,7 @@ public class DisplayActivity extends Activity {
         hint.setTextColor(0x99FFFFFF);
         hint.setTextSize(12);
         hint.setGravity(Gravity.CENTER);
-        hint.setText("옆으로 밀면 닫힘");
+        hint.setText(s(R.string.launch_swipe));
         col.addView(hint);
         launchCover.addView(col, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
         root.addView(launchCover, new FrameLayout.LayoutParams(-1, -1));
@@ -2581,7 +2614,7 @@ public class DisplayActivity extends Activity {
             return;
         }
         String kind = prepKind;
-        launchText.setText("게임 실행 준비 중" + (kind != null ? ": " + kind : "") + " · " + mmss(t));
+        launchText.setText((kind != null ? s(R.string.launch_preparing_kind, kind) : s(R.string.launch_preparing)) + " · " + mmss(t));
         // The cover already says it; the small banner would repeat it / 가림막이 이미 알리므로 작은 안내 띠는 숨김
         prepBox.setVisibility(View.GONE);
         launchCover.postDelayed(this::tickLaunchCover, 1000);
@@ -2616,10 +2649,10 @@ public class DisplayActivity extends Activity {
         if (MainActivity.prevGameEnd(this)) {
             log("앞 게임 " + name + "(" + old.pid + ") 실행 중 → 종료 (설정: 자동 종료)");
             android.os.Process.killProcess(old.pid);
-            notice("앞 게임 " + name + "을(를) 끝내고 새 게임을 시작함");
+            notice(s(R.string.notice_prev_ended, name));
         } else {
             log("앞 게임 " + name + "(" + old.pid + ") 아직 실행 중 (설정: 알림)");
-            notice("앞 게임 " + name + "이(가) 아직 실행 중임. 두 게임을 함께 돌리면 프로세스 한도로 전체가 꺼질 수 있음");
+            notice(s(R.string.notice_prev_running, name));
         }
     }
 
@@ -2637,10 +2670,7 @@ public class DisplayActivity extends Activity {
      * 커널 이름(소문자, 커널이 15자로 자름)으로 프로세스가 속한 준비 단계를 정함. 없으면 null.
      * 번호가 클수록 구체적임(먼저 보여 줌)
      */
-    private static final String[] PREP_NAMES = {
-            "설치 스크립트 확인", "Wine 환경 준비", "설치 프로그램(msiexec)", "DirectX 설치",
-            "Visual C++ 런타임 설치", ".NET Framework 설치", "OpenAL 설치", "PhysX 설치", "XNA 설치",
-            "Unreal 필수 구성 요소 설치"};
+    // Step names: R.array.prep_names, same order as prepIndexOf / 단계 이름: R.array.prep_names, prepIndexOf와 같은 순서
 
     private static int prepIndexOf(String comm) {
         String n = comm.toLowerCase(Locale.ROOT);
@@ -2699,8 +2729,7 @@ public class DisplayActivity extends Activity {
             if (pct >= 0) {
                 protonBanner = true;
                 // Progress and the next step only (user request, 2026-10-20) / 진행도와 다음 단계만(사용자 요청, 2026-10-20)
-                String t = "게임 실행 환경 준비 1/3: Proton 받는 중 " + pct + "%"
-                        + "\n다음: 기본 환경 (Wine, Visual C++)";
+                String t = s(R.string.prep_step1, pct);
                 runOnUiThread(() -> {
                     prepView.setText(t);
                     prepBox.setVisibility(View.VISIBLE);
@@ -2713,7 +2742,7 @@ public class DisplayActivity extends Activity {
         }
         // Background DirectX while a game is being played: no banner over the game
         // 게임을 하는 동안의 백그라운드 DirectX: 게임 위에 안내 띠를 띄우지 않음
-        boolean background = base != null && (base.equals(BG_DIRECTX) || base.equals(BG_BACKFILL));
+        boolean background = base != null && (base.equals(bgDirectx()) || base.equals(bgBackfill()));
         if (background && gameOf(ps) != null) {
             runOnUiThread(() -> prepBox.setVisibility(View.GONE));
             return;
@@ -2730,7 +2759,7 @@ public class DisplayActivity extends Activity {
             return;
         }
         if (best >= 0) {
-            String kind = base != null ? base : PREP_NAMES[best];
+            String kind = base != null ? base : getResources().getStringArray(R.array.prep_names)[best];
             if (prepKind == null) {
                 prepStartMs = now;
                 prepKindStartMs = now;
@@ -2755,21 +2784,17 @@ public class DisplayActivity extends Activity {
             if (best >= 1) prepFirstRun = true;
             String text;
             if (basePrepRunning && gameWaiting) {
-                text = "게임 준비 중: " + kind + " · " + mmss(now - prepStartMs) + "\n다음: 게임 시작";
+                text = s(R.string.prep_game_waiting, kind, mmss(now - prepStartMs));
             } else if (basePrepRunning && background) {
                 // Games can start now / 이제 게임을 시작할 수 있음
-                text = "게임 실행 환경 준비 3/3: " + kind + " · " + mmss(now - prepKindStartMs)
-                        + "\n게임은 지금 실행할 수 있음";
+                text = s(R.string.prep_step3, kind, mmss(now - prepKindStartMs));
             } else if (basePrepRunning) {
                 // Prepared ahead of time, no game waiting / 미리 준비 중, 기다리는 게임 없음
-                text = "게임 실행 환경 준비 2/3: " + kind + " · " + mmss(now - prepStartMs)
-                        + "\n다음: DirectX (백그라운드)";
+                text = s(R.string.prep_step2, kind, mmss(now - prepStartMs));
             } else {
                 // One wording for every start: the wait comes back at each start, so "first" misled
                 // (user report 2026-10-23) / 시작마다 같은 문구: 기다림이 시작할 때마다 있어 "첫"이 헷갈렸음(사용자 제보 2026-10-23)
-                text = "게임 실행 준비 중: " + kind
-                        + " · " + mmss(now - prepStartMs)
-                        + "\n다음: 게임 시작";
+                text = s(R.string.prep_launch, kind, mmss(now - prepStartMs));
             }
             runOnUiThread(() -> {
                 prepView.setText(text);
@@ -2797,7 +2822,14 @@ public class DisplayActivity extends Activity {
     /** Show the setup steps (Proton download, base prefix) even with no game waiting; off
      *  게임이 기다리지 않아도 준비 단계(Proton 받기, 기본 prefix)를 보여 줄지. 끔 */
     private static final boolean SHOW_SETUP_BANNERS = false;
-    private static final String BG_DIRECTX = "DirectX 설치(백그라운드)", BG_BACKFILL = "게임에 DirectX 추가(백그라운드)";
+    /** Background base steps, compared by text / 백그라운드 기본 prefix 단계, 글로 비교함 */
+    private String bgDirectx() {
+        return s(R.string.base_bg_directx);
+    }
+
+    private String bgBackfill() {
+        return s(R.string.base_bg_backfill);
+    }
 
     /** Current base prefix step for the banner, or null / 안내 띠용 현재 기본 prefix 단계, 없으면 null */
     private volatile String baseStage;
@@ -2811,23 +2843,23 @@ public class DisplayActivity extends Activity {
     private void baseStep(String line) {
         String l = line.toLowerCase(Locale.ROOT);
         String stage = baseStage;
-        if (l.contains("base prepare start")) stage = "기본 환경 준비 시작";
+        if (l.contains("base prepare start")) stage = s(R.string.base_prepare_start);
         else if (l.contains("base prepare done") || l.contains("base prepare: proton")) stage = null;
-        else if (l.contains("base build start") || l.contains("base rebuild")) stage = "기본 환경 만들기(한 번만)";
+        else if (l.contains("base build start") || l.contains("base rebuild")) stage = s(R.string.base_build);
         else if (l.contains("base redist start")) {
-            stage = l.contains("directx") ? BG_DIRECTX
-                    : l.contains("vcredist") ? "기본 환경: Visual C++ 설치(한 번만)" : "기본 환경: 재배포 설치(한 번만)";
-        } else if (l.contains("base late start")) stage = BG_DIRECTX;
-        else if (l.contains("base backfill start")) stage = BG_BACKFILL;
+            stage = l.contains("directx") ? bgDirectx()
+                    : l.contains("vcredist") ? s(R.string.base_vcredist) : s(R.string.base_redist);
+        } else if (l.contains("base late start")) stage = bgDirectx();
+        else if (l.contains("base backfill start")) stage = bgBackfill();
         else if (l.contains("base waiting: directx")) {
-            stage = "이 게임에 DirectX 추가";
+            stage = s(R.string.base_add_directx);
             gameWaiting = true;
         } else if (l.contains("base waiting: game start")) {
-            stage = "기본 환경";
+            stage = s(R.string.base_env);
             gameWaiting = true;
         }
         else if (l.contains("base copy start")) {
-            stage = "기본 환경을 게임으로 복사";
+            stage = s(R.string.base_copy);
             gameWaiting = true;
         }
         else if (l.contains("base copy done") || l.contains("base error") || l.contains("base build failed")
@@ -2847,9 +2879,9 @@ public class DisplayActivity extends Activity {
     }
     private boolean prepFirstRun;
 
-    private static String mmss(long ms) {
-        long s = ms / 1000;
-        return (s / 60) + "분 " + String.format(Locale.ROOT, "%02d", s % 60) + "초";
+    private String mmss(long ms) {
+        long sec = ms / 1000;
+        return s(R.string.fmt_mmss, sec / 60, sec % 60);
     }
 
     // ---- base prefix prepared ahead of time / 기본 prefix 미리 준비 ----
@@ -2993,12 +3025,10 @@ public class DisplayActivity extends Activity {
     private void askBaseRebuild(String from, String to) {
         log("기본 환경: Proton 업데이트 감지 " + from + " → " + to);
         runOnUiThread(() -> new android.app.AlertDialog.Builder(this)
-                .setTitle("Proton 업데이트")
-                .setMessage("Proton이 업데이트되었습니다.\n" + from + "\n→ " + to
-                        + "\n\n게임 첫 실행에 쓰는 기본 환경을 새 Proton으로 다시 만듭니다. 몇 분 걸리며, 그동안 새 게임의 "
-                        + "첫 실행은 끝날 때까지 기다립니다. 이미 실행한 게임은 영향이 없습니다.")
-                .setPositiveButton("지금 만들기", (d, w) -> startBasePrepare("Proton 업데이트"))
-                .setNegativeButton("나중에", (d, w) -> log("기본 환경: 다시 만들기 미룸 (새 게임 첫 실행 때 만들어짐)"))
+                .setTitle(s(R.string.dlg_proton_update_title))
+                .setMessage(s(R.string.dlg_proton_update_msg, from, to))
+                .setPositiveButton(s(R.string.btn_build_now), (d, w) -> startBasePrepare("Proton 업데이트"))
+                .setNegativeButton(s(R.string.btn_later), (d, w) -> log("기본 환경: 다시 만들기 미룸 (새 게임 첫 실행 때 만들어짐)"))
                 .show());
     }
 
@@ -3089,7 +3119,7 @@ public class DisplayActivity extends Activity {
         File dir = new File(RootfsInstaller.rootfsDir(this), "home/steam/ezs-logs");
         File[] fs = dir.listFiles((d, n) -> n.startsWith("steam-") && n.endsWith(".log"));
         if (fs == null || fs.length == 0) {
-            showTextWindow("Proton 로그", "Proton 로그 없음 (게임을 EZ Proton으로 실행하면 생김)");
+            showTextWindow(s(R.string.menu_proton_log), s(R.string.proton_log_none));
             return;
         }
         Arrays.sort(fs, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
@@ -3104,9 +3134,9 @@ public class DisplayActivity extends Activity {
                     tf.format(new java.util.Date(fs[i].lastModified())), fs[i].length() / 1048576f);
         }
         new android.app.AlertDialog.Builder(this)
-                .setTitle("Proton 로그 선택 (최신 순)")
+                .setTitle(s(R.string.proton_log_pick))
                 .setItems(items, (dlg, which) -> showProtonLogFile(fs[which]))
-                .setPositiveButton("닫기", null)
+                .setPositiveButton(s(R.string.btn_close), null)
                 .show();
     }
 
@@ -3123,7 +3153,7 @@ public class DisplayActivity extends Activity {
         } catch (IOException | RuntimeException e) {
             text = "읽기 실패: " + e;
         }
-        showTextWindow("Proton 로그", text);
+        showTextWindow(s(R.string.menu_proton_log), text);
     }
 
     /** Request code of the "save logs" file picker / "로그 저장" 파일 선택 창 요청 코드 */
@@ -3149,7 +3179,7 @@ public class DisplayActivity extends Activity {
         // 저장소 권한이 없으면 예전처럼 파일 선택 창
         // One save at a time / 한 번에 하나만 저장
         if (saving) {
-            notice("로그 저장 중입니다. 끝나면 알림이 뜹니다");
+            notice(s(R.string.notice_saving));
             return;
         }
         if (app.ezsteam.runtime.SharedStorage.granted(this)) {
@@ -3176,7 +3206,7 @@ public class DisplayActivity extends Activity {
                         //noinspection ResultOfMethodCallIgnored
                         if (f.lastModified() < old) f.delete();
                     }
-                    notice("로그 저장 중… (게임 폴더 검사 포함, 끝나면 알림)");
+                    notice(s(R.string.notice_saving_scan));
                     try (java.io.OutputStream os = new java.io.FileOutputStream(part)) {
                         writeLogZip(os, appLog, procs);
                     } catch (IOException | RuntimeException e) {
@@ -3198,10 +3228,10 @@ public class DisplayActivity extends Activity {
                     android.media.MediaScannerConnection.scanFile(this, gone.toArray(new String[0]), null,
                             (path, uri) -> log("미디어 목록 갱신: " + new File(path).getName()
                                     + (uri != null ? "" : (new File(path).exists() ? " (등록 안 됨)" : " (지운 파일 제거)"))));
-                    notice("로그 저장됨: Download/.EZlator/Reports/" + zip.getName());
+                    notice(s(R.string.notice_saved_at, "Download/.EZlator/Reports/" + zip.getName()));
                 } catch (IOException | RuntimeException e) {
                     log("공용 폴더 저장 실패, 파일 선택 창으로 저장: " + e);
-                    notice("공용 폴더 저장 실패, 저장 위치를 고르십시오");
+                    notice(s(R.string.notice_save_pick));
                     runOnUiThread(() -> pickLogFile("ezsteam-logs-" + stamp + ".zip"));
                 } finally {
                     saving = false;
@@ -3245,10 +3275,10 @@ public class DisplayActivity extends Activity {
         new Thread(() -> {
             try (java.io.OutputStream os = getContentResolver().openOutputStream(uri)) {
                 writeLogZip(os, appLog, procs);
-                notice("로그 저장됨");
+                notice(s(R.string.notice_saved));
             } catch (IOException | RuntimeException e) {
                 log("로그 저장 실패: " + e);
-                notice("로그 저장 실패: " + e.getMessage());
+                notice(s(R.string.notice_save_failed, e.getMessage()));
             }
         }, "ezs-log-save").start();
     }
@@ -3492,7 +3522,7 @@ public class DisplayActivity extends Activity {
         new android.app.AlertDialog.Builder(this)
                 .setTitle(title)
                 .setView(sv)
-                .setPositiveButton("닫기", null)
+                .setPositiveButton(s(R.string.btn_close), null)
                 .show();
     }
 
@@ -3516,7 +3546,7 @@ public class DisplayActivity extends Activity {
      * 열: pid, 상태(R 실행, S 대기, D 디스크 대기, T 정지), 메모리, CPU 시간, 이름
      */
     private void showProcesses() {
-        showTextWindow("자식 프로세스", processText());
+        showTextWindow(s(R.string.menu_processes), processText());
     }
 
     /** Text of the process window (also saved by [로그 저장]) / 프로세스 창 내용([로그 저장]에도 들어감) */

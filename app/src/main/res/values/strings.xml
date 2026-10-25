@@ -1,4 +1,220 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Default (English) texts. Korean is in values-ko. Diagnostic log lines and report contents stay in the code. -->
+<!-- 기본(영어) 글. 한국어는 values-ko에 있음. 진단 로그 줄과 제보 내용은 코드에 남김 -->
 <resources>
-    <string name="app_name">EZ Steam Layer</string>
+    <string name="app_name" translatable="false">EZ Steam Layer</string>
+    <string name="base_add_directx">Adding DirectX to this game</string>
+    <string name="base_bg_backfill">Adding DirectX to games (background)</string>
+    <string name="base_bg_directx">DirectX install (background)</string>
+    <string name="base_build">Building the base environment (once)</string>
+    <string name="base_copy">Copying the base environment into the game</string>
+    <string name="base_env">Base environment</string>
+    <string name="base_prepare_start">Base environment: starting</string>
+    <string name="base_redist">Base environment: redistributables (once)</string>
+    <string name="base_vcredist">Base environment: Visual C++ (once)</string>
+    <string name="btn_build_now">Build now</string>
+    <string name="btn_cancel">Cancel</string>
+    <string name="btn_cef">CEF saving</string>
+    <string name="btn_close">Close</string>
+    <string name="btn_direct">Direct game screen</string>
+    <string name="btn_draw">Draw test</string>
+    <string name="btn_driver">Install driver</string>
+    <string name="btn_dxvk_hud">DXVK HUD</string>
+    <string name="btn_end">End</string>
+    <string name="btn_gpu">GPU check</string>
+    <string name="btn_hid">Steam HID search</string>
+    <string name="btn_iostat">IO stats</string>
+    <string name="btn_later">Later</string>
+    <string name="btn_ok">OK</string>
+    <string name="btn_prepare">Prepare Steam</string>
+    <string name="btn_procs">Child processes</string>
+    <string name="btn_proot">PRoot status</string>
+    <string name="btn_rootfs">Install rootfs</string>
+    <string name="btn_save">Save</string>
+    <string name="btn_screen">Screen %1$s</string>
+    <string name="btn_setup_all">Set up all only</string>
+    <string name="btn_smoke">Environment test</string>
+    <string name="btn_speed">Speed test</string>
+    <string name="btn_steam_at">Steam at %1$s</string>
+    <string name="btn_steam_gpu">Steam UI GPU</string>
+    <string name="btn_steam_install">Install Steam</string>
+    <string name="btn_tools">Install test tools</string>
+    <string name="btn_wsi">Game screen</string>
+    <string name="dlg_close_msg">Closing the screen ends Steam and any running game.</string>
+    <string name="dlg_close_title">End Steam</string>
+    <string name="dlg_proton_update_msg">Proton was updated.\n%1$s\n→ %2$s\n\nThe base environment used for a game’s first start is made again with the new Proton. It takes a few minutes; meanwhile a new game’s first start waits for it. Games already started are not affected.</string>
+    <string name="dlg_proton_update_title">Proton update</string>
+    <string name="dx_done">Installed</string>
+    <string name="dx_failed">Failed: %1$s</string>
+    <string name="dx_failed_log">Failed (see the log)</string>
+    <string name="dx_install">Install DirectX</string>
+    <string name="dx_installed">DirectX installed</string>
+    <string name="dx_native">Use native</string>
+    <string name="dx_native_help">On: use the Microsoft DirectX files put in with [Install DirectX] (d3dx9, XAudio2 2.7, XInput 1.3 and so on). Off: use the same parts built into Proton (default). Turn it on only when an older game has sound, input or picture problems. Applies from the next game start.</string>
+    <string name="dx_need_proton">Possible after signing in to Steam and getting Proton</string>
+    <string name="dx_need_setup">Install first with [Start Steam]</string>
+    <string name="dx_no_installer">No DirectX installer (it appears once a game is downloaded)</string>
+    <string name="dx_not_installed">Not installed (see the log)</string>
+    <string name="dx_preparing">Preparing</string>
+    <string name="dx_stage_base">Making the base environment</string>
+    <string name="dx_stage_directx">Installing DirectX</string>
+    <string name="dx_stage_game">Adding to game %1$s</string>
+    <string name="dx_stage_vc">Installing Visual C++</string>
+    <string name="fmt_mmss">%1$d min %2$02d s</string>
+    <string name="fmt_name_value">%1$s: %2$s</string>
+    <string name="launch_preparing">Preparing to start the game</string>
+    <string name="launch_preparing_kind">Preparing to start the game: %1$s</string>
+    <string name="launch_swipe">Swipe sideways to close</string>
+    <string name="main_admin">Admin mode</string>
+    <string name="main_autostart">Start right away</string>
+    <string name="main_prev_game">If the last game is still on</string>
+    <string name="main_shared_lib">EZlator library</string>
+    <string name="main_start">Start Steam</string>
+    <string name="main_start_screen">Start screen</string>
+    <string name="menu_app_log">App log on screen</string>
+    <string name="menu_back">◀ Back</string>
+    <string name="menu_close">Close session (end Steam)</string>
+    <string name="menu_diag">Diagnosis</string>
+    <string name="menu_display">Display</string>
+    <string name="menu_fps">Frame limit</string>
+    <string name="menu_fsr_out">FSR output</string>
+    <string name="menu_fsr_sharp">FSR sharpness</string>
+    <string name="menu_hint">A select · ◀▶ change · B back</string>
+    <string name="menu_input">Input</string>
+    <string name="menu_keyboard">Open keyboard</string>
+    <string name="menu_lsfg">LSFG (next game)</string>
+    <string name="menu_match_rate">Match refresh rate</string>
+    <string name="menu_mouse_lock">Mouse lock</string>
+    <string name="menu_pad_settings">Touch pad settings</string>
+    <string name="menu_processes">Processes</string>
+    <string name="menu_proton_log">Proton log</string>
+    <string name="menu_quit_again">Press A again to quit</string>
+    <string name="menu_quit_game">Quit game</string>
+    <string name="menu_resume">Back to game</string>
+    <string name="menu_save_logs">Save report</string>
+    <string name="menu_save_logs_pick">Save report (choose place)</string>
+    <string name="menu_scale">Scaling</string>
+    <string name="menu_stats">Performance strip</string>
+    <string name="menu_steam">Steam menu</string>
+    <string name="menu_title">EZsteam menu</string>
+    <string name="menu_touch_pad">Touch pad</string>
+    <string name="note_channel">Steam session</string>
+    <string name="note_text">Downloads and games keep going in the background</string>
+    <string name="note_title">Steam running</string>
+    <string name="notice_mouse_free">Mouse released</string>
+    <string name="notice_mouse_locked">Mouse locked (release: menu &gt; Input &gt; Mouse lock)</string>
+    <string name="notice_next_game">Applies from the next game start</string>
+    <string name="notice_pad_bad">Not a pad layout file: %1$s</string>
+    <string name="notice_pad_loaded">Pad layout loaded</string>
+    <string name="notice_prev_ended">Ended the previous game %1$s and started the new one</string>
+    <string name="notice_prev_running">The previous game %1$s is still running. Two games at once can hit the process limit and end everything</string>
+    <string name="notice_save_failed">Saving the report failed: %1$s</string>
+    <string name="notice_save_pick">Saving to the shared folder failed, choose a place</string>
+    <string name="notice_saved">Report saved</string>
+    <string name="notice_saved_at">Report saved: %1$s</string>
+    <string name="notice_saving">Saving the report. A notice follows when done</string>
+    <string name="notice_saving_scan">Saving the report… (includes a game folder check, notice when done)</string>
+    <string name="pad_alpha">Opacity %1$d%%</string>
+    <string name="pad_gap">Spacing (between controls) %1$d%%</string>
+    <string name="pad_layout_file">Layout file…</string>
+    <string name="pad_layout_title">Touch pad layout</string>
+    <string name="pad_size">Size (hand size) %1$d%%</string>
+    <string name="pad_swap">Swap D-pad and left stick</string>
+    <string name="prep_game_waiting">Preparing game: %1$s · %2$s\nNext: game start</string>
+    <string name="prep_launch">Preparing to start the game: %1$s · %2$s\nNext: game start</string>
+    <string name="prep_step1">Game setup 1/3: downloading Proton %1$d%%\nNext: base environment (Wine, Visual C++)</string>
+    <string name="prep_step2">Game setup 2/3: %1$s · %2$s\nNext: DirectX (background)</string>
+    <string name="prep_step3">Game setup 3/3: %1$s · %2$s\nGames can start now</string>
+    <string name="proton_log_none">No Proton log (made when a game runs with EZ Proton)</string>
+    <string name="proton_log_pick">Choose a Proton log (newest first)</string>
+    <string name="sec_checks">Checks</string>
+    <string name="sec_screen">Screen tests</string>
+    <string name="sec_setup">Setup</string>
+    <string name="sec_steam">Steam and game</string>
+    <string name="sec_tests_closed">Tests ▸</string>
+    <string name="sec_tests_open">Tests ▾</string>
+    <string name="setup_apply">Applying Steam update</string>
+    <string name="setup_apply_detail">Steam restarts by itself</string>
+    <string name="setup_deps">Installing needed libraries</string>
+    <string name="setup_deps_detail">Downloading system libraries</string>
+    <string name="setup_restart">Restarting Steam</string>
+    <string name="setup_restart_detail">Opening the updated Steam</string>
+    <string name="setup_steam_first">The first start updates Steam itself and can take a few minutes</string>
+    <string name="setup_steam_start">Starting Steam</string>
+    <string name="setup_update_dl">Downloading Steam update</string>
+    <string name="setup_update_install">Installing Steam update</string>
+    <string name="setup_update_install_detail">Unpacking the downloaded files</string>
+    <string name="setup_verify">Checking Steam files</string>
+    <string name="stats_starting">starting</string>
+    <string name="task_elapsed">Elapsed %1$s</string>
+    <string name="task_keep_open">Do not close the app. Details are in the log below</string>
+    <string name="task_overall">%1$d%% done overall</string>
+    <string name="task_received">received %1$s MB</string>
+    <string name="task_setup">Setup</string>
+    <string name="test_ahb">AHB compression</string>
+    <string name="test_cpu">CPU placement</string>
+    <string name="test_fsync">Fast sync</string>
+    <string name="test_hidraw">HIDRAW</string>
+    <string name="test_tso">FEX TSO</string>
+    <string name="v_auto_end">End it</string>
+    <string name="v_big_cores">Big cores only</string>
+    <string name="v_big_picture">Big Picture</string>
+    <string name="v_default">Default</string>
+    <string name="v_fps">%1$d fps</string>
+    <string name="v_hidden">Hidden</string>
+    <string name="v_none">None</string>
+    <string name="v_normal">Normal</string>
+    <string name="v_notify">Tell me</string>
+    <string name="v_off">Off</string>
+    <string name="v_on">On</string>
+    <string name="v_reduced">Reduced</string>
+    <string name="v_shown">Shown</string>
+    <string name="v_times">%1$dx</string>
+    <string-array name="fsr_out">
+        <item>Screen size</item>
+        <item>1920x1200</item>
+        <item>1920x1080</item>
+    </string-array>
+    <string-array name="fsr_sharp">
+        <item>0 (sharpest)</item>
+        <item>0.2 (FSR default)</item>
+        <item>0.5</item>
+        <item>1.0</item>
+        <item>2.0 (light)</item>
+        <item>Sharpen off (scale only)</item>
+    </string-array>
+    <string-array name="pad_layout_items">
+        <item>Load a layout file (.icp)</item>
+        <item>Back to the default layout</item>
+        <item>Default size, spacing, opacity and place</item>
+    </string-array>
+    <string-array name="prep_names">
+        <item>Checking install scripts</item>
+        <item>Preparing Wine</item>
+        <item>Installer (msiexec)</item>
+        <item>Installing DirectX</item>
+        <item>Installing Visual C++ runtime</item>
+        <item>Installing .NET Framework</item>
+        <item>Installing OpenAL</item>
+        <item>Installing PhysX</item>
+        <item>Installing XNA</item>
+        <item>Installing Unreal prerequisites</item>
+    </string-array>
+    <string-array name="scale_modes">
+        <item>Linear</item>
+        <item>Bicubic</item>
+        <item>Bicubic + sharpen</item>
+        <item>FSR 1</item>
+    </string-array>
+    <string-array name="steam_gpu_modes">
+        <item>Off</item>
+        <item>Chromium\'s choice</item>
+        <item>ANGLE Vulkan</item>
+    </string-array>
+    <string-array name="wsi_modes">
+        <item>PutImage</item>
+        <item>SHM vsync off</item>
+        <item>SHM mailbox</item>
+        <item>SHM fifo</item>
+    </string-array>
 </resources>

@@ -85,9 +85,16 @@ public class MainActivity extends Activity {
         // opens Steam; when everything is there it opens Steam at once (user request, 2026-10-20)
         // 시작 버튼 하나: 빠진 것이 있으면 먼저 설치하고(진행 패널 표시) Steam을 엶. 다 있으면 바로 엶
         // (사용자 요청, 2026-10-20)
-        Button go = addButton(start, "Steam 시작", v -> startSteam());
+        // Top row: start and the admin switch; second row: the player's settings (UI cleanup
+        // 2026-10-26: grouped rows, admin sections with titles, test switches folded away)
+        // 맨 위 줄: 시작과 관리자 전환. 둘째 줄: 사용자 설정(UI 정리 2026-10-26: 줄 묶기, 제목 있는 관리자 구역,
+        // 시험 스위치는 접어 둠)
+        Button go = addButton(start, s(R.string.main_start), v -> startSteam());
         go.setTextSize(18);
-        Button size = addButton(start, sizeLabel(), null);
+        LinearLayout settings = new LinearLayout(this);
+        settings.setOrientation(LinearLayout.HORIZONTAL);
+        root.addView(settings, 1);
+        Button size = addButton(settings, sizeLabel(), null);
         size.setOnClickListener(v -> {
             int next = (screenSizeIndex() + 1) % SCREEN_SIZES.length;
             prefs.edit().putInt(KEY_SCREEN_SIZE, next).apply();
@@ -96,119 +103,112 @@ public class MainActivity extends Activity {
                     + " (다음 Steam 시작부터)");
         });
         // Big Picture or the normal client window at start / 시작할 때 빅픽처 또는 일반 클라이언트 창
-        Button bp = addButton(start, bigPictureLabel(bigPicture(this)), null);
+        Button bp = addButton(settings, nv(R.string.main_start_screen,
+                bigPicture(this) ? R.string.v_big_picture : R.string.v_normal), null);
         bp.setOnClickListener(v -> {
             boolean on = !bigPicture(this);
             prefs.edit().putBoolean(KEY_BIG_PICTURE, on).apply();
-            bp.setText(bigPictureLabel(on));
+            bp.setText(nv(R.string.main_start_screen, on ? R.string.v_big_picture : R.string.v_normal));
             log("Steam 시작 화면: " + (on ? "빅픽처" : "일반") + " (다음 Steam 시작부터)");
-        });
-        // A game still running when another one starts: tell (default) or end it first
-        // 다른 게임을 시작할 때 앞 게임이 아직 실행 중이면: 알림(기본) 또는 먼저 끝냄
-        Button prev = addButton(start, prevGameLabel(prevGameEnd(this)), null);
-        prev.setOnClickListener(v -> {
-            boolean end = !prevGameEnd(this);
-            prefs.edit().putBoolean(KEY_PREV_GAME_END, end).apply();
-            prev.setText(prevGameLabel(end));
-            log("앞 게임이 남아 있을 때: " + (end ? "자동 종료" : "알림만"));
         });
         // LSFG frame generation for games: off / 2x / 3x. Usable only with the user's own Lossless
         // Scaling (Steam app 993090) installed; EZ Proton reads the choice at every game start
         // 게임용 LSFG 프레임 생성: 끔 / 2배 / 3배. 사용자 자신의 Lossless Scaling(Steam 앱 993090)이 설치돼
         // 있어야 쓸 수 있음. EZ Proton이 게임을 시작할 때마다 읽음
-        Button lsfg = addButton(start, lsfgLabel(lsfgMode()), null);
+        Button lsfg = addButton(settings, lsfgLabel(lsfgMode(this)), null);
         lsfg.setOnClickListener(v -> {
-            int n = lsfgMode() == 0 ? 2 : lsfgMode() == 2 ? 3 : 0;
-            setLsfgMode(n);
+            int n = lsfgMode(this) == 0 ? 2 : lsfgMode(this) == 2 ? 3 : 0;
+            String err = setLsfgMode(this, n);
+            if (err != null) log("LSFG 설정 실패: " + err);
             lsfg.setText(lsfgLabel(n));
             log("LSFG: " + (n == 0 ? "끔" : n + "배") + " (다음 게임 시작부터, Lossless Scaling 설치 필요)");
         });
-        Button auto = addButton(start, autoLabel(prefs.getBoolean(KEY_AUTOSTART, true)), null);
+        // A game still running when another one starts: tell (default) or end it first
+        // 다른 게임을 시작할 때 앞 게임이 아직 실행 중이면: 알림(기본) 또는 먼저 끝냄
+        Button prev = addButton(settings, nv(R.string.main_prev_game,
+                prevGameEnd(this) ? R.string.v_auto_end : R.string.v_notify), null);
+        prev.setOnClickListener(v -> {
+            boolean end = !prevGameEnd(this);
+            prefs.edit().putBoolean(KEY_PREV_GAME_END, end).apply();
+            prev.setText(nv(R.string.main_prev_game, end ? R.string.v_auto_end : R.string.v_notify));
+            log("앞 게임이 남아 있을 때: " + (end ? "자동 종료" : "알림만"));
+        });
+        Button auto = addButton(settings, nv(R.string.main_autostart, onOffRes(prefs.getBoolean(KEY_AUTOSTART, true))), null);
         auto.setOnClickListener(v -> {
             boolean on = !prefs.getBoolean(KEY_AUTOSTART, true);
             prefs.edit().putBoolean(KEY_AUTOSTART, on).apply();
-            auto.setText(autoLabel(on));
+            auto.setText(nv(R.string.main_autostart, onOffRes(on)));
         });
         // Shared EZlator Steam library on/off (startup got slower with it, user report; for
         // comparing and as a way back)
         // 공유 EZlator Steam 라이브러리 켬/끔(켠 뒤 시작이 느려졌다는 사용자 보고. 비교용이자 되돌리는 방법)
-        Button shared = addButton(start, sharedLabel(prefs.getBoolean(KEY_SHARED_LIB, true)), null);
+        Button shared = addButton(settings, nv(R.string.main_shared_lib, onOffRes(prefs.getBoolean(KEY_SHARED_LIB, true))), null);
         shared.setOnClickListener(v -> {
             boolean on = !prefs.getBoolean(KEY_SHARED_LIB, true);
             prefs.edit().putBoolean(KEY_SHARED_LIB, on).apply();
-            shared.setText(sharedLabel(on));
+            shared.setText(nv(R.string.main_shared_lib, onOffRes(on)));
             log("공유 Steam 라이브러리 " + (on ? "켬" : "끔") + " (다음 Steam 시작부터)");
         });
         adminBox = new LinearLayout(this);
         adminBox.setOrientation(LinearLayout.VERTICAL);
-        Button admin = addButton(start, "관리자 모드", null);
+        Button admin = addButton(start, s(R.string.main_admin), null);
         admin.setOnClickListener(v -> setAdminShown(adminBox.getVisibility() != View.VISIBLE));
         root.addView(adminBox);
-        // Install everything without starting Steam (kept for tests): rootfs, driver, tools, Steam,
-        // skipping what is already there
-        // Steam을 시작하지 않고 모두 설치(시험용으로 남김): rootfs, 드라이버, 도구, Steam. 이미 있는 것은 건너뜀
-        LinearLayout row0 = new LinearLayout(this);
-        row0.setOrientation(LinearLayout.HORIZONTAL);
-        adminBox.addView(row0);
-        addButton(row0, "전체 준비만", v -> runTask("setup", this::doSetupAll));
 
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        adminBox.addView(row);
-        addButton(row, "rootfs 설치", v -> runTask("install", this::doInstall));
-        addButton(row, "환경 시험", v -> runTask("smoke", this::doSmoke));
-        addButton(row, "자식 프로세스", v -> runTask("procs", this::doProcsLive));
-        addButton(row, "Steam 준비", v -> runTask("prepare", this::doPrepare));
-        addButton(row, "PRoot 상태", v -> runTask("proot", this::doProotInfo));
+        // ---- Setup / 설치 ----
+        // [전체 준비만] installs everything without starting Steam (kept for tests): rootfs, driver,
+        // tools, Steam, skipping what is already there
+        // [전체 준비만]은 Steam을 시작하지 않고 모두 설치(시험용으로 남김): rootfs, 드라이버, 도구, Steam. 이미 있는 것은 건너뜀
+        Flow f = new Flow(section(adminBox, R.string.sec_setup), 5);
+        f.add(s(R.string.btn_setup_all), v -> runTask("setup", this::doSetupAll));
+        f.add(s(R.string.btn_rootfs), v -> runTask("install", this::doInstall));
+        f.add(s(R.string.btn_driver), v -> runTask("driver", this::doDriverInstall));
+        f.add(s(R.string.btn_tools), v -> runTask("tools", this::doToolsInstall));
+        f.add(s(R.string.btn_steam_install), v -> runTask("steam-install", this::doSteamInstall));
 
-        // Second row: GPU checks / 두 번째 줄: GPU 확인
-        LinearLayout row2 = new LinearLayout(this);
-        row2.setOrientation(LinearLayout.HORIZONTAL);
-        adminBox.addView(row2);
-        addButton(row2, "드라이버 설치", v -> runTask("driver", this::doDriverInstall));
-        addButton(row2, "GPU 확인", v -> runTask("gpu", this::doGpuCheck));
-        addButton(row2, "시험 도구 설치", v -> runTask("tools", this::doToolsInstall));
-        addButton(row2, "그리기 시험", v -> runTask("draw", this::doDrawTest));
+        // ---- Checks / 확인 ----
+        f = new Flow(section(adminBox, R.string.sec_checks), 4);
+        f.add(s(R.string.btn_smoke), v -> runTask("smoke", this::doSmoke));
+        f.add(s(R.string.btn_procs), v -> runTask("procs", this::doProcsLive));
+        f.add(s(R.string.btn_prepare), v -> runTask("prepare", this::doPrepare));
+        f.add(s(R.string.btn_proot), v -> runTask("proot", this::doProotInfo));
+        f.add(s(R.string.btn_gpu), v -> runTask("gpu", this::doGpuCheck));
+        f.add(s(R.string.btn_draw), v -> runTask("draw", this::doDrawTest));
+        f.add(s(R.string.btn_speed), v -> runTask("speed", this::doSpeedTest));
 
-        // Third row: live display test per X screen size (16:10 like the device, then the device's own size)
-        // 세 번째 줄: X 화면 크기별 실시간 화면 시험(기기와 같은 16:10, 마지막은 기기 자체 해상도)
-        LinearLayout row3 = new LinearLayout(this);
-        row3.setOrientation(LinearLayout.HORIZONTAL);
-        adminBox.addView(row3);
-        addButton(row3, "화면 1280x800", v -> openDisplay(1280, 800));
-        addButton(row3, "화면 1920x1200", v -> openDisplay(1920, 1200));
-        addButton(row3, "화면 2560x1600", v -> openDisplay(2560, 1600));
+        // ---- Screen tests: live display per X screen size (16:10 like the device, then the
+        // device's own size) and Steam at a fixed size ----
+        // ---- 화면 시험: X 화면 크기별 실시간 화면(기기와 같은 16:10, 마지막은 기기 자체 해상도)과 크기를 고정한 Steam ----
+        f = new Flow(section(adminBox, R.string.sec_screen), 4);
+        f.add(s(R.string.btn_screen, "1280x800"), v -> openDisplay(1280, 800));
+        f.add(s(R.string.btn_screen, "1920x1200"), v -> openDisplay(1920, 1200));
+        f.add(s(R.string.btn_screen, "2560x1600"), v -> openDisplay(2560, 1600));
         int[] nat = nativeSize();
-        addButton(row3, "화면 " + nat[0] + "x" + nat[1], v -> openDisplay(nat[0], nat[1]));
+        f.add(s(R.string.btn_screen, nat[0] + "x" + nat[1]), v -> openDisplay(nat[0], nat[1]));
+        f.add(s(R.string.btn_steam_at, "1280x800"), v -> openSteam(1280, 800));
+        f.add(s(R.string.btn_steam_at, "1920x1200"), v -> openSteam(1920, 1200));
 
-        // Fourth row: Valve Linux ARM64 Steam client (downloaded by the device from Valve)
-        // 네 번째 줄: Valve Linux ARM64 Steam 클라이언트(기기가 Valve에서 직접 받음)
-        LinearLayout row4 = new LinearLayout(this);
-        row4.setOrientation(LinearLayout.HORIZONTAL);
-        adminBox.addView(row4);
-        addButton(row4, "Steam 설치", v -> runTask("steam-install", this::doSteamInstall));
-        addButton(row4, "Steam 실행 1280x800", v -> openSteam(1280, 800));
-        addButton(row4, "Steam 실행 1920x1200", v -> openSteam(1920, 1200));
-        addButton(row4, "속도 시험", v -> runTask("speed", this::doSpeedTest));
-        Button cef = addButton(row4, cefLabel(cefSlim(this)), null);
+        // ---- Steam and game settings / Steam·게임 설정 ----
+        f = new Flow(section(adminBox, R.string.sec_steam), 4);
+        Button cef = f.add(nv(R.string.btn_cef, onOffRes(cefSlim(this))), null);
         cef.setOnClickListener(v -> {
             boolean on = !cefSlim(this);
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_CEF_SLIM, on).apply();
-            cef.setText(cefLabel(on));
+            cef.setText(nv(R.string.btn_cef, onOffRes(on)));
             log("CEF 절감 " + (on ? "켬: " + CEF_SLIM_FLAGS : "끔") + " (다음 Steam 실행부터)");
         });
-        // Test: Steam UI drawn with the GPU (off → Chromium's choice → ANGLE on Vulkan)
-        // 시험: Steam 화면을 GPU로 그림(끔 → Chromium 선택 → Vulkan 위 ANGLE)
-        Button gpu = addButton(row4, "Steam 화면 GPU: " + STEAM_GPU_MODES[steamGpu(this)][0], null);
+        // Steam UI drawn with the GPU (off → Chromium's choice → ANGLE on Vulkan)
+        // Steam 화면을 GPU로 그림(끔 → Chromium 선택 → Vulkan 위 ANGLE)
+        Button gpu = f.add(s(R.string.fmt_name_value, s(R.string.btn_steam_gpu),
+                getResources().getStringArray(R.array.steam_gpu_modes)[steamGpu(this)]), null);
         gpu.setOnClickListener(v -> {
             int m = (steamGpu(this) + 1) % STEAM_GPU_MODES.length;
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(KEY_STEAM_GPU, m).apply();
-            gpu.setText("Steam 화면 GPU: " + STEAM_GPU_MODES[m][0]);
+            gpu.setText(s(R.string.fmt_name_value, s(R.string.btn_steam_gpu),
+                    getResources().getStringArray(R.array.steam_gpu_modes)[m]));
             log("Steam 화면 GPU(시험) " + STEAM_GPU_MODES[m][0]
                     + (m == 0 ? "" : ": " + STEAM_GPU_MODES[m][1]) + " (다음 Steam 실행부터)");
         });
-        // Diagnosis: the client's file I/O summary with its busiest written paths, once a minute
-        // 진단: 클라이언트 파일 입출력 요약과 쓰기가 많은 경로를 1분마다 기록
         // Fewer controller (HID) discovery rounds in the Steam client. Big Picture printed "Using udev
         // for HIDAPI joystick device discovery" 12,000-21,000 times a minute (normal window about
         // 1,700) while PRoot sat near 70 % (normal window 10-20 %), 2026-10-23. On by default since
@@ -220,34 +220,12 @@ public class MainActivity extends Activity {
         // (2026-10-23). 2026-10-25부터 기본 켬: udev 대역(steam-run.sh)으로 빅픽처 HID 초기화 반복이 멈췄고
         // (대기 PRoot 약 64% -> 6%) 빅픽처에서 패드가 동작함(사용자 확인). Steam 클라이언트에만 적용하고 게임은
         // 기본값 그대로. 끄면 클라이언트 원래 기본값
-        Button hid = addButton(row4, "Steam HID 찾기: " + (steamHidLow(this) ? "줄임" : "기본"), null);
+        Button hid = f.add(nv(R.string.btn_hid, steamHidLow(this) ? R.string.v_reduced : R.string.v_default), null);
         hid.setOnClickListener(v -> {
             boolean on = !steamHidLow(this);
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_STEAM_HID_LOW, on).apply();
-            hid.setText("Steam HID 찾기: " + (on ? "줄임" : "기본"));
+            hid.setText(nv(R.string.btn_hid, on ? R.string.v_reduced : R.string.v_default));
             log("Steam HID 찾기: " + (on ? "줄임" : "기본") + " (다음 Steam 시작부터)");
-        });
-        // Test switch: Wine fsync with our futex_waitv stand-in (native/ezsfsync); a file EZ Proton
-        // reads at every game start. Off by default.
-        // 시험 스위치: futex_waitv 대체(native/ezsfsync)로 Wine fsync 사용. EZ Proton이 게임 시작마다 읽는
-        // 파일. 기본 끔
-        File shimFile = new File(dxNativeFile().getParentFile(), "fsync-shim");
-        Button sync = addButton(row4, "빠른 동기화(시험): " + (shimFile.isFile() ? "켬" : "끔"), null);
-        sync.setOnClickListener(v -> {
-            boolean on = !shimFile.isFile();
-            try {
-                if (on) {
-                    File d = shimFile.getParentFile();
-                    if (d != null && !d.isDirectory() && !d.mkdirs()) throw new IOException("폴더 없음");
-                    if (!shimFile.createNewFile() && !shimFile.isFile()) throw new IOException("만들 수 없음");
-                } else if (!shimFile.delete()) {
-                    throw new IOException("지울 수 없음");
-                }
-                sync.setText("빠른 동기화(시험): " + (on ? "켬" : "끔"));
-                log("빠른 동기화(시험): " + (on ? "켬" : "끔") + " (다음 게임 시작부터)");
-            } catch (IOException e) {
-                log("빠른 동기화 설정 실패: " + e.getMessage());
-            }
         });
         // Game frames straight to the app compositor (present layer, zero copy). On by default
         // (the device check passed: path 1-b); the file "present-off" turns it off, then the X11
@@ -255,7 +233,7 @@ public class MainActivity extends Activity {
         // 게임 프레임을 앱 컴포지터로 바로 보냄(present 레이어, 0복사). 기본 켬(기기 확인 통과: 1-b 경로).
         // "present-off" 파일이 있으면 끄고 지금까지의 X11 소프트웨어 출력을 씀. EZ Proton이 게임 시작마다 읽음
         File presentOff = new File(dxNativeFile().getParentFile(), "present-off");
-        Button direct = addButton(row4, "게임 화면 직접 전달: " + (presentOff.isFile() ? "끔" : "켬"), null);
+        Button direct = f.add(nv(R.string.btn_direct, onOffRes(!presentOff.isFile())), null);
         direct.setOnClickListener(v -> {
             boolean on = presentOff.isFile();
             try {
@@ -266,46 +244,16 @@ public class MainActivity extends Activity {
                     if (d != null && !d.isDirectory() && !d.mkdirs()) throw new IOException("폴더 없음");
                     if (!presentOff.createNewFile() && !presentOff.isFile()) throw new IOException("만들 수 없음");
                 }
-                direct.setText("게임 화면 직접 전달: " + (on ? "켬" : "끔"));
+                direct.setText(nv(R.string.btn_direct, onOffRes(on)));
                 log("게임 화면 직접 전달: " + (on ? "켬(0복사)" : "끔(기존 X11 출력)") + " (다음 게임 시작부터)");
             } catch (IOException e) {
                 log("게임 화면 직접 전달 설정 실패: " + e.getMessage());
             }
         });
-        // Test switches, each a file EZ Proton reads at every game start (see ezproton):
-        // FEX TSO off (x86 memory-order emulation, faster but some games break), big cores only
-        // (PROTON_CPU_TOPOLOGY), hidraw off (PROTON_DISABLE_HIDRAW)
-        // 시험 스위치. 각각 EZ Proton이 게임 시작마다 읽는 파일(ezproton 참고): FEX TSO 끔(x86 메모리 순서
-        // 흉내, 빠르지만 일부 게임이 깨짐), 큰 코어만(PROTON_CPU_TOPOLOGY), hidraw 끔(PROTON_DISABLE_HIDRAW)
-        fileSwitch(row4, "FEX TSO(시험)", "fex-tso-off", "끔", "기본");
-        fileSwitch(row4, "CPU 배치(시험)", "cpu-big", "큰 코어만", "기본");
-        fileSwitch(row4, "HIDRAW(시험)", "hidraw-off", "끔", "기본");
-        // AHB compression test: GPU-only game buffers in the layout the start-up check found
-        // (Qualcomm compressed), less memory traffic per frame. Off by default.
-        // AHB 압축 시험: 시작 확인이 찾은 배치(Qualcomm 압축)로 GPU 전용 게임 버퍼. 프레임당 메모리 이동 감소. 기본 끔
-        Button ahb = addButton(row4, "AHB 압축(시험): " + (ahbCompress(this) ? "켬" : "끔"), null);
-        ahb.setOnClickListener(v -> {
-            boolean on = !ahbCompress(this);
-            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_AHB_COMPRESS, on).apply();
-            ahb.setText("AHB 압축(시험): " + (on ? "켬" : "끔"));
-            log("AHB 압축(시험): " + (on ? "켬" : "끔") + " (다음 Steam 시작부터)");
-        });
-        Button io = addButton(row4, "IO 통계: " + (ioStat(this) ? "켬" : "끔"), null);
-        io.setOnClickListener(v -> {
-            boolean on = !ioStat(this);
-            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_IOSTAT, on).apply();
-            io.setText("IO 통계: " + (on ? "켬" : "끔"));
-            log("IO 통계 " + (on ? "켬(앱 로그 ezs-io:, PROOT_STAT 줄, 1분마다)" : "끔") + " (다음 Steam 실행부터)");
-        });
-
-        // Fifth row: how games hand finished frames to the X server, and the DXVK overlay
-        // (both read when Steam starts, so they apply from the next [Steam 실행])
-        // 다섯 번째 줄: 게임이 완성된 화면을 X 서버에 넘기는 방식, DXVK 표시줄
-        // (둘 다 Steam 시작 때 읽으므로 다음 [Steam 실행]부터 적용됨)
-        LinearLayout row5 = new LinearLayout(this);
-        row5.setOrientation(LinearLayout.HORIZONTAL);
-        adminBox.addView(row5);
-        Button wsi = addButton(row5, wsiLabel(wsiMode(this)), null);
+        // How games hand finished frames to the X server (X11 path), and the DXVK overlay (both
+        // read when Steam starts) / 게임이 완성된 화면을 X 서버에 넘기는 방식(X11 경로)과 DXVK 표시줄(둘 다 Steam
+        // 시작 때 읽음)
+        Button wsi = f.add(wsiLabel(wsiMode(this)), null);
         wsi.setOnClickListener(v -> {
             int next = (wsiIndex(wsiMode(this)) + 1) % WSI_MODES.length;
             String m = WSI_MODES[next][0];
@@ -316,12 +264,58 @@ public class MainActivity extends Activity {
                     + " DXVK_CONFIG=" + (WSI_MODES[next][4].isEmpty() ? "(없음)" : WSI_MODES[next][4])
                     + " (다음 Steam 실행부터)");
         });
-        Button hud = addButton(row5, hudLabel(dxvkHud(this)), null);
+        Button hud = f.add(nv(R.string.btn_dxvk_hud, onOffRes(dxvkHud(this))), null);
         hud.setOnClickListener(v -> {
             boolean on = !dxvkHud(this);
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_DXVK_HUD, on).apply();
-            hud.setText(hudLabel(on));
+            hud.setText(nv(R.string.btn_dxvk_hud, onOffRes(on)));
             log("DXVK HUD " + (on ? "켬: DXVK_HUD=" + DXVK_HUD_VALUE : "끔") + " (다음 Steam 실행부터)");
+        });
+        // Diagnosis: the client's file I/O summary and PRoot's stop counts, once a minute
+        // 진단: 클라이언트 파일 입출력 요약과 PRoot 정지 집계를 1분마다 기록
+        Button io = f.add(nv(R.string.btn_iostat, onOffRes(ioStat(this))), null);
+        io.setOnClickListener(v -> {
+            boolean on = !ioStat(this);
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_IOSTAT, on).apply();
+            io.setText(nv(R.string.btn_iostat, onOffRes(on)));
+            log("IO 통계 " + (on ? "켬(앱 로그 ezs-io:, PROOT_STAT 줄, 1분마다)" : "끔") + " (다음 Steam 실행부터)");
+        });
+
+        // ---- Test switches, folded (user decision 2026-10-26: kept, out of the way). Each one
+        // had no effect or a risk on the test device: FEX TSO off froze a game, big cores only
+        // left 2 CPUs on a 2+6 chip, AHB compression is not done by this gralloc, fast sync and
+        // hidraw off showed no clear gain. Files / settings EZ Proton or the app read at start.
+        // ---- 시험 스위치, 접어 둠(사용자 결정 2026-10-26: 남기되 눈에 띄지 않게). 시험 기기에서 효과가 없거나
+        // 위험했음: FEX TSO 끔은 게임이 멈춤, 큰 코어만은 2+6 칩에서 CPU 2개만 남김, AHB 압축은 이 gralloc이 하지
+        // 않음, 빠른 동기화·hidraw 끔은 뚜렷한 이득 없음. EZ Proton이나 앱이 시작 때 읽는 파일·설정 ----
+        LinearLayout testBox = new LinearLayout(this);
+        testBox.setOrientation(LinearLayout.VERTICAL);
+        testBox.setVisibility(prefs.getBoolean(KEY_TESTS_SHOWN, false) ? View.VISIBLE : View.GONE);
+        Button tests = new Button(this);
+        tests.setAllCaps(false);
+        tests.setText(s(testBox.getVisibility() == View.VISIBLE ? R.string.sec_tests_open : R.string.sec_tests_closed));
+        tests.setOnClickListener(v -> {
+            boolean shown = testBox.getVisibility() != View.VISIBLE;
+            testBox.setVisibility(shown ? View.VISIBLE : View.GONE);
+            prefs.edit().putBoolean(KEY_TESTS_SHOWN, shown).apply();
+            tests.setText(s(shown ? R.string.sec_tests_open : R.string.sec_tests_closed));
+        });
+        adminBox.addView(tests, new LinearLayout.LayoutParams(-2, -2));
+        adminBox.addView(testBox);
+        f = new Flow(testBox, 5);
+        fileSwitch(f, s(R.string.test_fsync), "fsync-shim", R.string.v_on, R.string.v_off);
+        fileSwitch(f, s(R.string.test_tso), "fex-tso-off", R.string.v_off, R.string.v_default);
+        fileSwitch(f, s(R.string.test_cpu), "cpu-big", R.string.v_big_cores, R.string.v_default);
+        fileSwitch(f, s(R.string.test_hidraw), "hidraw-off", R.string.v_off, R.string.v_default);
+        // AHB compression test: GPU-only game buffers in the layout the start-up check found
+        // (Qualcomm compressed). Off by default; this device's gralloc keeps them linear.
+        // AHB 압축 시험: 시작 확인이 찾은 배치(Qualcomm 압축)로 GPU 전용 게임 버퍼. 기본 끔. 이 기기 gralloc은 linear로 둠
+        Button ahb = f.add(nv(R.string.test_ahb, onOffRes(ahbCompress(this))), null);
+        ahb.setOnClickListener(v -> {
+            boolean on = !ahbCompress(this);
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_AHB_COMPRESS, on).apply();
+            ahb.setText(nv(R.string.test_ahb, onOffRes(on)));
+            log("AHB 압축(시험): " + (on ? "켬" : "끔") + " (다음 Steam 시작부터)");
         });
 
         // Screenshot area for the drawing test / 그리기 시험 화면 캡처 영역
@@ -457,12 +451,8 @@ public class MainActivity extends Activity {
     }
 
     private String sizeLabel() {
-        int[] s = steamSize();
-        return "화면 " + s[0] + "x" + s[1];
-    }
-
-    private static String sharedLabel(boolean on) {
-        return "EZlator 라이브러리: " + (on ? "켬" : "끔");
+        int[] sz = steamSize();
+        return s(R.string.btn_screen, sz[0] + "x" + sz[1]);
     }
 
     /** Shared EZlator Steam library wanted (DisplayActivity) / 공유 EZlator Steam 라이브러리 사용 여부 */
@@ -483,9 +473,6 @@ public class MainActivity extends Activity {
         return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_PREV_GAME_END, false);
     }
 
-    private static String prevGameLabel(boolean end) {
-        return "앞 게임 남으면: " + (end ? "자동 종료" : "알림");
-    }
 
     static final String KEY_STEAM_HID_LOW = "steam.hidLow";
 
@@ -498,13 +485,6 @@ public class MainActivity extends Activity {
         return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_BIG_PICTURE, false);
     }
 
-    private static String bigPictureLabel(boolean on) {
-        return "시작 화면: " + (on ? "빅픽처" : "일반");
-    }
-
-    private static String autoLabel(boolean on) {
-        return "바로 실행: " + (on ? "켬" : "끔");
-    }
 
     /** X server and tools from [시험 도구 설치] are in the rootfs / [시험 도구 설치]의 X 서버·도구가 rootfs에 있음 */
     private boolean toolsInstalled() {
@@ -747,9 +727,9 @@ public class MainActivity extends Activity {
      * start): present = on.
      * ~/.local/share/ezsteam 안 파일로 두는 스위치 버튼(EZ Proton이 게임 시작마다 읽음): 있으면 켬
      */
-    private void fileSwitch(LinearLayout row, String name, String file, String onText, String offText) {
+    private void fileSwitch(Flow row, String name, String file, int onRes, int offRes) {
         File f = new File(dxNativeFile().getParentFile(), file);
-        Button b = addButton(row, name + ": " + (f.isFile() ? onText : offText), null);
+        Button b = row.add(s(R.string.fmt_name_value, name, s(f.isFile() ? onRes : offRes)), null);
         b.setOnClickListener(v -> {
             boolean on = !f.isFile();
             try {
@@ -760,8 +740,8 @@ public class MainActivity extends Activity {
                 } else if (!f.delete()) {
                     throw new IOException("지울 수 없음");
                 }
-                b.setText(name + ": " + (on ? onText : offText));
-                log(name + ": " + (on ? onText : offText) + " (다음 게임 시작부터)");
+                b.setText(s(R.string.fmt_name_value, name, s(on ? onRes : offRes)));
+                log(name + ": " + s(on ? onRes : offRes) + " (다음 게임 시작부터)");
             } catch (IOException e) {
                 log(name + " 설정 실패: " + e.getMessage());
             }
@@ -777,9 +757,6 @@ public class MainActivity extends Activity {
         return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_CEF_SLIM, true);
     }
 
-    private static String cefLabel(boolean on) {
-        return "CEF 절감: " + (on ? "켬" : "끔");
-    }
 
     static final String KEY_WSI = "wsi_mode";
     static final String KEY_DXVK_HUD = "dxvk_hud";
@@ -835,8 +812,8 @@ public class MainActivity extends Activity {
         return 0;
     }
 
-    private static String wsiLabel(String key) {
-        return "게임 화면: " + WSI_MODES[wsiIndex(key)][1];
+    private String wsiLabel(String key) {
+        return s(R.string.fmt_name_value, s(R.string.btn_wsi), getResources().getStringArray(R.array.wsi_modes)[wsiIndex(key)]);
     }
 
     /** DXVK overlay on or off (default off) / DXVK 표시줄 켬 또는 끔(기본 끔) */
@@ -844,9 +821,6 @@ public class MainActivity extends Activity {
         return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_DXVK_HUD, false);
     }
 
-    private static String hudLabel(boolean on) {
-        return "DXVK HUD: " + (on ? "켬" : "끔");
-    }
 
     private Button addButton(LinearLayout row, String text, View.OnClickListener l) {
         Button b = new Button(this);
@@ -855,6 +829,61 @@ public class MainActivity extends Activity {
         b.setOnClickListener(l);
         row.addView(b, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         return b;
+    }
+
+    /** String resource, with format arguments when given / 문자열 리소스. 인자가 있으면 형식 적용 */
+    private String s(int id, Object... a) {
+        return a.length == 0 ? getString(id) : getString(id, a);
+    }
+
+    /** "name: value" from two string resources / 문자열 리소스 두 개로 "이름: 값" */
+    private String nv(int name, int value) {
+        return s(R.string.fmt_name_value, s(name), s(value));
+    }
+
+    private static int onOffRes(boolean on) {
+        return on ? R.string.v_on : R.string.v_off;
+    }
+
+    static final String KEY_TESTS_SHOWN = "admin.tests";
+
+    /** Titled admin section; returns the box its rows go into / 제목이 있는 관리자 구역. 줄이 들어갈 상자를 돌려줌 */
+    private LinearLayout section(LinearLayout parent, int title) {
+        TextView t = new TextView(this);
+        t.setText(s(title));
+        t.setTextSize(13);
+        t.setAlpha(0.7f);
+        int pad = (int) (6 * getResources().getDisplayMetrics().density);
+        t.setPadding(pad, pad * 2, pad, pad / 2);
+        parent.addView(t);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        parent.addView(box);
+        return box;
+    }
+
+    /** Buttons in rows of at most max, a new row when one is full / 한 줄에 최대 max개, 차면 새 줄 */
+    private final class Flow {
+        private final LinearLayout box;
+        private final int max;
+        private LinearLayout row;
+        private int n;
+
+        Flow(LinearLayout box, int max) {
+            this.box = box;
+            this.max = max;
+        }
+
+        Button add(String text, View.OnClickListener l) {
+            if (row == null || n == max) {
+                row = new LinearLayout(MainActivity.this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                box.addView(row);
+                n = 0;
+            }
+            n++;
+            return addButton(row, text, l);
+        }
     }
 
     /** Body of a background task / 백그라운드 작업 본체 */
@@ -889,7 +918,7 @@ public class MainActivity extends Activity {
         row.setGravity(android.view.Gravity.CENTER_VERTICAL);
         row.setPadding(0, (int) (4 * dp), 0, (int) (4 * dp));
         dxButton = new Button(this);
-        dxButton.setText("DirectX 설치");
+        dxButton.setText(s(R.string.dx_install));
         dxButton.setTypeface(Typeface.DEFAULT_BOLD);
         dxButton.setOnClickListener(v -> installDirectX());
         row.addView(dxButton);
@@ -908,7 +937,7 @@ public class MainActivity extends Activity {
         dxNativeBox.setOrientation(LinearLayout.HORIZONTAL);
         dxNativeBox.setGravity(android.view.Gravity.CENTER_VERTICAL);
         dxNative = new android.widget.CheckBox(this);
-        dxNative.setText("Native 실행");
+        dxNative.setText(s(R.string.dx_native));
         dxNative.setChecked(getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_DX_NATIVE, false));
         dxNative.setOnCheckedChangeListener((b, on) -> setDxNative(on));
         dxNativeBox.addView(dxNative);
@@ -921,14 +950,12 @@ public class MainActivity extends Activity {
         circle.setShape(android.graphics.drawable.GradientDrawable.OVAL);
         circle.setStroke((int) (1.5f * dp), 0xFF888888);
         help.setBackground(circle);
-        String tip = "켜면 [DirectX 설치]로 넣은 Microsoft DirectX 파일(d3dx9, XAudio2 2.7, XInput 1.3 등)을 씀. "
-                + "끄면 Proton에 들어 있는 같은 기능을 씀(기본). 오래된 일부 게임에서 소리·입력·화면이 이상할 때만 켜 보기. "
-                + "다음 게임 시작부터 적용";
+        String tip = s(R.string.dx_native_help);
         // Hover or long press shows the short help; a tap shows it in a dialog
         // 커서를 대거나 길게 누르면 짧은 도움말, 누르면 대화 상자로 보여 줌
         help.setTooltipText(tip);
         help.setOnClickListener(v -> new android.app.AlertDialog.Builder(this)
-                .setTitle("Native 실행").setMessage(tip).setPositiveButton("확인", null).show());
+                .setTitle(s(R.string.dx_native)).setMessage(tip).setPositiveButton(s(R.string.btn_ok), null).show());
         LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(hs, hs);
         hp.leftMargin = (int) (4 * dp);
         dxNativeBox.addView(help, hp);
@@ -942,30 +969,33 @@ public class MainActivity extends Activity {
     private void refreshDirectXRow() {
         boolean done = dxInstalled();
         dxButton.setEnabled(!dxRunning && !done);
-        dxButton.setText(done ? "DirectX 설치됨" : "DirectX 설치");
+        dxButton.setText(s(done ? R.string.dx_installed : R.string.dx_install));
         dxNativeBox.setVisibility(done ? View.VISIBLE : View.GONE);
         if (done) setDxNative(dxNative.isChecked());
     }
 
     /** Save the choice and write or remove the file ezproton reads / 선택을 저장하고 ezproton이 읽는 파일을 쓰거나 지움 */
     /** LSFG choice file read by EZ Proton (0 = off) / EZ Proton이 읽는 LSFG 선택 파일(0 = 끔) */
-    private File lsfgFile() {
-        return new File(dxNativeFile().getParentFile(), "lsfg");
+    private static File lsfgFile(android.content.Context ctx) {
+        return new File(RootfsInstaller.rootfsDir(ctx), "home/steam/.local/share/ezsteam/lsfg");
     }
 
-    private int lsfgMode() {
-        return getSharedPreferences(PREFS, MODE_PRIVATE).getInt(KEY_LSFG, 0);
+    /** LSFG choice, 0 / 2 / 3 (also the HOME menu, DisplayActivity) / LSFG 선택 0 / 2 / 3(HOME 메뉴도 씀) */
+    static int lsfgMode(android.content.Context ctx) {
+        return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getInt(KEY_LSFG, 0);
     }
 
     private static final String KEY_LSFG = "game.lsfg";
 
-    private static String lsfgLabel(int n) {
-        return "LSFG: " + (n == 0 ? "끔" : n + "배");
+    private String lsfgLabel(int n) {
+        return s(R.string.fmt_name_value, "LSFG", n == 0 ? s(R.string.v_off) : s(R.string.v_times, n));
     }
 
-    private void setLsfgMode(int n) {
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(KEY_LSFG, n).apply();
-        File f = lsfgFile();
+    /** Save the LSFG choice and the file EZ Proton reads; returns an error text or null
+     *  LSFG 선택과 EZ Proton이 읽는 파일을 저장. 오류 글 또는 null을 돌려줌 */
+    static String setLsfgMode(android.content.Context ctx, int n) {
+        ctx.getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(KEY_LSFG, n).apply();
+        File f = lsfgFile(ctx);
         try {
             if (n >= 2) {
                 File d = f.getParentFile();
@@ -977,8 +1007,9 @@ public class MainActivity extends Activity {
                 throw new IOException("지울 수 없음");
             }
         } catch (IOException e) {
-            log("LSFG 설정 실패: " + e.getMessage());
+            return e.getMessage();
         }
+        return null;
     }
 
     private void setDxNative(boolean on) {
@@ -1008,22 +1039,22 @@ public class MainActivity extends Activity {
     private void installDirectX() {
         if (dxRunning) return;
         if (!notReady().isEmpty()) {
-            dxStatus.setText("먼저 [Steam 시작]으로 설치");
+            dxStatus.setText(s(R.string.dx_need_setup));
             return;
         }
         dxRunning = true;
         dxButton.setEnabled(false);
         dxBar.setVisibility(View.VISIBLE);
-        dxStatus.setText("준비 중");
+        dxStatus.setText(s(R.string.dx_preparing));
         long t0 = android.os.SystemClock.elapsedRealtime();
-        final String[] stage = {"준비 중"};
+        final String[] stage = {s(R.string.dx_preparing)};
         // Elapsed time every second / 1초마다 경과 시간
         Runnable tick = new Runnable() {
             @Override
             public void run() {
                 if (!dxRunning) return;
-                long s = (android.os.SystemClock.elapsedRealtime() - t0) / 1000;
-                dxStatus.setText(stage[0] + String.format(java.util.Locale.ROOT, " · %d:%02d", s / 60, s % 60));
+                long sec = (android.os.SystemClock.elapsedRealtime() - t0) / 1000;
+                dxStatus.setText(stage[0] + String.format(java.util.Locale.ROOT, " · %d:%02d", sec / 60, sec % 60));
                 dxStatus.postDelayed(this, 1000);
             }
         };
@@ -1048,25 +1079,25 @@ public class MainActivity extends Activity {
                         if (!l.contains("ezproton: base ")) continue;
                         log(l);
                         String m = l.substring(l.indexOf("ezproton: base ") + 15);
-                        if (m.startsWith("build start") || m.startsWith("rebuild")) stage[0] = "기본 환경 만드는 중";
-                        else if (m.startsWith("redist start") && m.toLowerCase(java.util.Locale.ROOT).contains("directx")) stage[0] = "DirectX 설치 중";
-                        else if (m.startsWith("redist start")) stage[0] = "Visual C++ 설치 중";
+                        if (m.startsWith("build start") || m.startsWith("rebuild")) stage[0] = s(R.string.dx_stage_base);
+                        else if (m.startsWith("redist start") && m.toLowerCase(java.util.Locale.ROOT).contains("directx")) stage[0] = s(R.string.dx_stage_directx);
+                        else if (m.startsWith("redist start")) stage[0] = s(R.string.dx_stage_vc);
                         else if (m.startsWith("backfill start")) {
                             int a = m.indexOf('('), b = m.indexOf(')');
-                            stage[0] = "게임에 추가 " + (a >= 0 && b > a ? m.substring(a + 1, b) : "");
+                            stage[0] = s(R.string.dx_stage_game, a >= 0 && b > a ? m.substring(a + 1, b) : "");
                         } else if (m.startsWith("dx: proton not installed") || m.startsWith("dx: Proton not installed")) {
-                            result = "Steam에 로그인해 Proton을 받은 뒤 가능";
+                            result = s(R.string.dx_need_proton);
                         } else if (m.startsWith("dx: no DirectX installer")) {
-                            result = "DirectX 설치 파일 없음 (게임을 하나 받으면 생김)";
+                            result = s(R.string.dx_no_installer);
                         } else if (m.startsWith("redist failed") || m.startsWith("late retry") || m.startsWith("error")) {
-                            result = "실패 (로그 확인)";
+                            result = s(R.string.dx_failed_log);
                         }
                     }
                 }
                 int rc = p.waitFor();
                 log("DirectX 설치 끝 exit=" + rc);
             } catch (IOException | InterruptedException | RuntimeException e) {
-                result = "실패: " + e.getMessage();
+                result = s(R.string.dx_failed, e.getMessage());
                 log("DirectX 설치 실패: " + e);
             }
             final String msg = result;
@@ -1074,7 +1105,7 @@ public class MainActivity extends Activity {
                 dxRunning = false;
                 dxBar.setVisibility(View.GONE);
                 boolean done = dxInstalled();
-                dxStatus.setText(done ? "설치 완료" : (msg != null ? msg : "설치되지 않음 (로그 확인)"));
+                dxStatus.setText(done ? s(R.string.dx_done) : (msg != null ? msg : s(R.string.dx_not_installed)));
                 refreshDirectXRow();
             });
         }, "ezs-directx").start();
@@ -1100,7 +1131,7 @@ public class MainActivity extends Activity {
             return;
         }
         busy = true;
-        taskStep = TASK_NAMES.containsKey(name) ? TASK_NAMES.get(name) : name;
+        taskStep = TASK_NAMES.containsKey(name) ? s(TASK_NAMES.get(name)) : name;
         log("== " + name);
         new Thread(() -> {
             Thread beat = startHeartbeat(name);
@@ -1122,14 +1153,14 @@ public class MainActivity extends Activity {
     }
 
     /** Panel titles for the task names / 작업 이름별 패널 제목 */
-    private static final java.util.Map<String, String> TASK_NAMES = new java.util.HashMap<>();
+    private static final java.util.Map<String, Integer> TASK_NAMES = new java.util.HashMap<>();
     static {
-        TASK_NAMES.put("setup", "설치");
-        TASK_NAMES.put("install", "rootfs 설치");
-        TASK_NAMES.put("driver", "드라이버 설치");
-        TASK_NAMES.put("tools", "시험 도구 설치");
-        TASK_NAMES.put("steam-install", "Steam 설치");
-        TASK_NAMES.put("prepare", "Steam 준비");
+        TASK_NAMES.put("setup", R.string.task_setup);
+        TASK_NAMES.put("install", R.string.btn_rootfs);
+        TASK_NAMES.put("driver", R.string.btn_driver);
+        TASK_NAMES.put("tools", R.string.btn_tools);
+        TASK_NAMES.put("steam-install", R.string.btn_steam_install);
+        TASK_NAMES.put("prepare", R.string.btn_prepare);
     }
 
     /**
@@ -1146,16 +1177,16 @@ public class MainActivity extends Activity {
                     long sec = (android.os.SystemClock.elapsedRealtime() - t0) / 1000;
                     long rx = android.net.TrafficStats.getUidRxBytes(uid);
                     String step = taskStep;
-                    String detail = String.format(java.util.Locale.ROOT, "경과 %d:%02d", sec / 60, sec % 60)
-                            + (rx < 0 ? "" : String.format(java.util.Locale.ROOT, "  ·  받은 양 %.1f MB", (rx - rx0) / 1e6))
-                            + "\n앱을 닫지 마십시오. 자세한 내용은 아래 로그에 있음";
+                    String detail = s(R.string.task_elapsed, String.format(java.util.Locale.ROOT, "%d:%02d", sec / 60, sec % 60))
+                            + (rx < 0 ? "" : "  ·  " + s(R.string.task_received, String.format(java.util.Locale.ROOT, "%.1f", (rx - rx0) / 1e6)))
+                            + "\n" + s(R.string.task_keep_open);
                     // Overall share for "[n/m]" steps (bar keeps moving inside a step)
                     // "[n/m]" 단계의 전체 비율(단계 안에서는 막대가 계속 움직임)
                     java.util.regex.Matcher m = STEP.matcher(step);
                     int pct = m.find() ? (Integer.parseInt(m.group(1)) - 1) * 100 / Integer.parseInt(m.group(2)) : -1;
                     runOnUiThread(() -> {
                         taskTitle.setText(step);
-                        taskDetail.setText(pct >= 0 ? "전체 " + pct + "% 완료  ·  " + detail : detail);
+                        taskDetail.setText(pct >= 0 ? s(R.string.task_overall, pct) + "  ·  " + detail : detail);
                         taskPanel.setVisibility(View.VISIBLE);
                     });
                     Thread.sleep(1000);

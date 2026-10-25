@@ -1,0 +1,219 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Korean texts (same keys as values/strings.xml) -->
+<!-- 한국어 글(values/strings.xml과 같은 키) -->
+<resources>
+    <string name="base_add_directx">이 게임에 DirectX 추가</string>
+    <string name="base_bg_backfill">게임에 DirectX 추가(백그라운드)</string>
+    <string name="base_bg_directx">DirectX 설치(백그라운드)</string>
+    <string name="base_build">기본 환경 만들기(한 번만)</string>
+    <string name="base_copy">기본 환경을 게임으로 복사</string>
+    <string name="base_env">기본 환경</string>
+    <string name="base_prepare_start">기본 환경 준비 시작</string>
+    <string name="base_redist">기본 환경: 재배포 설치(한 번만)</string>
+    <string name="base_vcredist">기본 환경: Visual C++ 설치(한 번만)</string>
+    <string name="btn_build_now">지금 만들기</string>
+    <string name="btn_cancel">취소</string>
+    <string name="btn_cef">CEF 절감</string>
+    <string name="btn_close">닫기</string>
+    <string name="btn_direct">게임 화면 직접 전달</string>
+    <string name="btn_draw">그리기 시험</string>
+    <string name="btn_driver">드라이버 설치</string>
+    <string name="btn_dxvk_hud">DXVK HUD</string>
+    <string name="btn_end">종료</string>
+    <string name="btn_gpu">GPU 확인</string>
+    <string name="btn_hid">Steam HID 찾기</string>
+    <string name="btn_iostat">IO 통계</string>
+    <string name="btn_later">나중에</string>
+    <string name="btn_ok">확인</string>
+    <string name="btn_prepare">Steam 준비</string>
+    <string name="btn_procs">자식 프로세스</string>
+    <string name="btn_proot">PRoot 상태</string>
+    <string name="btn_rootfs">rootfs 설치</string>
+    <string name="btn_save">저장</string>
+    <string name="btn_screen">화면 %1$s</string>
+    <string name="btn_setup_all">전체 준비만</string>
+    <string name="btn_smoke">환경 시험</string>
+    <string name="btn_speed">속도 시험</string>
+    <string name="btn_steam_at">Steam 실행 %1$s</string>
+    <string name="btn_steam_gpu">Steam 화면 GPU</string>
+    <string name="btn_steam_install">Steam 설치</string>
+    <string name="btn_tools">시험 도구 설치</string>
+    <string name="btn_wsi">게임 화면</string>
+    <string name="dlg_close_msg">화면을 닫으면 Steam과 실행 중인 게임이 모두 종료됩니다.</string>
+    <string name="dlg_close_title">Steam 종료</string>
+    <string name="dlg_proton_update_msg">Proton이 업데이트되었습니다.\n%1$s\n→ %2$s\n\n게임 첫 실행에 쓰는 기본 환경을 새 Proton으로 다시 만듭니다. 몇 분 걸리며, 그동안 새 게임의 첫 실행은 끝날 때까지 기다립니다. 이미 실행한 게임은 영향이 없습니다.</string>
+    <string name="dlg_proton_update_title">Proton 업데이트</string>
+    <string name="dx_done">설치 완료</string>
+    <string name="dx_failed">실패: %1$s</string>
+    <string name="dx_failed_log">실패 (로그 확인)</string>
+    <string name="dx_install">DirectX 설치</string>
+    <string name="dx_installed">DirectX 설치됨</string>
+    <string name="dx_native">Native 실행</string>
+    <string name="dx_native_help">켜면 [DirectX 설치]로 넣은 Microsoft DirectX 파일(d3dx9, XAudio2 2.7, XInput 1.3 등)을 씀. 끄면 Proton에 들어 있는 같은 기능을 씀(기본). 오래된 일부 게임에서 소리·입력·화면이 이상할 때만 켜 보기. 다음 게임 시작부터 적용</string>
+    <string name="dx_need_proton">Steam에 로그인해 Proton을 받은 뒤 가능</string>
+    <string name="dx_need_setup">먼저 [Steam 시작]으로 설치</string>
+    <string name="dx_no_installer">DirectX 설치 파일 없음 (게임을 하나 받으면 생김)</string>
+    <string name="dx_not_installed">설치되지 않음 (로그 확인)</string>
+    <string name="dx_preparing">준비 중</string>
+    <string name="dx_stage_base">기본 환경 만드는 중</string>
+    <string name="dx_stage_directx">DirectX 설치 중</string>
+    <string name="dx_stage_game">게임에 추가 %1$s</string>
+    <string name="dx_stage_vc">Visual C++ 설치 중</string>
+    <string name="fmt_mmss">%1$d분 %2$02d초</string>
+    <string name="fmt_name_value">%1$s: %2$s</string>
+    <string name="launch_preparing">게임 실행 준비 중</string>
+    <string name="launch_preparing_kind">게임 실행 준비 중: %1$s</string>
+    <string name="launch_swipe">옆으로 밀면 닫힘</string>
+    <string name="main_admin">관리자 모드</string>
+    <string name="main_autostart">바로 실행</string>
+    <string name="main_prev_game">앞 게임 남으면</string>
+    <string name="main_shared_lib">EZlator 라이브러리</string>
+    <string name="main_start">Steam 시작</string>
+    <string name="main_start_screen">시작 화면</string>
+    <string name="menu_app_log">화면에 앱 로그</string>
+    <string name="menu_back">◀ 뒤로</string>
+    <string name="menu_close">세션 닫기 (Steam 종료)</string>
+    <string name="menu_diag">진단</string>
+    <string name="menu_display">화면</string>
+    <string name="menu_fps">프레임 제한</string>
+    <string name="menu_fsr_out">FSR 출력</string>
+    <string name="menu_fsr_sharp">FSR 선명도</string>
+    <string name="menu_hint">A 선택 · ◀▶ 바꾸기 · B 뒤로</string>
+    <string name="menu_input">입력</string>
+    <string name="menu_keyboard">키보드 열기</string>
+    <string name="menu_lsfg">LSFG (다음 게임부터)</string>
+    <string name="menu_match_rate">화면 주사율 맞춤</string>
+    <string name="menu_mouse_lock">마우스 잠금</string>
+    <string name="menu_pad_settings">터치 패드 설정</string>
+    <string name="menu_processes">프로세스</string>
+    <string name="menu_proton_log">Proton 로그</string>
+    <string name="menu_quit_again">A를 한 번 더 누르면 종료</string>
+    <string name="menu_quit_game">게임 종료</string>
+    <string name="menu_resume">게임으로 돌아가기</string>
+    <string name="menu_save_logs">제보 저장</string>
+    <string name="menu_save_logs_pick">제보 저장 (위치 선택)</string>
+    <string name="menu_scale">확대 방식</string>
+    <string name="menu_stats">성능 표시</string>
+    <string name="menu_steam">Steam 메뉴</string>
+    <string name="menu_title">EZsteam 메뉴</string>
+    <string name="menu_touch_pad">터치 패드</string>
+    <string name="note_channel">Steam 세션</string>
+    <string name="note_text">다운로드와 게임이 백그라운드에서도 계속됨</string>
+    <string name="note_title">Steam 실행 중</string>
+    <string name="notice_mouse_free">마우스 잠금 해제</string>
+    <string name="notice_mouse_locked">마우스 잠금 (해제: 메뉴 &gt; 입력 &gt; 마우스 잠금)</string>
+    <string name="notice_next_game">다음 게임 시작부터 적용됨</string>
+    <string name="notice_pad_bad">패드 배치 파일이 아님: %1$s</string>
+    <string name="notice_pad_loaded">패드 배치를 불러옴</string>
+    <string name="notice_prev_ended">앞 게임 %1$s을(를) 끝내고 새 게임을 시작함</string>
+    <string name="notice_prev_running">앞 게임 %1$s이(가) 아직 실행 중임. 두 게임을 함께 돌리면 프로세스 한도로 전체가 꺼질 수 있음</string>
+    <string name="notice_save_failed">로그 저장 실패: %1$s</string>
+    <string name="notice_save_pick">공용 폴더 저장 실패, 저장 위치를 고르십시오</string>
+    <string name="notice_saved">로그 저장됨</string>
+    <string name="notice_saved_at">로그 저장됨: %1$s</string>
+    <string name="notice_saving">로그 저장 중입니다. 끝나면 알림이 뜹니다</string>
+    <string name="notice_saving_scan">로그 저장 중… (게임 폴더 검사 포함, 끝나면 알림)</string>
+    <string name="pad_alpha">진하기 %1$d%%</string>
+    <string name="pad_gap">간격(조작부 사이) %1$d%%</string>
+    <string name="pad_layout_file">배치 파일…</string>
+    <string name="pad_layout_title">터치 패드 배치</string>
+    <string name="pad_size">크기(손 크기) %1$d%%</string>
+    <string name="pad_swap">십자키·왼쪽 스틱 자리 바꾸기</string>
+    <string name="prep_game_waiting">게임 준비 중: %1$s · %2$s\n다음: 게임 시작</string>
+    <string name="prep_launch">게임 실행 준비 중: %1$s · %2$s\n다음: 게임 시작</string>
+    <string name="prep_step1">게임 실행 환경 준비 1/3: Proton 받는 중 %1$d%%\n다음: 기본 환경 (Wine, Visual C++)</string>
+    <string name="prep_step2">게임 실행 환경 준비 2/3: %1$s · %2$s\n다음: DirectX (백그라운드)</string>
+    <string name="prep_step3">게임 실행 환경 준비 3/3: %1$s · %2$s\n게임은 지금 실행할 수 있음</string>
+    <string name="proton_log_none">Proton 로그 없음 (게임을 EZ Proton으로 실행하면 생김)</string>
+    <string name="proton_log_pick">Proton 로그 선택 (최신 순)</string>
+    <string name="sec_checks">확인</string>
+    <string name="sec_screen">화면 시험</string>
+    <string name="sec_setup">설치</string>
+    <string name="sec_steam">Steam·게임 설정</string>
+    <string name="sec_tests_closed">시험 ▸</string>
+    <string name="sec_tests_open">시험 ▾</string>
+    <string name="setup_apply">Steam 업데이트 적용 중</string>
+    <string name="setup_apply_detail">Steam이 스스로 다시 시작함</string>
+    <string name="setup_deps">필요한 라이브러리 설치 중</string>
+    <string name="setup_deps_detail">인터넷으로 시스템 라이브러리를 받음</string>
+    <string name="setup_restart">Steam 다시 시작 중</string>
+    <string name="setup_restart_detail">업데이트한 Steam을 엶</string>
+    <string name="setup_steam_first">처음 실행은 Steam이 스스로 업데이트해 몇 분 걸릴 수 있음</string>
+    <string name="setup_steam_start">Steam 시작 중</string>
+    <string name="setup_update_dl">Steam 업데이트 받는 중</string>
+    <string name="setup_update_install">Steam 업데이트 설치 중</string>
+    <string name="setup_update_install_detail">받은 파일을 풀고 있음</string>
+    <string name="setup_verify">Steam 파일 확인 중</string>
+    <string name="stats_starting">시작 중</string>
+    <string name="task_elapsed">경과 %1$s</string>
+    <string name="task_keep_open">앱을 닫지 마십시오. 자세한 내용은 아래 로그에 있음</string>
+    <string name="task_overall">전체 %1$d%% 완료</string>
+    <string name="task_received">받은 양 %1$s MB</string>
+    <string name="task_setup">설치</string>
+    <string name="test_ahb">AHB 압축</string>
+    <string name="test_cpu">CPU 배치</string>
+    <string name="test_fsync">빠른 동기화</string>
+    <string name="test_hidraw">HIDRAW</string>
+    <string name="test_tso">FEX TSO</string>
+    <string name="v_auto_end">자동 종료</string>
+    <string name="v_big_cores">큰 코어만</string>
+    <string name="v_big_picture">빅픽처</string>
+    <string name="v_default">기본</string>
+    <string name="v_fps">%1$dfps</string>
+    <string name="v_hidden">숨김</string>
+    <string name="v_none">없음</string>
+    <string name="v_normal">일반</string>
+    <string name="v_notify">알림</string>
+    <string name="v_off">끔</string>
+    <string name="v_on">켬</string>
+    <string name="v_reduced">줄임</string>
+    <string name="v_shown">보임</string>
+    <string name="v_times">%1$d배</string>
+    <string-array name="fsr_out">
+        <item>화면 크기</item>
+        <item>1920x1200</item>
+        <item>1920x1080</item>
+    </string-array>
+    <string-array name="fsr_sharp">
+        <item>0 (가장 선명)</item>
+        <item>0.2 (FSR 기본)</item>
+        <item>0.5</item>
+        <item>1.0</item>
+        <item>2.0 (약하게)</item>
+        <item>선명화 끔 (확대만)</item>
+    </string-array>
+    <string-array name="pad_layout_items">
+        <item>배치 파일(.icp) 불러오기</item>
+        <item>기본 배치로 되돌리기</item>
+        <item>크기·간격·진하기·자리 기본값</item>
+    </string-array>
+    <string-array name="prep_names">
+        <item>설치 스크립트 확인</item>
+        <item>Wine 환경 준비</item>
+        <item>설치 프로그램(msiexec)</item>
+        <item>DirectX 설치</item>
+        <item>Visual C++ 런타임 설치</item>
+        <item>.NET Framework 설치</item>
+        <item>OpenAL 설치</item>
+        <item>PhysX 설치</item>
+        <item>XNA 설치</item>
+        <item>Unreal 필수 구성 요소 설치</item>
+    </string-array>
+    <string-array name="scale_modes">
+        <item>선형</item>
+        <item>바이큐빅</item>
+        <item>바이큐빅+선명</item>
+        <item>FSR 1</item>
+    </string-array>
+    <string-array name="steam_gpu_modes">
+        <item>끔</item>
+        <item>Chromium 선택</item>
+        <item>ANGLE Vulkan</item>
+    </string-array>
+    <string-array name="wsi_modes">
+        <item>PutImage</item>
+        <item>SHM 동기 끔</item>
+        <item>SHM mailbox</item>
+        <item>SHM fifo</item>
+    </string-array>
+</resources>

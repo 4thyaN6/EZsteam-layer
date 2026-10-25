@@ -61,14 +61,14 @@ public final class SessionService extends Service {
         Notification.Builder b;
         if (android.os.Build.VERSION.SDK_INT >= 26) {
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-            nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Steam 세션", NotificationManager.IMPORTANCE_LOW));
+            nm.createNotificationChannel(new NotificationChannel(CHANNEL, getString(R.string.note_channel), NotificationManager.IMPORTANCE_LOW));
             b = new Notification.Builder(this, CHANNEL);
         } else {
             b = new Notification.Builder(this);
         }
         b.setSmallIcon(android.R.drawable.stat_sys_download)
-                .setContentTitle("Steam 실행 중")
-                .setContentText("다운로드와 게임이 백그라운드에서도 계속됨")
+                .setContentTitle(getString(R.string.note_title))
+                .setContentText(getString(R.string.note_text))
                 .setOngoing(true);
         // Tap: back to the running app (launcher intent brings the existing task forward)
         // 누르면 실행 중인 앱으로 돌아감(실행기 인텐트가 기존 작업을 앞으로 가져옴)
