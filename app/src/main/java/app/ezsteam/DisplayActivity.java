@@ -859,6 +859,9 @@ public class DisplayActivity extends Activity {
                 // Test switch: fewer HID discovery rounds in the Steam client (steam-run.sh)
                 // 시험 스위치: Steam 클라이언트의 HID 찾기 줄이기(steam-run.sh)
                 if (MainActivity.steamHidLow(this)) c.env.put("EZS_STEAM_HID_LOW", "1");
+                // State of the switch in the log, so a report shows whether it was on
+                // 스위치 상태를 로그에 남겨 제보에서 켜졌는지 보이게 함
+                log("시험 스위치: Steam HID 찾기 " + (MainActivity.steamHidLow(this) ? "줄임" : "기본(끔)"));
                 // Phone language for the Steam client language (steam-language.py)
                 // Steam 클라이언트 언어용 휴대폰 언어(steam-language.py)
                 c.env.put("EZS_LANG", Locale.getDefault().toLanguageTag());

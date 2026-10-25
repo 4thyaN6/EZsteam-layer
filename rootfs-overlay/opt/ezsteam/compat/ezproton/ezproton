@@ -222,6 +222,15 @@ if [ "$LSFG_N" -ge 2 ] 2>/dev/null; then
         export LSFG_FLOW_SCALE="${EZS_LSFG_FLOW:-1.0}" LSFG_PERFORMANCE_MODE="${EZS_LSFG_PERF:-1}"
         export LSFG_EXPERIMENTAL_PRESENT_MODE=immediate
         echo "ezproton: LSFG ${LSFG_N}배 켬 (흐름 배율 $LSFG_FLOW_SCALE, 성능 모드 $LSFG_PERFORMANCE_MODE, $LDLL)" >&2
+        # Load check: the 2026-10-25 run had none of the layer's own "lsfg-vk:" lines, so it was
+        # never loaded. Missing libraries, the loader version (the manifest asks for 1.4.313) and
+        # the loader's own errors and warnings (layer not found, library not opened) go to the log.
+        # 불러오기 확인: 2026-10-25 실행에 레이어 자체 "lsfg-vk:" 줄이 하나도 없어 불러오지 않은 것이었음.
+        # 없는 라이브러리, 로더 버전(매니페스트가 1.4.313 요구), 로더 자체 오류·경고(레이어 없음, 라이브러리
+        # 못 엶)를 로그에 남김
+        miss=$(ldd /opt/ezsteam/lsfg/liblsfg-vk.so 2>&1 | grep -i "not found" | tr -s ' \t' ' ' | paste -sd, -)
+        echo "ezproton: LSFG 확인: 로더 $(dpkg-query -W -f='${Version}' libvulkan1 2>/dev/null || echo 모름), 없는 라이브러리 ${miss:-없음}" >&2
+        export VK_LOADER_DEBUG=error,warn
     fi
 fi
 # Fast sync test switch (file ~/.local/share/ezsteam/fsync-shim written by the app): Wine's
