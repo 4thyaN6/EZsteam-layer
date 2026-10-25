@@ -490,8 +490,19 @@ print(r, os.strerror(ctypes.get_errno()))' 2>&1 | tail -n 1)
         # 줘서 SDL_hid_init()이 실패 후 초당 약 500번 다시 시도하지 않고 한 번에 성공하게 함(2026-10-25:
         # console_log "udev disabled by SDL_HINT_HIDAPI_UDEV" / "libusb disabled ..." 초당 1,000줄, mountinfo +
         # uevent 소켓 분당 3만 번)
-        export SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0 SDL_HIDAPI_LIBUSB=0 EZS_UEVENT_STUB=1
-        echo "INFO steam : HID 찾기 줄임(시험): SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0 SDL_HIDAPI_LIBUSB=0 EZS_UEVENT_STUB=1"
+        # (EZS_UEVENT_STUB=1 was tried on 2026-10-25 and left out: the stand-in socket was handed
+        # out about 30,000 times a minute, so the client opens and closes HID that often by itself
+        # rather than retrying a failure, and the stand-in only added socket + bind stops)
+        # (EZS_UEVENT_STUB=1은 2026-10-25에 시험 후 뺌: 대역 소켓이 분당 약 3만 번 나가 클라이언트가 실패를
+        # 다시 시도하는 것이 아니라 스스로 그만큼 HID를 열고 닫는 것이었고, 대역은 socket + bind 정지만 늘렸음)
+        # EZS_UDEV_CTL_PRESENT=1: the client preload answers /run/udev/control as present, so
+        # libudev skips its devtmpfs check (stat /dev + /proc/self/mountinfo) in every round
+        # (systemd device_monitor_new_full; checked against the real libudev, 2026-10-25)
+        # EZS_UDEV_CTL_PRESENT=1: 클라이언트 preload가 /run/udev/control을 있다고 답해 libudev가 회차마다 하는
+        # devtmpfs 확인(stat /dev + /proc/self/mountinfo)을 건너뜀(systemd device_monitor_new_full, 실제 libudev로
+        # 확인, 2026-10-25)
+        export SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0 SDL_HIDAPI_LIBUSB=0 EZS_UDEV_CTL_PRESENT=1
+        echo "INFO steam : HID 찾기 줄임(시험): SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0 SDL_HIDAPI_LIBUSB=0 EZS_UDEV_CTL_PRESENT=1"
     fi
     LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_CLIENT_PRELOAD" \
         "$BIN" -no-cef-sandbox $GPUARG $BPARG -chromeosnopreallocate $VERIFY ${EZS_STEAM_EXTRA:-} >>"$LOG" 2>&1

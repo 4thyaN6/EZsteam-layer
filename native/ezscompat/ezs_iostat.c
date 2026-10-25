@@ -201,6 +201,7 @@ static void report(uint64_t t);
 static int build_lookups(char *out, size_t size);
 /* Same-answer cache use, inotify results (see the cache section below) / 같은 답 재사용 횟수, inotify 결과(아래 캐시 부분 참고) */
 static uint64_t hit_udev, hit_dev, hit_uevent, uevent_ok, hit_ui;
+static uint64_t hit_udev_present;  /* /run/udev/control answered present (EZS_UDEV_CTL_PRESENT) / 있음으로 답한 수 */
 static uint64_t uevent_stubbed;    /* stand-in uevent sockets given (EZS_UEVENT_STUB) / 내준 uevent 소켓 대역 수 */
 static char ino_fail_path[160];
 static int ui_n;              /* Steam UI cache entries / Steam 화면 파일 캐시 항목 수 */
@@ -337,6 +338,9 @@ static void report(uint64_t span)
     if (shown) fprintf(stderr, "%s\n", top);
     if (build_lookups(look, sizeof(look))) fprintf(stderr, "%s\n", look);
     {
+        // /run/udev/control answered as present this interval / 이번 주기에 /run/udev/control을 있다고 답한 수
+        uint64_t up = __atomic_exchange_n(&hit_udev_present, 0, __ATOMIC_RELAXED);
+        if (up) fprintf(stderr, "ezs-io: /run/udev/control 있음으로 답함 %llu회(EZS_UDEV_CTL_PRESENT=1)\n", (unsigned long long)up);
         // Stand-in uevent sockets handed out (total since start) / 내준 uevent 소켓 대역 수(시작 뒤 합계)
         uint64_t us = __atomic_load_n(&uevent_stubbed, __ATOMIC_RELAXED);
         if (us) fprintf(stderr, "ezs-io: uevent 소켓 대역 %llu개(시작 뒤 합계)\n", (unsigned long long)us);
@@ -829,11 +833,43 @@ static struct ui_t *ui_entry(const char *path)
 /* access of a Steam UI file through the cache / Steam 화면 파일의 access를 캐시로 처리 */
 #define UI_ACCESS(call)                                                            do {                                                                               uint64_t now_ = now_ns();                                                      pthread_mutex_lock(&uilock);                                                   struct ui_t *e_ = ui_entry(path);                                              if (e_ && e_->a_ns && now_ - e_->a_ns < UI_TTL_NS && e_->amode == mode) {             int r_ = e_->a_r, er_ = e_->a_err;                                             pthread_mutex_unlock(&uilock);                                                 if (on()) __atomic_add_fetch(&hit_ui, 1, __ATOMIC_RELAXED);                    if (r_ < 0) errno = er_;                                                       return r_;                                                                 }                                                                              pthread_mutex_unlock(&uilock);                                                 int r_ = call;                                                                 int er_ = errno;                                                               if (r_ == 0 || er_ == ENOENT) {                                                    pthread_mutex_lock(&uilock);                                                   e_ = ui_entry(path);                                                           if (e_) { e_->amode = mode; e_->a_r = r_; e_->a_err = er_; e_->a_ns = now_; }             pthread_mutex_unlock(&uilock);                                             }                                                                              errno = er_;                                                                   return r_;                                                                 } while (0)
 
+/*
+ * /run/udev/control reported as present (EZS_UDEV_CTL_PRESENT=1, client process "steam" only).
+ * Why (2026-10-25 logs + systemd and SDL3 source): every SDL HID init round of the client goes
+ * through libudev's udev_monitor_new_from_netlink() -> device_monitor_new_full(), which checks
+ * access("/run/udev/control") and, when it is missing, dev_is_devtmpfs(): stat("/dev") plus
+ * open/fstat/close of /proc/self/mountinfo. That was the last part of each round that stopped
+ * PRoot (about 30,000 rounds a minute in Big Picture; the client itself opens and closes HID that
+ * often, a stand-in socket did not reduce it). Said present, that check is skipped; the netlink
+ * socket that follows is still refused (answered from the cache above), so the monitor is not made
+ * and nothing else changes. No file is created; other programs still see the real answer.
+ * /run/udev/control을 있다고 답함(EZS_UDEV_CTL_PRESENT=1, 클라이언트 프로세스 "steam"에서만).
+ * 이유(2026-10-25 로그 + systemd·SDL3 소스): 클라이언트의 SDL HID 초기화마다 libudev의
+ * udev_monitor_new_from_netlink() -> device_monitor_new_full()을 거치는데, access("/run/udev/control")를
+ * 확인하고 없으면 dev_is_devtmpfs()로 stat("/dev")와 /proc/self/mountinfo 열기·fstat·닫기를 함. 이것이 매 회차에서
+ * PRoot를 멈추는 마지막 부분이었음(빅픽처에서 분당 약 3만 회. 클라이언트가 스스로 그만큼 HID를 열고 닫으며 대역
+ * 소켓으로는 줄지 않았음). 있다고 답하면 그 확인을 건너뜀. 뒤따르는 netlink 소켓은 여전히 거부되므로(위 캐시가 답함)
+ * 감시 객체는 만들어지지 않고 그 밖에는 바뀌는 것이 없음. 파일은 만들지 않으며 다른 프로그램은 실제 답을 봄
+ */
+static int udev_ctl_present(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("EZS_UDEV_CTL_PRESENT");
+        v = e && strcmp(e, "1") == 0 && strcmp(program_invocation_short_name, "steam") == 0;
+    }
+    return v;
+}
+
 /* access family with the udev answer cache / udev 답 재사용이 있는 access 계열 */
 #define ACCESS_CACHED(call)                                                    \
     do {                                                                       \
         if (cache_on() && is_ui(path) && ui_cache_ok()) UI_ACCESS(call);                        \
         if (cache_on() && is_udev_ctl(path)) {                                 \
+            if (udev_ctl_present()) {                                          \
+                if (on()) __atomic_add_fetch(&hit_udev_present, 1, __ATOMIC_RELAXED); \
+                return 0;                                                      \
+            }                                                                  \
             if (__atomic_load_n(&udev_missing, __ATOMIC_RELAXED)) {           \
                 if (on()) __atomic_add_fetch(&hit_udev, 1, __ATOMIC_RELAXED); \
                 errno = ENOENT;                                                \

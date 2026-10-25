@@ -217,8 +217,21 @@ if [ "$LSFG_N" -ge 2 ] 2>/dev/null; then
     elif [ -z "$LDLL" ]; then
         echo "ezproton: LSFG ${LSFG_N}배 선택, Lossless.dll 없음 (Steam에서 Lossless Scaling 설치 필요)" >&2
     else
-        export VK_ADD_LAYER_PATH="/opt/ezsteam/lsfg${VK_ADD_LAYER_PATH:+:$VK_ADD_LAYER_PATH}"
-        export VK_INSTANCE_LAYERS="VK_LAYER_LS_frame_generation${VK_INSTANCE_LAYERS:+:$VK_INSTANCE_LAYERS}"
+        # Added as an implicit layer, as upstream installs it: before making its own frame
+        # generation instance the layer sets DISABLE_LSFG=1 (its manifest's disable_environment) so
+        # it stays out of that instance. The loader honours that only for implicit layers; listed
+        # in VK_INSTANCE_LAYERS it loaded into its own instance and refused its own compute device
+        # ("Failed to get device function pointers", "Failed to create logical device", then the
+        # game ended in vkQueuePresentKHR, device logs 2026-10-25). Implicit layers sit closest to
+        # the game, so the order stays LSFG -> ... -> EZS present.
+        # 원본 설치처럼 암시적 레이어로 넣음: 레이어는 자체 프레임 생성용 인스턴스를 만들기 전에
+        # DISABLE_LSFG=1(매니페스트의 disable_environment)을 정해 그 인스턴스에서 빠짐. 로더는 이것을 암시적
+        # 레이어에만 적용함. VK_INSTANCE_LAYERS에 넣었더니 자기 인스턴스에도 들어가 자기 계산용 장치를 거부했음
+        # ("Failed to get device function pointers", "Failed to create logical device", 이어서 게임이
+        # vkQueuePresentKHR에서 끝남, 기기 로그 2026-10-25). 암시적 레이어는 게임 쪽에 가장 가까워 순서는
+        # LSFG -> ... -> EZS present 그대로
+        export VK_ADD_IMPLICIT_LAYER_PATH="/opt/ezsteam/lsfg${VK_ADD_IMPLICIT_LAYER_PATH:+:$VK_ADD_IMPLICIT_LAYER_PATH}"
+        unset DISABLE_LSFG
         export LSFG_LEGACY=1 LSFG_DLL_PATH="$LDLL" LSFG_MULTIPLIER="$LSFG_N"
         LSFG_ON=$LSFG_N
         export LSFG_FLOW_SCALE="${EZS_LSFG_FLOW:-1.0}" LSFG_PERFORMANCE_MODE="${EZS_LSFG_PERF:-1}"
@@ -310,7 +323,7 @@ done
 # The client-only HID test switch (steam-run.sh) is not passed on to games
 # 클라이언트 전용 HID 시험 스위치(steam-run.sh)는 게임에 넘기지 않음
 if [ "${EZS_STEAM_HID_LOW:-0}" = 1 ]; then
-    unset SDL_JOYSTICK_HIDAPI SDL_HIDAPI_UDEV SDL_HIDAPI_LIBUSB EZS_UEVENT_STUB
+    unset SDL_JOYSTICK_HIDAPI SDL_HIDAPI_UDEV SDL_HIDAPI_LIBUSB EZS_UEVENT_STUB EZS_UDEV_CTL_PRESENT
 fi
 # Frame limit for D3D12 games (vkd3d-proton, VKD3D_FRAME_RATE since vkd3d-proton 2.14; 0 = no
 # limit): 60 by default like the DX9-11 limit in DXVK_CONFIG, which vkd3d-proton does not read.
