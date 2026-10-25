@@ -33,5 +33,23 @@ rm -rf /var/lib/apt/lists/*
 after=$(du -sk /usr 2>/dev/null | cut -f1)
 # Installed versions (Xvfb has no -version option) / 설치된 버전(Xvfb에는 -version 옵션이 없음)
 echo "OK   tools : $(dpkg-query -W -f='${Package} ${Version}  ' xvfb x11-apps x11-xkb-utils fonts-nanum 2>/dev/null)"
+# UTF-8 locales the Steam client asks for: it logged "setlocale('en_US.UTF-8') failed, using
+# locale: 'C'. International characters may not work." and Korean typed with the Steam keyboard
+# did not appear (2026-10-25). Built as plain folders (--no-archive): the usual locale-archive is
+# one large memory-mapped file, the earlier locale-gen under PRoot left no usable locale.
+# Steam 클라이언트가 요청하는 UTF-8 로캘: "setlocale('en_US.UTF-8') failed, using locale: 'C'.
+# International characters may not work."를 남겼고 Steam 키보드로 친 한글이 나오지 않았음(2026-10-25).
+# 일반 폴더로 만듦(--no-archive): 보통 쓰는 locale-archive는 큰 파일 하나를 메모리 매핑하는 방식이며, 이전
+# PRoot 아래 locale-gen은 쓸 수 있는 로캘을 남기지 않았음
+$APT install -y --no-install-recommends locales >/dev/null 2>&1 || echo "WARN locale : locales 패키지 설치 실패"
+for L in en_US ko_KR; do
+    if locale -a 2>/dev/null | grep -qi "^$L\.utf-\?8\$"; then
+        echo "OK   locale : $L.UTF-8 이미 있음"
+    elif localedef --no-archive -i "$L" -c -f UTF-8 "$L.UTF-8" 2>/tmp/ezs-localedef.err; then
+        echo "OK   locale : $L.UTF-8 만듦"
+    else
+        echo "FAIL locale : $L.UTF-8 만들기 실패: $(tail -n 1 /tmp/ezs-localedef.err 2>/dev/null)"
+    fi
+done
 echo "INFO size : /usr +$(( (after - before) / 1024 )) MB"
 echo "DONE"

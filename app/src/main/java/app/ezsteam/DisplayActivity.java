@@ -1194,6 +1194,12 @@ public class DisplayActivity extends Activity {
         // 컨트롤러 버튼은 X 키가 아니라 가상 패드로 보냄(전에는 X 키코드가 없어 "?96"처럼 보였고,
         // 안드로이드가 화살표 키로도 알려 주는 십자키만 동작했음)
         if (pad != null && isPadKey(e)) return onPadKey(e);
+        // A controller button Android has no key code for (KEYCODE_UNKNOWN, shown as "?0"): some
+        // pads send their HOME this way, told apart by the Linux scan code (BTN_MODE 316,
+        // KEY_HOMEPAGE 172). Others are logged with their scan code (2026-10-25).
+        // 안드로이드에 키 코드가 없는 컨트롤러 버튼(KEYCODE_UNKNOWN, "?0"으로 보였음): 일부 패드는 HOME을 이렇게
+        // 보내며 리눅스 스캔 코드로 구분함(BTN_MODE 316, KEY_HOMEPAGE 172). 나머지는 스캔 코드와 함께 기록함(2026-10-25)
+        if (pad != null && kc == KeyEvent.KEYCODE_UNKNOWN && fromPadDevice(e)) return onUnknownPadKey(e);
         // Back: from a physical device (keyboard Esc fallback, mouse) it is Esc in X (a controller's
         // back is handled above as its B button);
         // only the on-screen back asks to close. Closing ends Steam and the game, and a physical
@@ -1537,6 +1543,44 @@ public class DisplayActivity extends Activity {
      * 장치 출처에 게임패드·조이스틱이 있고 글자 키가 없음. 기기 실측: 이벤트 출처만 볼 때 컨트롤러
      * 십자키가 여전히 X 화살표 키로 감(KEY DPAD_DOWN -> X 116)
      */
+    /** The event comes from a controller (gamepad / joystick source) / 이벤트가 컨트롤러에서 옴 */
+    private static boolean fromPadDevice(KeyEvent e) {
+        if (e.isFromSource(android.view.InputDevice.SOURCE_GAMEPAD)
+                || e.isFromSource(android.view.InputDevice.SOURCE_JOYSTICK)) return true;
+        android.view.InputDevice dev = e.getDevice();
+        if (dev == null || dev.isVirtual()) return false;
+        int src = dev.getSources();
+        return (src & android.view.InputDevice.SOURCE_GAMEPAD) == android.view.InputDevice.SOURCE_GAMEPAD
+                || (src & android.view.InputDevice.SOURCE_JOYSTICK) == android.view.InputDevice.SOURCE_JOYSTICK;
+    }
+
+    /** Linux scan codes of a HOME / guide button / HOME·가이드 버튼의 리눅스 스캔 코드 */
+    private static final int SCAN_BTN_MODE = 316, SCAN_KEY_HOMEPAGE = 172;
+
+    private boolean onUnknownPadKey(KeyEvent e) {
+        app.ezsteam.runtime.PadFile p = pad;
+        if (p == null || e.getAction() == KeyEvent.ACTION_MULTIPLE) return true;
+        boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
+        int sc = e.getScanCode();
+        if (sc == SCAN_BTN_MODE || sc == SCAN_KEY_HOMEPAGE) {
+            if (p.button(app.ezsteam.runtime.PadFile.GUIDE) != down) {
+                p.setButton(app.ezsteam.runtime.PadFile.GUIDE, down);
+                p.write();
+            }
+            if (down && e.getRepeatCount() == 0) {
+                lastKey = "PAD HOME(scan " + sc + ")";
+                log("PAD HOME (키 코드 없음, 스캔 코드 " + sc + ")");
+            }
+            return true;
+        }
+        if (down && e.getRepeatCount() == 0) {
+            lastKey = "PAD?scan" + sc;
+            log("PAD 알 수 없는 버튼: 키 코드 0, 스캔 코드 " + sc + " (장치 "
+                    + (e.getDevice() != null ? e.getDevice().getName() : "?") + ")");
+        }
+        return true;
+    }
+
     private static boolean isPadKey(KeyEvent e) {
         int k = e.getKeyCode();
         if (KeyEvent.isGamepadButton(k)) return true;

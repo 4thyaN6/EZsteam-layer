@@ -394,6 +394,13 @@ print(r, os.strerror(ctypes.get_errno()))' 2>&1 | tail -n 1)
     else
         echo "INFO present : 확인 도구 없음"
     fi
+    # UTF-8 locale for the client (without it: C locale, Korean text input lost)
+    # 클라이언트용 UTF-8 로캘(없으면 C 로캘이 되어 한글 입력이 사라짐)
+    if locale -a 2>/dev/null | grep -qi '^en_US\.utf-\?8$'; then
+        echo "INFO locale : en_US.UTF-8 있음$(locale -a 2>/dev/null | grep -qi '^ko_KR\.utf-\?8$' && echo ', ko_KR.UTF-8 있음')"
+    else
+        echo "WARN locale : en_US.UTF-8 없음 (Steam이 C 로캘로 돌아 한글 입력이 안 될 수 있음, [시험 도구 설치]를 다시 누르면 만듦)"
+    fi
     FONT_DONE=$HOME/.steam/.ezs-fontcheck
     bin_id=$(stat -c '%s %Y' "$BIN" 2>/dev/null)
     if [ -f "$BIN" ] && [ "$bin_id" != "$(cat "$FONT_DONE" 2>/dev/null)" ] && command -v strings >/dev/null 2>&1; then
