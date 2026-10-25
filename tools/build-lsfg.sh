@@ -39,8 +39,19 @@ ninja -C "$WORK/build" lsfg-vk
 mkdir -p "$OUT"
 cp "$WORK/build/liblsfg-vk.so" "$OUT/"
 strip "$OUT/liblsfg-vk.so"
-# Layer manifest: library next to it (relative path) / 레이어 설명 파일: 라이브러리는 옆(상대 경로)
-cp "$WORK/lsfg/VkLayer_LS_frame_generation.json" "$OUT/"
+# Layer manifest: library next to it. The upstream file names it without a path
+# ("liblsfg-vk.so"), which the Vulkan loader looks up in the system library folders, not next to
+# the manifest ("liblsfg-vk.so: cannot open shared object file", device log 2026-10-25); "./"
+# makes it relative to the manifest. The build stops if the line is not found.
+# 레이어 설명 파일: 라이브러리는 옆. 원본은 경로 없이 이름만 적어("liblsfg-vk.so") Vulkan 로더가 설명 파일 옆이
+# 아니라 시스템 라이브러리 폴더에서 찾음("liblsfg-vk.so: cannot open shared object file", 기기 로그
+# 2026-10-25). "./"를 붙여 설명 파일 기준 상대 경로로 만듦. 그 줄이 없으면 빌드를 멈춤
+sed 's|"library_path": *"liblsfg-vk.so"|"library_path": "./liblsfg-vk.so"|' \
+    "$WORK/lsfg/VkLayer_LS_frame_generation.json" > "$OUT/VkLayer_LS_frame_generation.json"
+grep -q '"library_path": "./liblsfg-vk.so"' "$OUT/VkLayer_LS_frame_generation.json" || {
+    echo "VkLayer_LS_frame_generation.json: library_path 줄을 못 찾음" >&2
+    exit 1
+}
 # Licenses of everything inside the library / 라이브러리에 들어간 모든 것의 라이선스
 mkdir -p "$OUT/licenses"
 cp "$WORK/lsfg/LICENSE.md" "$OUT/licenses/lsfg-vk.md"
