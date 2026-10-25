@@ -299,7 +299,7 @@ done
 # The client-only HID test switch (steam-run.sh) is not passed on to games
 # 클라이언트 전용 HID 시험 스위치(steam-run.sh)는 게임에 넘기지 않음
 if [ "${EZS_STEAM_HID_LOW:-0}" = 1 ]; then
-    unset SDL_JOYSTICK_HIDAPI SDL_HIDAPI_UDEV
+    unset SDL_JOYSTICK_HIDAPI SDL_HIDAPI_UDEV SDL_HIDAPI_LIBUSB
 fi
 # Frame limit for D3D12 games (vkd3d-proton, VKD3D_FRAME_RATE since vkd3d-proton 2.14; 0 = no
 # limit): 60 by default like the DX9-11 limit in DXVK_CONFIG, which vkd3d-proton does not read.
@@ -347,16 +347,31 @@ if [ -f "$HOME/.local/share/ezsteam/cpu-big" ]; then
     done
     BIG=""
     N=0
+    ALL=0
     for f in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/cpuinfo_max_freq; do
         [ -r "$f" ] || continue
         v=$(cat "$f")
         c=$(echo "$f" | sed 's|.*/cpu\([0-9]*\)/cpufreq.*|\1|')
+        ALL=$((ALL + 1))
         if [ "$v" -gt "$MINF" ]; then
             BIG="${BIG:+$BIG,}$c"
             N=$((N + 1))
         fi
     done
-    if [ "$N" -gt 0 ]; then
+    # The lowest cluster is only left out when it is a minority of small cores: on a chip whose
+    # lowest cluster is most of the cores (2 + 6 layout) the game kept only 2 CPUs and ran slower
+    # (2026-10-25, "2 logical CPUs, host CPUs 6,7"). At least 4 CPUs and half of all must stay.
+    # 가장 낮은 묶음은 작은 코어가 소수일 때만 뺌: 가장 낮은 묶음이 코어 대부분인 칩(2 + 6 배치)에서는 게임이
+    # CPU 2개만 남아 더 느렸음(2026-10-25, "2 logical CPUs, host CPUs 6,7"). 최소 4개이고 전체의 절반 이상 남아야 함
+    if [ "$N" -gt 0 ] && { [ "$N" -lt 4 ] || [ $((N * 2)) -lt "$ALL" ]; }; then
+        echo "ezproton: CPU 배치 큰 코어만(시험): 빼려는 묶음이 코어 대부분($((ALL - N))/$ALL), 모든 코어 사용" >&2
+        N=0
+        BIG=""
+        MINF=-1
+    fi
+    if [ "$MINF" = -1 ]; then
+        :
+    elif [ "$N" -gt 0 ]; then
         export PROTON_CPU_TOPOLOGY="$N:$BIG"
         echo "ezproton: CPU 배치 큰 코어만(시험) PROTON_CPU_TOPOLOGY=$PROTON_CPU_TOPOLOGY" >&2
     else

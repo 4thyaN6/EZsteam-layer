@@ -396,10 +396,27 @@ print(r, os.strerror(ctypes.get_errno()))' 2>&1 | tail -n 1)
     fi
     # UTF-8 locale for the client (without it: C locale, Korean text input lost)
     # 클라이언트용 UTF-8 로캘(없으면 C 로캘이 되어 한글 입력이 사라짐)
+    # Missing ones are made here once when the locale sources are in the rootfs (package
+    # "locales", from [시험 도구 설치]); the 2026-10-25 report still had none although the button
+    # step existed, so the start itself now makes them and says which part is missing.
+    # 없으면 rootfs에 로캘 원본(패키지 "locales", [시험 도구 설치])이 있을 때 여기서 한 번 만듦. 2026-10-25
+    # 제보에 버튼 단계가 있었는데도 로캘이 없었으므로 시작 자체가 만들고 어느 부분이 없는지 알림
+    for L in en_US ko_KR; do
+        locale -a 2>/dev/null | grep -qi "^$L\.utf-\?8\$" && continue
+        if ! command -v localedef >/dev/null 2>&1; then
+            echo "WARN locale : $L.UTF-8 없음, localedef 없음"
+        elif [ ! -f "/usr/share/i18n/locales/$L" ] || ! ls /usr/share/i18n/charmaps/UTF-8* >/dev/null 2>&1; then
+            echo "WARN locale : $L.UTF-8 없음, 로캘 원본 없음(locales 패키지, [시험 도구 설치]를 다시 누르면 받음)"
+        elif localedef --no-archive -i "$L" -c -f UTF-8 "$L.UTF-8" 2>/tmp/ezs-localedef.err; then
+            echo "OK   locale : $L.UTF-8 만듦"
+        else
+            echo "FAIL locale : $L.UTF-8 만들기 실패: $(tail -n 1 /tmp/ezs-localedef.err 2>/dev/null)"
+        fi
+    done
     if locale -a 2>/dev/null | grep -qi '^en_US\.utf-\?8$'; then
         echo "INFO locale : en_US.UTF-8 있음$(locale -a 2>/dev/null | grep -qi '^ko_KR\.utf-\?8$' && echo ', ko_KR.UTF-8 있음')"
     else
-        echo "WARN locale : en_US.UTF-8 없음 (Steam이 C 로캘로 돌아 한글 입력이 안 될 수 있음, [시험 도구 설치]를 다시 누르면 만듦)"
+        echo "WARN locale : en_US.UTF-8 없음 (Steam이 C 로캘로 돌아 한글 입력이 안 될 수 있음)"
     fi
     FONT_DONE=$HOME/.steam/.ezs-fontcheck
     bin_id=$(stat -c '%s %Y' "$BIN" 2>/dev/null)
@@ -457,8 +474,15 @@ print(r, os.strerror(ctypes.get_errno()))' 2>&1 | tail -n 1)
     # 않음(PRoot 아래에서 udev는 동작하지 않고, 빅픽처는 분당 12,000~21,000번 다시 시도했음). 우리 패드는
     # HIDAPI가 아니라 SDL 가상 조이스틱으로 클라이언트에 들어감. 게임에는 ezproton이 기본값을 돌려줌
     if [ "${EZS_STEAM_HID_LOW:-0}" = 1 ]; then
-        export SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0
-        echo "INFO steam : HID 찾기 줄임(시험): SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0"
+        # SDL_HIDAPI_LIBUSB=0 too: the 2026-10-25 counts showed the client loading libusb again and
+        # again (ld.so.cache, libusb-1.0.so.0 twice, /dev/bus/usb, statfs /sys, mountinfo, about
+        # 330 times a second in Big Picture); libusb cannot start without /dev/bus/usb and the
+        # uevent socket, so SDL's HID layer kept retrying it (inference)
+        # SDL_HIDAPI_LIBUSB=0도: 2026-10-25 집계에서 클라이언트가 libusb를 계속 다시 불러옴(ld.so.cache,
+        # libusb-1.0.so.0 두 번, /dev/bus/usb, statfs /sys, mountinfo, 빅픽처에서 초당 약 330번). libusb는
+        # /dev/bus/usb와 uevent 소켓 없이 시작하지 못하므로 SDL HID 층이 계속 다시 시도한 것(추론)
+        export SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0 SDL_HIDAPI_LIBUSB=0
+        echo "INFO steam : HID 찾기 줄임(시험): SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0 SDL_HIDAPI_LIBUSB=0"
     fi
     LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_CLIENT_PRELOAD" \
         "$BIN" -no-cef-sandbox $GPUARG $BPARG -chromeosnopreallocate $VERIFY ${EZS_STEAM_EXTRA:-} >>"$LOG" 2>&1

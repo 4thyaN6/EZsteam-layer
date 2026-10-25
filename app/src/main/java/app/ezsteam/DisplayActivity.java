@@ -2047,6 +2047,12 @@ public class DisplayActivity extends Activity {
                     File[] fs = logDir.listFiles((d, name) -> name.startsWith("steam-") && name.endsWith(".log"));
                     File newest = null;
                     if (fs != null) for (File f : fs) if (newest == null || f.lastModified() > newest.lastModified()) newest = f;
+                    // Only a log written in the last 15 s: when a game starts, its old log is moved away
+                    // first, and the newest left was another game's from long before (its stale lines
+                    // came into the report, 2026-10-25)
+                    // 최근 15초 안에 쓰인 로그만: 게임이 시작할 때 이전 로그가 먼저 옮겨져, 남은 것 중 가장 새 것이
+                    // 한참 전 다른 게임 로그였음(그 오래된 줄이 제보에 섞임, 2026-10-25)
+                    if (newest != null && System.currentTimeMillis() - newest.lastModified() > 15000) newest = null;
                     if (newest != null && !newest.equals(proton.file)) {
                         proton.file = newest;
                         protonLogFile = newest;

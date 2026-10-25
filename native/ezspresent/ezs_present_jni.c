@@ -655,6 +655,11 @@ static uint32_t session(int s, const struct ezp_msg *first)
 #define MAX_SC 8
 struct csc {
     int used, alive, sock, id;
+    /* Set while comp_start is still sending buffers: the GL thread must not clean the slot up
+     * (it did once, closing the socket mid-setup: "버퍼 0 머리 보내기 (Bad file descriptor)")
+     * comp_start가 아직 버퍼를 보내는 중이면 켜짐: GL 스레드가 그 자리를 정리하면 안 됨(설정 도중 소켓을 닫은
+     * 적 있음: "버퍼 0 머리 보내기 (Bad file descriptor)") */
+    int starting;
     uint32_t w, h, count, order, window, pid;
     AHardwareBuffer *ahb[EZP_MAX_BUFFERS];
     EGLImageKHR img[EZP_MAX_BUFFERS];
@@ -766,6 +771,8 @@ static void comp_start(int s, const struct ezp_msg *m, char *line, size_t cap)
     if (c) {
         memset(c, 0, sizeof *c);
         c->used = 1;
+        c->starting = 1;
+        c->sock = s;
         c->id = g_next_id++;
         c->queued = c->shown = c->to_release = -1;
         c->queued_fence = -1;
@@ -846,19 +853,12 @@ static void comp_start(int s, const struct ezp_msg *m, char *line, size_t cap)
         close(s);
         pthread_mutex_lock(&g_cmu);
         c->used = 0;
+        c->starting = 0;
         pthread_mutex_unlock(&g_cmu);
         return;
     }
-    c->alive = 1;
-    pthread_t t;
-    pthread_attr_t at;
-    pthread_attr_init(&at);
-    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
-    if (pthread_create(&t, &at, sc_reader, c) != 0) {
-        c->alive = 0;
-    }
-    pthread_attr_destroy(&at);
-    /* Current frame limit for the new swapchain / 새 swapchain에 지금 프레임 제한 */
+    /* Current frame limit for the new swapchain, sent before the slot is ready (the socket is still
+     * surely open) / 새 swapchain에 지금 프레임 제한. 자리가 준비되기 전에 보냄(소켓이 확실히 열려 있음) */
     if (g_fps_app >= 0) {
         struct ezp_msg f;
         memset(&f, 0, sizeof f);
@@ -868,6 +868,24 @@ static void comp_start(int s, const struct ezp_msg *m, char *line, size_t cap)
         send_msg(s, &f, NULL, 0, NULL, 0);
         pthread_mutex_unlock(&c->wmu);
     }
+    /* Ready: alive and no longer starting in one step under the lock, so the GL thread never sees
+     * a half-made slot as finished / 준비 끝: 잠금 안에서 alive와 starting을 한 번에 바꿔 GL 스레드가 반쯤 만든
+     * 자리를 끝난 것으로 보지 않게 함 */
+    pthread_mutex_lock(&g_cmu);
+    c->alive = 1;
+    c->starting = 0;
+    pthread_mutex_unlock(&g_cmu);
+    pthread_t t;
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&t, &at, sc_reader, c) != 0) {
+        /* No reader: mark finished so the GL thread frees it / 읽기 스레드 없음: 끝난 것으로 표시해 GL 스레드가 놓게 함 */
+        pthread_mutex_lock(&g_cmu);
+        c->alive = 0;
+        pthread_mutex_unlock(&g_cmu);
+    }
+    pthread_attr_destroy(&at);
     snprintf(line, cap, "S %d %u %u %u %u %u %u %u %s", c->id, c->w, c->h, c->count, m->fourcc, c->window, c->pid,
              stride, g_compress && g_gpu_mod == EZP_MOD_QCOM_COMPRESSED ? "압축" : "linear");
 }
@@ -972,7 +990,7 @@ static int comp_frame(jint o[9])
     pthread_mutex_lock(&g_cmu);
     /* Forget finished connections that are no longer shown / 더 보이지 않는 끝난 연결을 정리 */
     for (int i = 0; i < MAX_SC; i++)
-        if (g_sc[i].used && !g_sc[i].alive && i != g_cur) sc_cleanup(&g_sc[i], d);
+        if (g_sc[i].used && !g_sc[i].alive && !g_sc[i].starting && i != g_cur) sc_cleanup(&g_sc[i], d);
     /* Newest presenter among live connections. A game that stops presenting for a while (loading)
      * keeps its last frame on screen instead of falling back to its empty X window.
      * 살아 있는 연결 중 가장 늦게 present한 것. 잠시 present를 멈춘 게임(로딩)은 빈 X 창으로 돌아가지
@@ -996,7 +1014,7 @@ static int comp_frame(jint o[9])
                 pthread_mutex_lock(&g_cmu);
             }
         }
-        if (o->used && !o->alive) sc_cleanup(o, d);
+        if (o->used && !o->alive && !o->starting) sc_cleanup(o, d);
     }
     g_cur = best;
     if (best < 0) {
