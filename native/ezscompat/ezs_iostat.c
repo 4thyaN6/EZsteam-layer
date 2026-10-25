@@ -57,6 +57,7 @@
 #include <ifaddrs.h>
 #include <dirent.h>
 #include <sys/uio.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -200,6 +201,7 @@ static void report(uint64_t t);
 static int build_lookups(char *out, size_t size);
 /* Same-answer cache use, inotify results (see the cache section below) / 같은 답 재사용 횟수, inotify 결과(아래 캐시 부분 참고) */
 static uint64_t hit_udev, hit_dev, hit_uevent, uevent_ok, hit_ui;
+static uint64_t uevent_stubbed;    /* stand-in uevent sockets given (EZS_UEVENT_STUB) / 내준 uevent 소켓 대역 수 */
 static char ino_fail_path[160];
 static int ui_n;              /* Steam UI cache entries / Steam 화면 파일 캐시 항목 수 */
 static int uevent_errno;          /* errno of the refused socket, 0 = none / 거부된 소켓의 errno, 0 = 없음 */
@@ -334,6 +336,11 @@ static void report(uint64_t span)
     pthread_mutex_unlock(&plock);
     if (shown) fprintf(stderr, "%s\n", top);
     if (build_lookups(look, sizeof(look))) fprintf(stderr, "%s\n", look);
+    {
+        // Stand-in uevent sockets handed out (total since start) / 내준 uevent 소켓 대역 수(시작 뒤 합계)
+        uint64_t us = __atomic_load_n(&uevent_stubbed, __ATOMIC_RELAXED);
+        if (us) fprintf(stderr, "ezs-io: uevent 소켓 대역 %llu개(시작 뒤 합계)\n", (unsigned long long)us);
+    }
     uint64_t ifa = __atomic_exchange_n(&ifaddrs_calls, 0, __ATOMIC_RELAXED);
     if (ifa) fprintf(stderr, "ezs-io: getifaddrs %llu회\n", (unsigned long long)ifa);
     // Same-answer cache use and inotify results / 같은 답 재사용 횟수와 inotify 결과
@@ -1028,6 +1035,46 @@ int getifaddrs(struct ifaddrs **out)
     return real_getifaddrs(out);
 }
 
+/*
+ * Quiet stand-in for a refused uevent socket (EZS_UEVENT_STUB=1, client process "steam" only).
+ * Why (2026-10-25 logs + SDL3 source): the client's SDL_hid_init() needs SDL_UDEV_Init(), which
+ * fails when udev_monitor_new_from_netlink() gets no socket (Android refuses NETLINK_KOBJECT_UEVENT
+ * with EACCES). Then SDL_hid_init() returns -1, its use count stays 0, and every HID enumerate
+ * calls it again: about 500 rounds a second in Big Picture (each: /run/udev/control,
+ * /proc/self/mountinfo, the uevent socket, two console_log lines), 1,800 PRoot stops a second.
+ * An unbound AF_UNIX datagram socket lets the monitor be created; it never becomes readable, so
+ * no device events arrive (none could here anyway). The monitor's bind later fails, which SDL
+ * ignores. Devices are still found by SDL's scan. Off: the refusal is passed on as before.
+ * 거부된 uevent 소켓의 조용한 대역(EZS_UEVENT_STUB=1, 클라이언트 프로세스 "steam"에서만).
+ * 이유(2026-10-25 로그 + SDL3 소스): 클라이언트의 SDL_hid_init()은 SDL_UDEV_Init()이 필요한데,
+ * udev_monitor_new_from_netlink()가 소켓을 못 얻으면 실패함(안드로이드는 NETLINK_KOBJECT_UEVENT를 EACCES로
+ * 거부). 그러면 SDL_hid_init()이 -1을 돌려주고 사용 수가 0으로 남아 HID 찾기마다 다시 부름: 빅픽처에서 초당
+ * 약 500번(매번 /run/udev/control, /proc/self/mountinfo, uevent 소켓, console_log 두 줄), PRoot 정지 초당 1,800번.
+ * 묶지 않은 AF_UNIX 데이터그램 소켓이면 감시 객체가 만들어짐. 읽을 것이 생기지 않으므로 장치 사건은 오지 않음
+ * (여기서는 어차피 올 수 없음). 감시의 bind는 나중에 실패하며 SDL은 그것을 무시함. 장치는 SDL 검색으로 여전히
+ * 찾음. 끄면 예전처럼 거부를 그대로 넘김
+ */
+static int uevent_stub(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("EZS_UEVENT_STUB");
+        v = e && strcmp(e, "1") == 0 && strcmp(program_invocation_short_name, "steam") == 0;
+    }
+    return v;
+}
+
+static int quiet_socket(int (*real)(int, int, int), int type)
+{
+    int fd = real(1 /* AF_UNIX */, SOCK_DGRAM | (type & (SOCK_CLOEXEC | SOCK_NONBLOCK)), 0);
+    if (fd >= 0) {
+        // One line the first time, so the log shows the stand-in was used / 처음 한 번 한 줄
+        if (__atomic_fetch_add(&uevent_stubbed, 1, __ATOMIC_RELAXED) == 0)
+            fprintf(stderr, "ezs-io: uevent 소켓 대역 사용(EZS_UEVENT_STUB=1, HID 초기화 반복 막기)\n");
+    }
+    return fd;
+}
+
 /* Count socket() by family / 계열별 socket() 수를 셈 */
 int socket(int domain, int type, int proto)
 {
@@ -1054,13 +1101,15 @@ int socket(int domain, int type, int proto)
         int e = __atomic_load_n(&uevent_errno, __ATOMIC_RELAXED);
         if (e) {
             if (on()) __atomic_add_fetch(&hit_uevent, 1, __ATOMIC_RELAXED);
+            if (uevent_stub()) return quiet_socket(real_socket, type);
             errno = e;
             return -1;
         }
         int r = real_socket(domain, type, proto);
-        if (r < 0 && (errno == EACCES || errno == EPERM || errno == EAFNOSUPPORT || errno == EPROTONOSUPPORT))
+        if (r < 0 && (errno == EACCES || errno == EPERM || errno == EAFNOSUPPORT || errno == EPROTONOSUPPORT)) {
             __atomic_store_n(&uevent_errno, errno, __ATOMIC_RELAXED);
-        else if (r >= 0 && on())
+            if (uevent_stub()) return quiet_socket(real_socket, type);
+        } else if (r >= 0 && on())
             __atomic_add_fetch(&uevent_ok, 1, __ATOMIC_RELAXED);
         return r;
     }

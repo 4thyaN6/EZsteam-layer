@@ -481,8 +481,17 @@ print(r, os.strerror(ctypes.get_errno()))' 2>&1 | tail -n 1)
         # SDL_HIDAPI_LIBUSB=0도: 2026-10-25 집계에서 클라이언트가 libusb를 계속 다시 불러옴(ld.so.cache,
         # libusb-1.0.so.0 두 번, /dev/bus/usb, statfs /sys, mountinfo, 빅픽처에서 초당 약 330번). libusb는
         # /dev/bus/usb와 uevent 소켓 없이 시작하지 못하므로 SDL HID 층이 계속 다시 시도한 것(추론)
-        export SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0 SDL_HIDAPI_LIBUSB=0
-        echo "INFO steam : HID 찾기 줄임(시험): SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0 SDL_HIDAPI_LIBUSB=0"
+        # EZS_UEVENT_STUB=1: the client preload (native/ezscompat) hands SDL a quiet socket in
+        # place of the refused udev monitor socket, so SDL_hid_init() succeeds once instead of
+        # failing and being retried about 500 times a second (2026-10-25: console_log "udev disabled
+        # by SDL_HINT_HIDAPI_UDEV" / "libusb disabled ..." 1,000 lines a second, mountinfo + uevent
+        # socket 30,000 a minute)
+        # EZS_UEVENT_STUB=1: 클라이언트 preload(native/ezscompat)가 거부된 udev 감시 소켓 대신 조용한 소켓을 SDL에
+        # 줘서 SDL_hid_init()이 실패 후 초당 약 500번 다시 시도하지 않고 한 번에 성공하게 함(2026-10-25:
+        # console_log "udev disabled by SDL_HINT_HIDAPI_UDEV" / "libusb disabled ..." 초당 1,000줄, mountinfo +
+        # uevent 소켓 분당 3만 번)
+        export SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0 SDL_HIDAPI_LIBUSB=0 EZS_UEVENT_STUB=1
+        echo "INFO steam : HID 찾기 줄임(시험): SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0 SDL_HIDAPI_LIBUSB=0 EZS_UEVENT_STUB=1"
     fi
     LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_CLIENT_PRELOAD" \
         "$BIN" -no-cef-sandbox $GPUARG $BPARG -chromeosnopreallocate $VERIFY ${EZS_STEAM_EXTRA:-} >>"$LOG" 2>&1

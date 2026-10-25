@@ -487,10 +487,29 @@ static VKAPI_ATTR VkResult VKAPI_CALL ezs_CreateDevice(VkPhysicalDevice p, const
     VkLayerDeviceCreateInfo *li = (VkLayerDeviceCreateInfo *)ci->pNext;
     while (li && !(li->sType == VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO && li->function == VK_LAYER_LINK_INFO))
         li = (VkLayerDeviceCreateInfo *)li->pNext;
-    if (!li) return VK_ERROR_INITIALIZATION_FAILED;
-    PFN_vkGetInstanceProcAddr ngipa = li->u.pLayerInfo->pfnNextGetInstanceProcAddr;
-    PFN_vkGetDeviceProcAddr ngdpa = li->u.pLayerInfo->pfnNextGetDeviceProcAddr;
-    li->u.pLayerInfo = li->u.pLayerInfo->pNext;
+    struct inst *in0 = inst_of(p);
+    PFN_vkGetInstanceProcAddr ngipa;
+    PFN_vkGetDeviceProcAddr ngdpa;
+    int direct_call = !li;
+    if (li) {
+        ngipa = li->u.pLayerInfo->pfnNextGetInstanceProcAddr;
+        ngdpa = li->u.pLayerInfo->pfnNextGetDeviceProcAddr;
+        li->u.pLayerInfo = li->u.pLayerInfo->pNext;
+    } else {
+        /* Called straight by a layer above, not through the loader: LSFG gets vkCreateDevice from
+         * this layer's vkGetInstanceProcAddr and makes its own compute device with it, without
+         * loader chain info. It failed here with -3 ("Failed to create logical device (error -3)",
+         * device log 2026-10-25). Such a device is passed on to the next layer as it is and kept
+         * as a plain pass-through device (no direct present, it has no swapchain).
+         * 로더를 거치지 않고 위 레이어가 직접 부름: LSFG는 이 레이어의 vkGetInstanceProcAddr로
+         * vkCreateDevice를 얻어 로더 연결 정보 없이 자기 계산용 장치를 만듦. 여기서 -3으로 실패했음("Failed
+         * to create logical device (error -3)", 기기 로그 2026-10-25). 이런 장치는 다음 레이어에 그대로 넘기고
+         * 단순 통과 장치로 둠(직접 전달 없음, swapchain이 없음) */
+        if (!in0) return VK_ERROR_INITIALIZATION_FAILED;
+        ngipa = in0->gipa;
+        ngdpa = (PFN_vkGetDeviceProcAddr)in0->gipa(in0->h, "vkGetDeviceProcAddr");
+        if (!ngdpa) return VK_ERROR_INITIALIZATION_FAILED;
+    }
     /* Loader callback that gives our own command buffers their dispatch table
      * 우리 명령 버퍼에 디스패치 표를 붙여 주는 로더 콜백 */
     PFN_vkSetDeviceLoaderData set_data = NULL;
@@ -534,8 +553,11 @@ static VKAPI_ATTR VkResult VKAPI_CALL ezs_CreateDevice(VkPhysicalDevice p, const
     VkDeviceCreateInfo mod = *ci;
     mod.enabledExtensionCount = nn;
     mod.ppEnabledExtensionNames = names;
-    VkResult r = create(p, &mod, a, out);
-    if (r != VK_SUCCESS) {
+    /* A device made directly by a layer above is created exactly as asked
+     * 위 레이어가 직접 만드는 장치는 요청 그대로 만듦 */
+    VkResult r = create ? create(p, direct_call ? ci : &mod, a, out) : VK_ERROR_INITIALIZATION_FAILED;
+    if (direct_call && r == VK_SUCCESS) for (int k = 0; k < N_NEED; k++) have[k] = 0;
+    if (r != VK_SUCCESS && create && !direct_call) {
         /* Retry exactly as the game asked / 게임이 요청한 그대로 다시 시도 */
         r = create(p, ci, a, out);
         for (int k = 0; k < N_NEED; k++) have[k] = 0;
@@ -566,7 +588,9 @@ static VKAPI_ATTR VkResult VKAPI_CALL ezs_CreateDevice(VkPhysicalDevice p, const
 #undef DL
     if (!d->GetMemoryFdPropertiesKHR || !d->ImportSemaphoreFdKHR || !d->GetSemaphoreFdKHR) d->ok = 0;
     if (!d->ImportFenceFdKHR) d->fence_fd = 0;
-    LOG("장치 준비: 직접 전달 %s (fence fd %s)", d->ok ? "가능" : "불가 — 기존 화면 경로", d->fence_fd ? "있음" : "없음");
+    if (direct_call) d->ok = 0;
+    LOG("장치 준비%s: 직접 전달 %s (fence fd %s)", direct_call ? "(위 레이어가 직접 만든 장치, 그대로 넘김)" : "",
+        d->ok ? "가능" : "불가 — 기존 화면 경로", d->fence_fd ? "있음" : "없음");
     pthread_mutex_lock(&g_mu);
     for (int i = 0; i < MAX_DEV; i++)
         if (!g_dev[i]) { g_dev[i] = d; break; }

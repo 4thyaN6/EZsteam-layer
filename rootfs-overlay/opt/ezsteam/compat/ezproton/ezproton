@@ -310,7 +310,7 @@ done
 # The client-only HID test switch (steam-run.sh) is not passed on to games
 # 클라이언트 전용 HID 시험 스위치(steam-run.sh)는 게임에 넘기지 않음
 if [ "${EZS_STEAM_HID_LOW:-0}" = 1 ]; then
-    unset SDL_JOYSTICK_HIDAPI SDL_HIDAPI_UDEV SDL_HIDAPI_LIBUSB
+    unset SDL_JOYSTICK_HIDAPI SDL_HIDAPI_UDEV SDL_HIDAPI_LIBUSB EZS_UEVENT_STUB
 fi
 # Frame limit for D3D12 games (vkd3d-proton, VKD3D_FRAME_RATE since vkd3d-proton 2.14; 0 = no
 # limit): 60 by default like the DX9-11 limit in DXVK_CONFIG, which vkd3d-proton does not read.
