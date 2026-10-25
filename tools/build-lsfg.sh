@@ -38,9 +38,50 @@ git -C "$WORK/lsfg" checkout -q "$COMMIT"
 git -C "$WORK/lsfg" submodule update -q --init --recursive
 git -c advice.detachedHead=false clone -q --depth 1 -b "$VKH_TAG" https://github.com/KhronosGroup/Vulkan-Headers "$WORK/vkh"
 
+# The fork's Turnip path is compiled only under __ANDROID__: frame generation on the game's own
+# device and queue, synchronous, without OPAQUE_FD semaphores. The desktop path exports OPAQUE_FD
+# semaphores, which Turnip on KGSL refuses ("Unable to create semaphore (error -1000072003)" =
+# VK_ERROR_INVALID_EXTERNAL_HANDLE, device log 2026-10-25). So this glibc build defines
+# __ANDROID__ (and VK_USE_PLATFORM_ANDROID_KHR for the Vulkan types those files name) with two
+# small headers of this script standing in for the NDK ones: android/log.h prints to stderr,
+# android/hardware_buffer.h only names the type. No AHardwareBuffer function is called on that
+# path (checked: the library needs no Android symbol, see the nm check below).
+# 포크의 Turnip 경로는 __ANDROID__일 때만 컴파일됨: 게임 자신의 장치·큐에서 동기식으로 프레임 생성, OPAQUE_FD
+# 세마포어 없음. 데스크톱 경로는 OPAQUE_FD 세마포어를 내보내는데 KGSL의 Turnip이 거부함("Unable to create
+# semaphore (error -1000072003)" = VK_ERROR_INVALID_EXTERNAL_HANDLE, 기기 로그 2026-10-25). 그래서 이 glibc 빌드는
+# __ANDROID__(그리고 그 파일들이 쓰는 Vulkan 형식용 VK_USE_PLATFORM_ANDROID_KHR)를 정의하고, NDK 헤더 대신 이
+# 스크립트의 작은 헤더 두 개를 씀: android/log.h는 stderr로 출력, android/hardware_buffer.h는 형식 이름만 둠.
+# 그 경로에서 AHardwareBuffer 함수는 부르지 않음(확인: 라이브러리가 안드로이드 심볼을 요구하지 않음, 아래 nm 확인)
+mkdir -p "$WORK/shim/android"
+cat > "$WORK/shim/android/log.h" <<'SHIM'
+/* Stand-in for the NDK log header: messages go to stderr / NDK 로그 헤더 대역: 메시지는 stderr로 */
+#pragma once
+#include <stdio.h>
+#include <stdarg.h>
+enum { ANDROID_LOG_UNKNOWN = 0, ANDROID_LOG_DEFAULT, ANDROID_LOG_VERBOSE, ANDROID_LOG_DEBUG,
+       ANDROID_LOG_INFO, ANDROID_LOG_WARN, ANDROID_LOG_ERROR, ANDROID_LOG_FATAL, ANDROID_LOG_SILENT };
+static inline int __android_log_print(int prio, const char *tag, const char *fmt, ...)
+{
+    va_list ap;
+    int n;
+    (void)prio;
+    va_start(ap, fmt);
+    fprintf(stderr, "%s: ", tag);
+    n = vfprintf(stderr, fmt, ap);
+    fputc('\n', stderr);
+    va_end(ap);
+    return n;
+}
+SHIM
+cat > "$WORK/shim/android/hardware_buffer.h" <<'SHIM'
+/* Stand-in for the NDK header: only the type name is used / NDK 헤더 대역: 형식 이름만 씀 */
+#pragma once
+typedef struct AHardwareBuffer AHardwareBuffer;
+SHIM
+LSFG_FLAGS="-I$WORK/vkh/include -I$WORK/shim -D__ANDROID__ -DVK_USE_PLATFORM_ANDROID_KHR"
 cmake -S "$WORK/lsfg" -B "$WORK/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-    -DCMAKE_C_FLAGS="-I$WORK/vkh/include" -DCMAKE_CXX_FLAGS="-I$WORK/vkh/include"
+    -DCMAKE_C_FLAGS="$LSFG_FLAGS" -DCMAKE_CXX_FLAGS="$LSFG_FLAGS"
 ninja -C "$WORK/build" lsfg-vk
 
 mkdir -p "$OUT"
@@ -48,6 +89,12 @@ cp "$WORK/build/liblsfg-vk.so" "$OUT/"
 strip "$OUT/liblsfg-vk.so"
 # The loader looks these two up by name (manifest "functions"); stop the build if either is not
 # exported / 로더가 이름으로 찾는 두 함수(매니페스트 "functions"). 하나라도 내보내지 않았으면 빌드를 멈춤
+# No Android library symbol may be needed (the shim build must stay plain glibc)
+# 안드로이드 라이브러리 심볼이 필요하면 안 됨(대역 빌드는 순수 glibc여야 함)
+if nm -D --undefined-only "$OUT/liblsfg-vk.so" | grep -qiE 'AHardwareBuffer_|__android_log|ANativeWindow'; then
+    echo "liblsfg-vk.so: 안드로이드 심볼 필요" >&2
+    exit 1
+fi
 for sym in layer_vkGetInstanceProcAddr layer_vkGetDeviceProcAddr; do
     nm -D --defined-only "$OUT/liblsfg-vk.so" | grep -q " T $sym\$" || {
         echo "liblsfg-vk.so: $sym 내보내지 않음" >&2

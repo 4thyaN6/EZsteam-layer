@@ -209,19 +209,23 @@ public class MainActivity extends Activity {
         });
         // Diagnosis: the client's file I/O summary with its busiest written paths, once a minute
         // 진단: 클라이언트 파일 입출력 요약과 쓰기가 많은 경로를 1분마다 기록
-        // Test switch: fewer controller (HID) discovery rounds in the Steam client. Big Picture
-        // printed "Using udev for HIDAPI joystick device discovery" 12,000-21,000 times a minute
-        // (normal window about 1,700) while PRoot sat near 70 % (normal window 10-20 %), 2026-10-23.
-        // Off by default; the Steam client only, games keep the defaults.
-        // 시험 스위치: Steam 클라이언트의 컨트롤러(HID) 찾기 횟수 줄이기. 빅픽처는 "Using udev for HIDAPI
-        // joystick device discovery"를 분당 12,000~21,000번(일반 창 약 1,700번) 남겼고 그동안 PRoot가 약 70%
-        // (일반 창 10~20%)였음(2026-10-23). 기본 끔. Steam 클라이언트에만 적용하고 게임은 기본값 그대로
-        Button hid = addButton(row4, "Steam HID 찾기: " + (steamHidLow(this) ? "줄임(시험)" : "기본"), null);
+        // Fewer controller (HID) discovery rounds in the Steam client. Big Picture printed "Using udev
+        // for HIDAPI joystick device discovery" 12,000-21,000 times a minute (normal window about
+        // 1,700) while PRoot sat near 70 % (normal window 10-20 %), 2026-10-23. On by default since
+        // 2026-10-25: with the udev stand-ins (steam-run.sh) Big Picture's HID init stopped repeating
+        // (idle PRoot about 64 % -> 6 %) and the pad worked in Big Picture (user check). The Steam
+        // client only, games keep the defaults. Off = the client's own defaults.
+        // Steam 클라이언트의 컨트롤러(HID) 찾기 횟수 줄이기. 빅픽처는 "Using udev for HIDAPI joystick device
+        // discovery"를 분당 12,000~21,000번(일반 창 약 1,700번) 남겼고 그동안 PRoot가 약 70%(일반 창 10~20%)였음
+        // (2026-10-23). 2026-10-25부터 기본 켬: udev 대역(steam-run.sh)으로 빅픽처 HID 초기화 반복이 멈췄고
+        // (대기 PRoot 약 64% -> 6%) 빅픽처에서 패드가 동작함(사용자 확인). Steam 클라이언트에만 적용하고 게임은
+        // 기본값 그대로. 끄면 클라이언트 원래 기본값
+        Button hid = addButton(row4, "Steam HID 찾기: " + (steamHidLow(this) ? "줄임" : "기본"), null);
         hid.setOnClickListener(v -> {
             boolean on = !steamHidLow(this);
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_STEAM_HID_LOW, on).apply();
-            hid.setText("Steam HID 찾기: " + (on ? "줄임(시험)" : "기본"));
-            log("Steam HID 찾기: " + (on ? "줄임(시험)" : "기본") + " (다음 Steam 시작부터)");
+            hid.setText("Steam HID 찾기: " + (on ? "줄임" : "기본"));
+            log("Steam HID 찾기: " + (on ? "줄임" : "기본") + " (다음 Steam 시작부터)");
         });
         // Test switch: Wine fsync with our futex_waitv stand-in (native/ezsfsync); a file EZ Proton
         // reads at every game start. Off by default.
@@ -486,7 +490,8 @@ public class MainActivity extends Activity {
     static final String KEY_STEAM_HID_LOW = "steam.hidLow";
 
     static boolean steamHidLow(android.content.Context ctx) {
-        return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_STEAM_HID_LOW, false);
+        // Default on (see the switch above) / 기본 켬(위 스위치 참고)
+        return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_STEAM_HID_LOW, true);
     }
 
     static boolean bigPicture(android.content.Context ctx) {
