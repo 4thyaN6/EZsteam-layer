@@ -36,6 +36,13 @@ WORK=$(mktemp -d)
 git -c advice.detachedHead=false clone -q "$REPO" "$WORK/lsfg"
 git -C "$WORK/lsfg" checkout -q "$COMMIT"
 git -C "$WORK/lsfg" submodule update -q --init --recursive
+# Project patches for the layer (MIT like the layer itself), applied in name order; the build stops
+# if one no longer applies / 레이어용 프로젝트 패치(레이어와 같은 MIT)를 이름 순서로 적용. 적용되지 않으면 빌드를 멈춤
+for p in tools/patches/lsfg-*.patch; do
+    [ -f "$p" ] || continue
+    git -C "$WORK/lsfg" apply "$PWD/$p"
+    echo "applied $(basename "$p")"
+done
 git -c advice.detachedHead=false clone -q --depth 1 -b "$VKH_TAG" https://github.com/KhronosGroup/Vulkan-Headers "$WORK/vkh"
 
 # The fork's Turnip path is compiled only under __ANDROID__: frame generation on the game's own
