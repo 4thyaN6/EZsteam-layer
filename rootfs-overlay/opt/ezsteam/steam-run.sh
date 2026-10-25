@@ -490,19 +490,24 @@ print(r, os.strerror(ctypes.get_errno()))' 2>&1 | tail -n 1)
         # 줘서 SDL_hid_init()이 실패 후 초당 약 500번 다시 시도하지 않고 한 번에 성공하게 함(2026-10-25:
         # console_log "udev disabled by SDL_HINT_HIDAPI_UDEV" / "libusb disabled ..." 초당 1,000줄, mountinfo +
         # uevent 소켓 분당 3만 번)
-        # (EZS_UEVENT_STUB=1 was tried on 2026-10-25 and left out: the stand-in socket was handed
-        # out about 30,000 times a minute, so the client opens and closes HID that often by itself
-        # rather than retrying a failure, and the stand-in only added socket + bind stops)
-        # (EZS_UEVENT_STUB=1은 2026-10-25에 시험 후 뺌: 대역 소켓이 분당 약 3만 번 나가 클라이언트가 실패를
-        # 다시 시도하는 것이 아니라 스스로 그만큼 HID를 열고 닫는 것이었고, 대역은 socket + bind 정지만 늘렸음)
+        # EZS_UEVENT_STUB=1: a complete stand-in for the refused udev monitor socket (socket pair,
+        # bind / getsockname / setsockopt answered), so SDL_hid_init() can succeed and stop being
+        # retried. The first try on 2026-10-25 gave only an unbound socket whose bind failed (-22)
+        # and the rounds went on (about 30,000 a minute); with the full stand-in the monitor's
+        # enable step succeeds too (checked against the real libudev). Watch "uevent 소켓 대역 N개":
+        # if N still grows by tens of thousands a minute, the client itself repeats HID init/exit.
+        # EZS_UEVENT_STUB=1: 거부된 udev 감시 소켓의 완전한 대역(소켓 쌍, bind / getsockname / setsockopt 응답)으로
+        # SDL_hid_init()이 성공해 재시도가 멈추게 함. 2026-10-25 첫 시도는 묶지 않은 소켓뿐이라 bind가 실패(-22)했고
+        # 반복이 계속됨(분당 약 3만 번). 완전한 대역이면 감시의 시작 단계도 성공함(실제 libudev로 확인).
+        # "uevent 소켓 대역 N개"를 봄: N이 여전히 분당 수만씩 늘면 클라이언트가 스스로 HID 초기화/종료를 반복하는 것
         # EZS_UDEV_CTL_PRESENT=1: the client preload answers /run/udev/control as present, so
         # libudev skips its devtmpfs check (stat /dev + /proc/self/mountinfo) in every round
         # (systemd device_monitor_new_full; checked against the real libudev, 2026-10-25)
         # EZS_UDEV_CTL_PRESENT=1: 클라이언트 preload가 /run/udev/control을 있다고 답해 libudev가 회차마다 하는
         # devtmpfs 확인(stat /dev + /proc/self/mountinfo)을 건너뜀(systemd device_monitor_new_full, 실제 libudev로
         # 확인, 2026-10-25)
-        export SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0 SDL_HIDAPI_LIBUSB=0 EZS_UDEV_CTL_PRESENT=1
-        echo "INFO steam : HID 찾기 줄임(시험): SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0 SDL_HIDAPI_LIBUSB=0 EZS_UDEV_CTL_PRESENT=1"
+        export SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0 SDL_HIDAPI_LIBUSB=0 EZS_UDEV_CTL_PRESENT=1 EZS_UEVENT_STUB=1
+        echo "INFO steam : HID 찾기 줄임(시험): SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0 SDL_HIDAPI_LIBUSB=0 EZS_UDEV_CTL_PRESENT=1 EZS_UEVENT_STUB=1"
     fi
     LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_CLIENT_PRELOAD" \
         "$BIN" -no-cef-sandbox $GPUARG $BPARG -chromeosnopreallocate $VERIFY ${EZS_STEAM_EXTRA:-} >>"$LOG" 2>&1

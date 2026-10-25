@@ -58,6 +58,7 @@
 #include <dirent.h>
 #include <sys/uio.h>
 #include <sys/socket.h>
+#include <linux/netlink.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -504,9 +505,16 @@ FILE *fopen64(const char *path, const char *mode)
     return real_fopen64(path, mode);
 }
 
+static int stand_in_drop(int fd);
+
 int close(int fd)
 {
     REAL(close, int (*)(int));
+    // A closed stand-in takes its peer with it / 닫히는 대역은 짝도 함께 닫음
+    {
+        int peer = stand_in_drop(fd);
+        if (peer >= 0) real_close(peer);
+    }
     if (!on()) return real_close(fd);
     int k = kind_of(fd);
     uint64_t t0 = now_ns();
@@ -1100,15 +1108,117 @@ static int uevent_stub(void)
     return v;
 }
 
+/*
+ * Stand-in table: each stand-in is one end of an AF_UNIX datagram socket pair; the other end stays
+ * open so the stand-in never reads as hung up. The calls libudev makes on a netlink monitor socket
+ * are answered here for these descriptors without a system call: bind (sockaddr_nl) succeeds,
+ * getsockname gives a netlink address with this process id, setsockopt is accepted. Nothing is
+ * ever sent to the pair, so no device events arrive (none could arrive here anyway). The 2026-10-25
+ * attempt gave a single unbound socket whose bind failed (-22) and the init rounds went on.
+ * 대역 표: 대역은 AF_UNIX 데이터그램 소켓 쌍의 한쪽이고 다른 쪽은 열어 두어 끊긴 것으로 보이지 않게 함.
+ * libudev가 netlink 감시 소켓에 하는 호출은 이 디스크립터에 대해 시스템 호출 없이 여기서 답함: bind(sockaddr_nl)
+ * 성공, getsockname은 이 프로세스 id의 netlink 주소, setsockopt는 받아들임. 쌍에는 아무것도 보내지 않으므로 장치
+ * 사건은 오지 않음(여기서는 어차피 올 수 없음). 2026-10-25 시도는 묶지 않은 소켓 하나라 bind가 실패(-22)했고
+ * 초기화 반복이 계속됐음
+ */
+#define STAND_INS 16
+static struct { int fd, peer; } stand_in[STAND_INS];
+static pthread_mutex_t silock = PTHREAD_MUTEX_INITIALIZER;
+static int stand_in_count;  /* entries in use, read without the lock as a fast "none" check / 사용 중 칸 수 */
+
+static int is_stand_in(int fd)
+{
+    if (fd < 0 || !__atomic_load_n(&stand_in_count, __ATOMIC_RELAXED)) return 0;
+    int hit = 0;
+    pthread_mutex_lock(&silock);
+    for (int i = 0; i < STAND_INS; i++)
+        if (stand_in[i].fd == fd && stand_in[i].peer > 0) { hit = 1; break; }
+    pthread_mutex_unlock(&silock);
+    return hit;
+}
+
+/* Forget a stand-in that is being closed; returns its peer to close, or -1 / 닫히는 대역을 잊고 짝을 돌려줌 */
+static int stand_in_drop(int fd)
+{
+    int peer = -1;
+    if (fd < 0 || !__atomic_load_n(&stand_in_count, __ATOMIC_RELAXED)) return -1;
+    pthread_mutex_lock(&silock);
+    for (int i = 0; i < STAND_INS; i++)
+        if (stand_in[i].fd == fd && stand_in[i].peer > 0) {
+            peer = stand_in[i].peer;
+            stand_in[i].fd = stand_in[i].peer = 0;
+            __atomic_sub_fetch(&stand_in_count, 1, __ATOMIC_RELAXED);
+            break;
+        }
+    pthread_mutex_unlock(&silock);
+    return peer;
+}
+
 static int quiet_socket(int (*real)(int, int, int), int type)
 {
-    int fd = real(1 /* AF_UNIX */, SOCK_DGRAM | (type & (SOCK_CLOEXEC | SOCK_NONBLOCK)), 0);
-    if (fd >= 0) {
-        // One line the first time, so the log shows the stand-in was used / 처음 한 번 한 줄
-        if (__atomic_fetch_add(&uevent_stubbed, 1, __ATOMIC_RELAXED) == 0)
-            fprintf(stderr, "ezs-io: uevent 소켓 대역 사용(EZS_UEVENT_STUB=1, HID 초기화 반복 막기)\n");
+    (void)real;
+    REAL(socketpair, int (*)(int, int, int, int *));
+    int sv[2];
+    if (real_socketpair(AF_UNIX, SOCK_DGRAM | (type & (SOCK_CLOEXEC | SOCK_NONBLOCK)), 0, sv) != 0) {
+        errno = EACCES;
+        return -1;
     }
-    return fd;
+    int slot = -1;
+    pthread_mutex_lock(&silock);
+    for (int i = 0; i < STAND_INS; i++)
+        if (stand_in[i].peer <= 0) { slot = i; break; }
+    if (slot >= 0) {
+        stand_in[slot].fd = sv[0];
+        stand_in[slot].peer = sv[1];
+        __atomic_add_fetch(&stand_in_count, 1, __ATOMIC_RELAXED);
+    }
+    pthread_mutex_unlock(&silock);
+    if (slot < 0) {
+        // Table full: refuse as the system did / 표가 참: 시스템처럼 거부함
+        REAL(close, int (*)(int));
+        real_close(sv[0]);
+        real_close(sv[1]);
+        errno = EACCES;
+        return -1;
+    }
+    // One line the first time, so the log shows the stand-in was used / 처음 한 번 한 줄
+    if (__atomic_fetch_add(&uevent_stubbed, 1, __ATOMIC_RELAXED) == 0)
+        fprintf(stderr, "ezs-io: uevent 소켓 대역 사용(EZS_UEVENT_STUB=1, 소켓 쌍 + bind/getsockname/setsockopt 응답)\n");
+    return sv[0];
+}
+
+/* bind on a stand-in: succeeds without a system call / 대역의 bind: 시스템 호출 없이 성공 */
+int bind(int fd, const struct sockaddr *a, socklen_t len)
+{
+    REAL(bind, int (*)(int, const struct sockaddr *, socklen_t));
+    if (is_stand_in(fd)) return 0;
+    return real_bind(fd, a, len);
+}
+
+/* getsockname on a stand-in: a netlink address of this process / 대역의 getsockname: 이 프로세스의 netlink 주소 */
+int getsockname(int fd, struct sockaddr *a, socklen_t *len)
+{
+    REAL(getsockname, int (*)(int, struct sockaddr *, socklen_t *));
+    if (is_stand_in(fd) && a && len) {
+        struct sockaddr_nl nl;
+        memset(&nl, 0, sizeof nl);
+        nl.nl_family = AF_NETLINK;
+        nl.nl_pid = (unsigned)getpid();
+        socklen_t n = *len < (socklen_t)sizeof nl ? *len : (socklen_t)sizeof nl;
+        memcpy(a, &nl, n);
+        *len = sizeof nl;
+        return 0;
+    }
+    return real_getsockname(fd, a, len);
+}
+
+/* setsockopt on a stand-in: accepted, nothing to set on a socket that never receives
+ * 대역의 setsockopt: 받아들임. 아무것도 받지 않는 소켓이라 정할 것이 없음 */
+int setsockopt(int fd, int level, int name, const void *v, socklen_t len)
+{
+    REAL(setsockopt, int (*)(int, int, int, const void *, socklen_t));
+    if (is_stand_in(fd)) return 0;
+    return real_setsockopt(fd, level, name, v, len);
 }
 
 /* Count socket() by family / 계열별 socket() 수를 셈 */
