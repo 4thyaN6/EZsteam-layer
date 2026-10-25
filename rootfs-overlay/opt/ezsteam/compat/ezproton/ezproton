@@ -204,6 +204,7 @@ echo "ezproton: LD_PRELOAD=${LD_PRELOAD:-}" >&2
 # 사용자가 사서 자기 Steam 클라이언트로 라이브러리 중 하나에 설치한 것. Lossless Scaling 파일은 배포하지 않음.
 # 레이어 자체의 환경 변수 설정(LSFG_LEGACY)을 씀. 표시 방식은 나머지 화면 경로와 같은 immediate(레이어가
 # 지우는 MESA_VK_WSI_PRESENT_MODE 대신)
+LSFG_ON=
 LSFG_N=${EZS_LSFG:-$(cat "$HOME/.local/share/ezsteam/lsfg" 2>/dev/null || echo 0)}
 if [ "$LSFG_N" -ge 2 ] 2>/dev/null; then
     LDLL=""
@@ -219,6 +220,7 @@ if [ "$LSFG_N" -ge 2 ] 2>/dev/null; then
         export VK_ADD_LAYER_PATH="/opt/ezsteam/lsfg${VK_ADD_LAYER_PATH:+:$VK_ADD_LAYER_PATH}"
         export VK_INSTANCE_LAYERS="VK_LAYER_LS_frame_generation${VK_INSTANCE_LAYERS:+:$VK_INSTANCE_LAYERS}"
         export LSFG_LEGACY=1 LSFG_DLL_PATH="$LDLL" LSFG_MULTIPLIER="$LSFG_N"
+        LSFG_ON=$LSFG_N
         export LSFG_FLOW_SCALE="${EZS_LSFG_FLOW:-1.0}" LSFG_PERFORMANCE_MODE="${EZS_LSFG_PERF:-1}"
         export LSFG_EXPERIMENTAL_PRESENT_MODE=immediate
         echo "ezproton: LSFG ${LSFG_N}배 켬 (흐름 배율 $LSFG_FLOW_SCALE, 성능 모드 $LSFG_PERFORMANCE_MODE, $LDLL)" >&2
@@ -327,13 +329,19 @@ FPS=${EZS_FPS_LIMIT:-$(cat "$HOME/.local/share/ezsteam/fps" 2>/dev/null || echo 
 case "$FPS" in ''|*[!0-9]*) FPS=60 ;; esac
 if [ "${EZS_DIRECT:-0}" = 1 ]; then
     export EZS_PRESENT_FPS="$FPS"
+    # With LSFG the present layer sees game + generated frames: the limit stays the game's own
+    # (60 with 2x = 120 shown), so the layer paces at limit x multiplier. DXVK/vkd3d limits (the
+    # other path) sit above LSFG and already count game frames only.
+    # LSFG가 있으면 present 레이어는 게임 + 생성 프레임을 봄: 제한은 게임 자체 기준(2배에서 60 = 화면 120)이라
+    # 레이어가 제한 x 배수로 맞춤. 다른 경로의 DXVK/vkd3d 제한은 LSFG 위에 있어 원래 게임 프레임만 셈
+    export EZS_PRESENT_FPS_MULT="${LSFG_ON:-1}"
     LIM=0
 else
     LIM=$FPS
 fi
 [ -n "${DXVK_CONFIG:-}" ] && export DXVK_CONFIG="$(echo "$DXVK_CONFIG" | sed "s/maxFrameRate=[0-9]*/maxFrameRate=$LIM/g")"
 export VKD3D_FRAME_RATE="${VKD3D_FRAME_RATE:-$LIM}"
-echo "ezproton: 프레임 제한 ${FPS} (0 = 없음, $([ "${EZS_DIRECT:-0}" = 1 ] && echo "present 레이어가 맞춤" || echo "DXVK/vkd3d가 맞춤")), VKD3D_FRAME_RATE=$VKD3D_FRAME_RATE, DXVK_CONFIG=${DXVK_CONFIG:-}" >&2
+echo "ezproton: 프레임 제한 ${FPS} (0 = 없음, $([ "${EZS_DIRECT:-0}" = 1 ] && echo "present 레이어가 맞춤, 출력 x${LSFG_ON:-1}" || echo "DXVK/vkd3d가 맞춤")), VKD3D_FRAME_RATE=$VKD3D_FRAME_RATE, DXVK_CONFIG=${DXVK_CONFIG:-}" >&2
 
 # Proton / FEX test switches (files written by the app) / Proton·FEX 시험 스위치(앱이 쓰는 파일)
 # FEX TSO off: x86 strong memory ordering is no longer emulated (faster; some games may break).

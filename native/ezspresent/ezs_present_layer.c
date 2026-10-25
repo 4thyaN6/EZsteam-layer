@@ -69,6 +69,15 @@ static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
  * (EZP_SET_FPS). 이 레이어가 간격을 맞추는 동안 게임 자체 DXVK / vkd3d 제한은 EZ Proton이 끔 */
 static volatile int g_fps = -1;
 
+/* Frame generation multiplier (EZS_PRESENT_FPS_MULT from EZ Proton = LSFG 2 or 3, else 1). The
+ * LSFG layer sits above this one, so the presents seen here are game frames plus generated ones;
+ * the limit is meant for the game's own frames (limit 60 with 2x = 60 game frames, 120 shown), so
+ * the pacing step is limit x multiplier. With limit 60 the output was held at 60 = 30 game frames.
+ * 프레임 생성 배수(EZ Proton의 EZS_PRESENT_FPS_MULT = LSFG 2 또는 3, 아니면 1). LSFG 레이어가 이 레이어 위에
+ * 있어 여기서 보는 present는 게임 프레임 + 생성 프레임임. 제한은 게임 자체 프레임 기준이므로(2배에서 제한
+ * 60 = 게임 60, 화면 120) 간격은 제한 x 배수로 맞춤. 그렇지 않으면 제한 60에서 출력이 60 = 게임 30에 묶임 */
+static int g_mult = -1;
+
 static int fps_limit(void)
 {
     if (g_fps < 0) {
@@ -76,7 +85,12 @@ static int fps_limit(void)
         int v = e ? atoi(e) : 0;
         g_fps = v < 0 ? 0 : v > 240 ? 240 : v;
     }
-    return g_fps;
+    if (g_mult < 0) {
+        const char *e = getenv("EZS_PRESENT_FPS_MULT");
+        int v = e ? atoi(e) : 1;
+        g_mult = v < 1 ? 1 : v > 4 ? 4 : v;
+    }
+    return g_fps * g_mult;
 }
 
 /* ---- instance / 인스턴스 ---- */
@@ -848,7 +862,7 @@ static int pump(struct swc *sc, int ms)
         if (m.type == EZP_SET_FPS) {
             int v = (int)m.pattern;
             g_fps = v < 0 ? 0 : v > 240 ? 240 : v;
-            LOG("프레임 제한 %d (0 = 없음)", g_fps);
+            LOG("프레임 제한 %d (0 = 없음), 출력 간격 %d (프레임 생성 배수 %d)", g_fps, fps_limit(), g_mult);
         } else if (m.type == EZP_RELEASE && m.r0 < sc->count) {
             pthread_mutex_lock(&sc->mu);
             struct buf *b = &sc->b[m.r0];
