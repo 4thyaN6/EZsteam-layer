@@ -24,7 +24,13 @@ VKH_TAG=v1.4.313
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
-apt-get install -y -q --no-install-recommends ca-certificates git cmake ninja-build g++ file >/dev/null
+# clang, as upstream builds it: the layer's entry points carry visibility("default") in a place
+# GCC ignores ("attributes are not permitted in this position"), so with g++ they stayed hidden and
+# the loader said "Failed to find 'layer_vkGetInstanceProcAddr'" (device log 2026-10-25)
+# 원본처럼 clang으로 빌드: 레이어 진입 함수의 visibility("default")가 GCC가 무시하는 자리에 있어("attributes
+# are not permitted in this position") g++로는 숨겨진 채였고 로더가 "Failed to find
+# 'layer_vkGetInstanceProcAddr'"를 냈음(기기 로그 2026-10-25)
+apt-get install -y -q --no-install-recommends ca-certificates git cmake ninja-build clang binutils file >/dev/null
 
 WORK=$(mktemp -d)
 git -c advice.detachedHead=false clone -q "$REPO" "$WORK/lsfg"
@@ -33,12 +39,21 @@ git -C "$WORK/lsfg" submodule update -q --init --recursive
 git -c advice.detachedHead=false clone -q --depth 1 -b "$VKH_TAG" https://github.com/KhronosGroup/Vulkan-Headers "$WORK/vkh"
 
 cmake -S "$WORK/lsfg" -B "$WORK/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
     -DCMAKE_C_FLAGS="-I$WORK/vkh/include" -DCMAKE_CXX_FLAGS="-I$WORK/vkh/include"
 ninja -C "$WORK/build" lsfg-vk
 
 mkdir -p "$OUT"
 cp "$WORK/build/liblsfg-vk.so" "$OUT/"
 strip "$OUT/liblsfg-vk.so"
+# The loader looks these two up by name (manifest "functions"); stop the build if either is not
+# exported / 로더가 이름으로 찾는 두 함수(매니페스트 "functions"). 하나라도 내보내지 않았으면 빌드를 멈춤
+for sym in layer_vkGetInstanceProcAddr layer_vkGetDeviceProcAddr; do
+    nm -D --defined-only "$OUT/liblsfg-vk.so" | grep -q " T $sym\$" || {
+        echo "liblsfg-vk.so: $sym 내보내지 않음" >&2
+        exit 1
+    }
+done
 # Layer manifest: library next to it. The upstream file names it without a path
 # ("liblsfg-vk.so"), which the Vulkan loader looks up in the system library folders, not next to
 # the manifest ("liblsfg-vk.so: cannot open shared object file", device log 2026-10-25); "./"

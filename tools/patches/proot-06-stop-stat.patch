@@ -1,0 +1,128 @@
+diff --git a/src/syscall/syscall.c b/src/syscall/syscall.c
+index b8bfb34..7e5a72e 100644
+--- a/src/syscall/syscall.c
++++ b/src/syscall/syscall.c
+@@ -38,6 +38,9 @@
+ #include <stdlib.h>      /* getenv(3), atoi(3), */
+ #include <stdint.h>      /* uint32_t, uint64_t, */
+ #include <time.h>        /* clock_gettime(2), */
++#include <signal.h>      /* SIGTRAP, SIGSYS, */
++#include <sys/ptrace.h>  /* PTRACE_EVENT_*, */
++#include "compat.h"
+ 
+ /**
+  * Syscall statistics, only when PROOT_SYSSTAT=<seconds> is set: every system call PRoot has to
+@@ -193,6 +196,80 @@ static int sysstat_slot(const char *exe)
+ 	return SYSSTAT_EXES - 1;
+ }
+ 
++/*
++ * Every tracee stop PRoot handles, not only syscalls: in Big Picture PRoot still used about 64% CPU
++ * at 1,800 syscall stops a second, while in a game 1,400 a second cost 13% (2026-10-25), so other
++ * stops (signals, syscall-exit stops, process events) are counted by kind, and signals per program.
++ * PRoot가 처리하는 모든 tracee 정지(시스템 호출만이 아님): 빅픽처에서 초당 시스템 호출 정지 1,800번에 PRoot
++ * CPU 약 64%, 게임 중에는 1,400번에 13%였음(2026-10-25). 그래서 다른 정지(시그널, 시스템 호출 끝 정지,
++ * 프로세스 사건)를 종류별로, 시그널은 프로그램별로 셈
++ */
++enum { SSE_SYSCALL, SSE_SECCOMP, SSE_SIGSYS, SSE_PROC, SSE_SIGNAL, SSE_EXIT, SSE_KINDS };
++static uint32_t sysstat_ev[SSE_KINDS];
++static uint32_t sysstat_sig[SYSSTAT_EXES][65];
++static int sysstat_slot(const char *exe);
++
++void sysstat_event(const Tracee *tracee, int code, int exited)
++{
++	if (sysstat_sec <= 0)
++		return;
++	if (exited) {
++		sysstat_ev[SSE_EXIT]++;
++		return;
++	}
++	int sig = code & 0xff;
++	if (code == (SIGTRAP | 0x80))
++		sysstat_ev[SSE_SYSCALL]++;
++	else if (sig == SIGTRAP && (code >> 8) == PTRACE_EVENT_SECCOMP)
++		sysstat_ev[SSE_SECCOMP]++;
++	else if (sig == SIGTRAP && (code >> 8) == PTRACE_EVENT_SECCOMP2)
++		sysstat_ev[SSE_SECCOMP]++;
++	else if (sig == SIGTRAP && (code >> 8) != 0)
++		sysstat_ev[SSE_PROC]++;
++	else if (sig == SIGSYS)
++		sysstat_ev[SSE_SIGSYS]++;
++	else {
++		sysstat_ev[SSE_SIGNAL]++;
++		if (sig > 0 && sig < 65)
++			sysstat_sig[sysstat_slot(tracee->exe)][sig]++;
++	}
++}
++
++/* "PROOT_STAT 정지" line: all stops by kind and the busiest signals / 종류별 전체 정지와 가장 많은 시그널 */
++static void sysstat_report_events(uint64_t span_ns)
++{
++	static const char *const names[SSE_KINDS] = {
++		"호출 정지", "seccomp", "SIGSYS", "프로세스 사건", "시그널", "끝남" };
++	uint64_t total = 0;
++	for (int k = 0; k < SSE_KINDS; k++)
++		total += sysstat_ev[k];
++	char line[1024];
++	int len = snprintf(line, sizeof(line), "PROOT_STAT 정지 전체 %llu (%.0f/s):",
++			   (unsigned long long) total, total / (span_ns / 1e9));
++	for (int k = 0; k < SSE_KINDS; k++)
++		len += snprintf(line + len, sizeof(line) - (size_t) len, " %s %u,", names[k], sysstat_ev[k]);
++	for (int r = 0; r < 6 && len < (int) sizeof(line) - 60; r++) {
++		int be = -1, bs = 0;
++		uint32_t best = 0;
++		for (int e = 0; e < SYSSTAT_EXES; e++)
++			for (int g = 1; g < 65; g++)
++				if (sysstat_sig[e][g] > best) {
++					best = sysstat_sig[e][g];
++					be = e;
++					bs = g;
++				}
++		if (be < 0)
++			break;
++		len += snprintf(line + len, sizeof(line) - (size_t) len, " 신호%d(%s) %u,", bs, sysstat_exe[be], best);
++		sysstat_sig[be][bs] = 0;
++	}
++	if (len > 0 && line[len - 1] == ',')
++		line[len - 1] = '\0';
++	fprintf(stderr, "%s\n", line);
++	memset(sysstat_ev, 0, sizeof(sysstat_ev));
++	memset(sysstat_sig, 0, sizeof(sysstat_sig));
++}
++
+ /* One summary line, then counters start over / 요약 한 줄 출력 후 카운터를 새로 시작함 */
+ static void sysstat_report(uint64_t span_ns)
+ {
+@@ -225,6 +302,7 @@ static void sysstat_report(uint64_t span_ns)
+ 	fprintf(stderr, "%s\n", line);
+ 	memset(sysstat_count, 0, sizeof(sysstat_count));
+ 	sysstat_report_paths();
++	sysstat_report_events(span_ns);
+ 	/* Program names start over too, so short-lived programs at start-up do not fill the table
+ 	 * 프로그램 이름도 새로 시작함. 시작 때 잠깐 도는 프로그램들이 표를 채우지 않게 함 */
+ 	sysstat_nexe = 0;
+diff --git a/src/tracee/event.c b/src/tracee/event.c
+index 2450cd7..0e6acce 100644
+--- a/src/tracee/event.c
++++ b/src/tracee/event.c
+@@ -54,6 +54,9 @@
+ #include "attribute.h"
+ #include "compat.h"
+ 
++/* Stop counter of PROOT_SYSSTAT (src/syscall/syscall.c) / PROOT_SYSSTAT 정지 카운터 */
++extern void sysstat_event(const Tracee *tracee, int code, int exited);
++
+ static bool seccomp_after_ptrace_enter = false;
+ static bool seccomp_ptrace_event_supported = false;
+ 
+@@ -498,6 +501,10 @@ int event_loop()
+ 
+ 		tracee->running = false;
+ 
++		/* Count the stop for PROOT_SYSSTAT (syscall.c) / PROOT_SYSSTAT용으로 정지를 셈(syscall.c) */
++		sysstat_event(tracee, WIFSTOPPED(tracee_status) ? (tracee_status & 0xfff00) >> 8 : 0,
++			      !WIFSTOPPED(tracee_status));
++
+ 		status = notify_extensions(tracee, NEW_STATUS, tracee_status, 0);
+ 		if (status != 0)
+ 			continue;
