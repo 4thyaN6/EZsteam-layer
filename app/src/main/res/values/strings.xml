@@ -165,6 +165,7 @@
     <string name="v_default">Default</string>
     <string name="v_fps">%1$d fps</string>
     <string name="v_hidden">Hidden</string>
+    <string name="v_no_lossless">No Lossless Scaling</string>
     <string name="v_none">None</string>
     <string name="v_normal">Normal</string>
     <string name="v_notify">Tell me</string>

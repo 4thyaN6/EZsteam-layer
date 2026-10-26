@@ -164,6 +164,7 @@
     <string name="v_default">기본</string>
     <string name="v_fps">%1$dfps</string>
     <string name="v_hidden">숨김</string>
+    <string name="v_no_lossless">Lossless Scaling 없음</string>
     <string name="v_none">없음</string>
     <string name="v_normal">일반</string>
     <string name="v_notify">알림</string>

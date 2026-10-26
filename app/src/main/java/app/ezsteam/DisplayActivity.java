@@ -311,7 +311,10 @@ public class DisplayActivity extends Activity {
 
     private String lsfgName() {
         int n = MainActivity.lsfgMode(this);
-        return n == 0 ? s(R.string.v_off) : s(R.string.v_times, n);
+        if (n == 0) return s(R.string.v_off);
+        // Without Lossless Scaling installed that is shown instead of a multiplier
+        // Lossless Scaling이 설치되지 않았으면 배수 대신 그것을 표시함
+        return MainActivity.losslessInstalled(this) ? s(R.string.v_times, n) : s(R.string.v_no_lossless);
     }
 
     /** LSFG off → 2x → 3x, for the next game start / LSFG 끔 → 2배 → 3배, 다음 게임 시작부터 */

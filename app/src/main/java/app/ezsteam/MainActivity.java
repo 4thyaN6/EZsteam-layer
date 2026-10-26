@@ -46,7 +46,6 @@ public class MainActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         int pad = (int) (12 * getResources().getDisplayMetrics().density);
-        root.setPadding(pad, pad, pad, pad);
 
         // Start panel: what a player needs (Steam start, screen size, start-on-launch). The test and
         // setup buttons below live in a hidden admin section (user request: start Steam right away,
@@ -331,9 +330,20 @@ public class MainActivity extends Activity {
         logView.setTextSize(12);
         logView.setTextIsSelectable(true);
         scroll.addView(logView);
-        root.addView(scroll, new LinearLayout.LayoutParams(
+        // Buttons scroll on their own above the log: with the admin sections open they were taller
+        // than the screen and the last rows were cut off (user report 2026-10-26). Admin open: the
+        // two halves share the screen; admin closed: the buttons take what they need
+        // 버튼은 로그 위에서 따로 스크롤함: 관리자 구역을 열면 화면보다 길어 마지막 줄이 잘렸음(사용자 제보
+        // 2026-10-26). 관리자 열림: 두 부분이 화면을 나눠 씀, 관리자 닫힘: 버튼은 필요한 만큼만 차지함
+        LinearLayout outer = new LinearLayout(this);
+        outer.setOrientation(LinearLayout.VERTICAL);
+        outer.setPadding(pad, pad, pad, pad);
+        topScroll = new ScrollView(this);
+        topScroll.addView(root);
+        outer.addView(topScroll, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, -2));
+        outer.addView(scroll, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
-        setContentView(root);
+        setContentView(outer);
 
         // Which build is running (compare with the commit on GitHub) / 실행 중인 빌드(GitHub 커밋과 비교)
         log("app build=" + BuildConfig.GIT_SHA + ", 설치 시각=" + installTime());
@@ -415,8 +425,16 @@ public class MainActivity extends Activity {
     /** Holds every setup and test row / 모든 설치·시험 줄을 담음 */
     private LinearLayout adminBox;
 
+    /** Scroll view around the buttons / 버튼을 감싼 스크롤 뷰 */
+    private ScrollView topScroll;
+
     private void setAdminShown(boolean shown) {
         adminBox.setVisibility(shown ? View.VISIBLE : View.GONE);
+        if (topScroll != null) {
+            topScroll.setLayoutParams(shown
+                    ? new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+                    : new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, -2));
+        }
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ADMIN, shown).apply();
     }
 
@@ -988,7 +1006,26 @@ public class MainActivity extends Activity {
     private static final String KEY_LSFG = "game.lsfg";
 
     private String lsfgLabel(int n) {
-        return s(R.string.fmt_name_value, "LSFG", n == 0 ? s(R.string.v_off) : s(R.string.v_times, n));
+        String v = n == 0 ? s(R.string.v_off) : s(R.string.v_times, n);
+        // Chosen but nothing to use it with: the button says so instead of a multiplier (ezproton
+        // then starts the game without it; user request 2026-10-26)
+        // 골랐지만 쓸 것이 없음: 단추에 배수 대신 그렇게 표시함(그때 ezproton은 LSFG 없이 게임을 시작함. 사용자
+        // 요청 2026-10-26)
+        if (n != 0 && !losslessInstalled(this)) v = s(R.string.v_no_lossless);
+        return s(R.string.fmt_name_value, "LSFG", v);
+    }
+
+    /**
+     * The user's own Lossless.dll (Lossless Scaling, installed by their Steam client) in one of the
+     * two libraries ezproton looks in: the rootfs Steam library or the shared EZlator library.
+     * 사용자 자신의 Lossless.dll(Lossless Scaling, 사용자의 Steam 클라이언트가 설치)이 ezproton이 찾는 두 라이브러리
+     * 중 하나에 있는지: rootfs Steam 라이브러리 또는 공유 EZlator 라이브러리
+     */
+    static boolean losslessInstalled(android.content.Context ctx) {
+        String rel = "steamapps/common/Lossless Scaling/Lossless.dll";
+        if (new File(RootfsInstaller.rootfsDir(ctx), "home/steam/.local/share/Steam/" + rel).isFile()) return true;
+        File shared = sharedLibrary(ctx) ? app.ezsteam.runtime.SharedStorage.steamLibrary(ctx) : null;
+        return shared != null && new File(shared, rel).isFile();
     }
 
     /** Save the LSFG choice and the file EZ Proton reads; returns an error text or null

@@ -445,4 +445,43 @@ case ",$(echo "${SDL_GAMECONTROLLER_IGNORE_DEVICES:-}" | tr 'A-F' 'a-f')," in
         echo "ezproton: pad ignore list: removed 0x045e/0x028e (our virtual pad)" >&2
         ;;
 esac
+# Diagnosis, game starts only: the video path. Proton plays game videos through its media
+# converter, which swaps them for videos Valve transcoded in advance (Steam downloads them to
+# shadercache/<appid>/transcoded_video.foz and passes the folder as
+# STEAM_COMPAT_TRANSCODED_MEDIA_PATH; the proton script derives MEDIACONV_* from it). Proton ships
+# no H.264 decoder, so without that file such a video cannot play (one game stopped at its video
+# with "GStreamer doesn't support H.264 decoding", report 2026-10-26). Printed: the paths Steam
+# gave, the .foz files there and their sizes, Proton's GStreamer plugins, and media converter
+# warnings in the Proton log (GST_DEBUG, unless set already). Paths and file names only.
+# 진단, 게임 시작 때만: 동영상 경로. Proton은 게임 동영상을 미디어 변환기로 재생하며, Valve가 미리 변환한
+# 동영상으로 바꿔 끼움(Steam이 shadercache/<appid>/transcoded_video.foz로 받고 그 폴더를
+# STEAM_COMPAT_TRANSCODED_MEDIA_PATH로 넘김. proton 스크립트가 여기서 MEDIACONV_*를 만듦). Proton에는 H.264
+# 디코더가 없어 그 파일이 없으면 그런 동영상은 재생할 수 없음(한 게임이 "GStreamer doesn't support H.264
+# decoding"과 함께 동영상에서 멈췄음, 제보 2026-10-26). 출력: Steam이 준 경로, 그곳의 .foz 파일과 크기,
+# Proton의 GStreamer 플러그인, Proton 로그의 미디어 변환기 경고(GST_DEBUG, 이미 정해져 있지 않으면). 경로와
+# 파일 이름만 있음
+if [ "${1:-}" = waitforexitandrun ]; then
+    env | grep -E '^(STEAM_COMPAT_(TRANSCODED_)?MEDIA_PATH|MEDIACONV_[A-Z_]*)=' | cut -c1-300 \
+        | sed 's/^/ezproton: media env /' >&2
+    for d in "${STEAM_COMPAT_TRANSCODED_MEDIA_PATH:-}" "${STEAM_COMPAT_MEDIA_PATH:-}"; do
+        [ -n "$d" ] || continue
+        if [ -d "$d" ]; then
+            f=$(ls -l "$d"/*.foz 2>/dev/null | awk '{print $NF " " $5}' | sed 's|.*/||' | tr '\n' ' ')
+            echo "ezproton: media $d: ${f:-foz 파일 없음}" >&2
+        else
+            echo "ezproton: media $d: 폴더 없음" >&2
+        fi
+    done
+    [ -n "${STEAM_COMPAT_TRANSCODED_MEDIA_PATH:-}" ] \
+        || echo "ezproton: media STEAM_COMPAT_TRANSCODED_MEDIA_PATH 없음 (Steam이 넘기지 않음)" >&2
+    for g in $(find "$PROTON_DIR/files" -maxdepth 4 -type d -name gstreamer-1.0 2>/dev/null); do
+        echo "ezproton: gst ${g#$PROTON_DIR/}: $(ls "$g" 2>/dev/null | sed 's/^libgst//; s/\.so$//' | tr '\n' ' ')" >&2
+    done
+    echo "ezproton: gst winegstreamer.so: $(find "$PROTON_DIR/files/lib" -maxdepth 3 -name winegstreamer.so 2>/dev/null \
+        | sed "s|^$PROTON_DIR/||" | tr '\n' ' ')" >&2
+    if [ -z "${GST_DEBUG:-}" ]; then
+        export GST_DEBUG="2,*mediaconv*:4,protondemuxer:4,protonvideoconv*:4,protonaudioconv*:4" GST_DEBUG_NO_COLOR=1
+        echo "ezproton: GST_DEBUG=$GST_DEBUG (Proton 로그로)" >&2
+    fi
+fi
 exec "$PROTON_DIR/proton" "$@"
