@@ -458,7 +458,14 @@ print(r, os.strerror(ctypes.get_errno()))' 2>&1 | tail -n 1)
     fi
     if [ "${EZS_STEAM_BIGPICTURE:-0}" = 1 ] || [ $BPONCE = 1 ]; then
         if grep -q "RecvMsgClientLogOnResponse() : .* 'OK'" "$STEAM_DIR/logs/connection_log.txt" 2>/dev/null; then
-            BPARG=-gamepadui
+            # -nointro: skip the intro movie when Big Picture starts (Valve's option list: "Skip
+            # intro movie"; whether the current client still honours it is not confirmed). Asked
+            # for so the switch into Big Picture shows no animation (user request 2026-10-26)
+            # -nointro: 빅픽처가 시작할 때 시작 영상을 건너뜀(Valve 옵션 목록: "Skip intro movie". 지금
+            # 클라이언트가 아직 따르는지는 확인 안 됨). 빅픽처로 넘어갈 때 애니메이션이 보이지 않게 하려는 요청
+            # (사용자 요청 2026-10-26)
+            BPARG="-gamepadui -nointro"
+            echo "INFO steam : 빅픽처 시작 영상 건너뜀(-nointro)"
         else
             echo "INFO steam : 빅픽처는 첫 로그인 뒤부터 (로그인 기록 없음, 이번에는 일반 창)"
         fi
