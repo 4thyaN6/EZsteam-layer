@@ -44,6 +44,7 @@
 #include <errno.h>
 #include <poll.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -138,6 +139,15 @@ static void try_connect(ezs_t *e)
     a.sun_family = AF_UNIX;
     memcpy(a.sun_path, e->path, strlen(e->path) + 1);
     if (connect(s, (struct sockaddr *)&a, sizeof(a)) < 0) {
+        /* Said once per process on stderr (web helper output / Proton log): a stream that cannot
+           reach the app plays nothing, which was invisible before (Big Picture navigation sounds,
+           2026-10-26) / 프로세스마다 한 번 stderr(웹 도우미 출력 / Proton 로그)에 알림: 앱에 닿지 못한 스트림은
+           소리가 없는데 전에는 드러나지 않았음(빅픽처 이동 효과음, 2026-10-26) */
+        static int told;
+        if (!told) {
+            told = 1;
+            fprintf(stderr, "ezs-audio: %s 연결 실패 (%s), 소리 없이 계속\n", e->path, strerror(errno));
+        }
         close(s);
         return;
     }

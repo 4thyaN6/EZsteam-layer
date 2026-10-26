@@ -752,6 +752,10 @@ public class DisplayActivity extends Activity {
         showButton.setPadding(cornerPad * 2, cornerPad / 2, cornerPad * 2, cornerPad / 2);
         showButton.setContentDescription(s(R.string.menu_title));
         showButton.setOnClickListener(v -> openMenu());
+        // Hidden for now (user request 2026-10-27: test the touch gestures instead); kept for the
+        // dedicated compositor later / 지금은 숨김(사용자 요청 2026-10-27: 대신 터치 제스처를 시험). 나중 전용
+        // 컴포지터 때를 위해 남겨 둠
+        showButton.setVisibility(View.GONE);
         root.addView(showButton, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END));
         setContentView(root);
         hideSystemBars();
@@ -1106,6 +1110,7 @@ public class DisplayActivity extends Activity {
                 }
             }
             sessionConfig = c;
+            watchNetwork(c.rootfs);
             Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/display.sh",
                     Arrays.asList(Integer.toString(w), Integer.toString(h), mode), null, null);
             proc = p;
@@ -1291,14 +1296,14 @@ public class DisplayActivity extends Activity {
         return true;
     }
 
-    // ---- menu gestures: four-finger tap, swipe in from the right edge / 메뉴 제스처: 네 손가락 탭, 오른쪽 끝에서 밀기
+    // ---- menu gestures: four-finger tap, swipe down from the top / 메뉴 제스처: 네 손가락 탭, 위에서 아래로 밀기
 
     /** Four-finger tap state: first finger time, all-four time, start points, moved too far
      *  네 손가락 탭 상태: 첫 손가락 시각, 네 손가락이 된 시각, 시작점, 너무 움직임 */
     private long tapStart, tapFour;
     private final android.util.SparseArray<float[]> tapPoints = new android.util.SparseArray<>();
     private boolean tapMoved, tapCancelled;
-    /** Edge swipe: 0 none, 1 waiting (down held back), 2 swiping / 가장자리 밀기: 0 없음, 1 대기(누름 보류), 2 미는 중 */
+    /** Top swipe: 0 none, 1 waiting (down held back), 2 swiping / 위쪽 밀기: 0 없음, 1 대기(누름 보류), 2 미는 중 */
     private int edge;
     private MotionEvent edgeDown;
     private float edgeX, edgeY;
@@ -1313,16 +1318,20 @@ public class DisplayActivity extends Activity {
      * - Four fingers down within 300 ms and all up within 700 ms of the first, none moving more
      *   than 48 dp. Without the touch pad, the third finger cancels the mouse input (no meaning
      *   there); with the touch pad the game keeps its touches (four-finger play stays possible).
-     * - A swipe that starts in the right 20 dp and goes left 72 dp, mostly sideways. The first
-     *   touch is held back until it is clear: a tap or another movement there is passed on as is.
-     *   When the system back gesture takes the swipe the app gets a cancel and the system back
-     *   opens the menu instead (same result).
+     * - A swipe down that starts in the top 12 % of the screen and goes 72 dp, mostly downwards
+     *   (user request 2026-10-27: the earlier swipe in from the right edge also pulled out the
+     *   system bars). Start it a little below the very edge: a swipe from the edge itself is the
+     *   system's (it shows the status and navigation bars, which an app cannot stop). The first
+     *   touch is held back until it is clear: a tap or another movement there is passed on as is;
+     *   touches on touch pad controls are left alone.
      * 모든 뷰보다 먼저: HOME 없이 메뉴를 여는 두 방법(사용자 요청 2026-10-26).
      * - 첫 손가락부터 300ms 안에 네 손가락이 닿고 700ms 안에 모두 떼며, 48dp 넘게 움직인 손가락이 없음. 터치 패드가
      *   없으면 세 번째 손가락에서 마우스 입력을 취소함(그때는 쓸모 없음). 터치 패드가 있으면 게임이 터치를 그대로 받음
      *   (네 손가락 조작도 됨)
-     * - 오른쪽 20dp 안에서 시작해 왼쪽으로 72dp, 주로 가로로 민 경우. 판단될 때까지 첫 터치를 보류하고, 거기서의 탭이나
-     *   다른 움직임은 그대로 넘김. 시스템 뒤로 가기 제스처가 가져가면 앱은 취소를 받고 시스템 뒤로 가기가 메뉴를 엶(결과 같음)
+     * - 화면 위쪽 12% 안에서 시작해 72dp, 주로 아래로 민 경우(사용자 요청 2026-10-27: 이전의 오른쪽 끝 밀기는 시스템
+     *   막대도 함께 끌어냈음). 가장자리 바로 아래에서 시작해야 함: 가장자리 자체에서 미는 것은 시스템 몫(상태·탐색 막대를
+     *   보이며 앱이 막을 수 없음). 판단될 때까지 첫 터치를 보류하고, 거기서의 탭이나 다른 움직임은 그대로 넘김. 터치 패드
+     *   조작부 위의 터치는 건드리지 않음
      */
     @Override
     public boolean dispatchTouchEvent(MotionEvent e) {
@@ -1333,7 +1342,7 @@ public class DisplayActivity extends Activity {
         }
         if (trackFourFingerTap(e)) return true;
         int a = e.getActionMasked();
-        if (a == MotionEvent.ACTION_DOWN && e.getX() >= getWindow().getDecorView().getWidth() - dpx(20)
+        if (a == MotionEvent.ACTION_DOWN && e.getY() <= getWindow().getDecorView().getHeight() * 0.12f
                 && !touchPad.hasControlAt(e.getX(), e.getY())) {
             edge = 1;
             edgeX = e.getX();
@@ -1344,12 +1353,12 @@ public class DisplayActivity extends Activity {
             return true;
         }
         if (edge == 1) {
-            float dx = edgeX - e.getX(), dy = Math.abs(e.getY() - edgeY);
-            if (a == MotionEvent.ACTION_MOVE && dx > dpx(16) && dx > 2 * dy) {
+            float dy = e.getY() - edgeY, dx = Math.abs(e.getX() - edgeX);
+            if (a == MotionEvent.ACTION_MOVE && dy > dpx(16) && dy > 2 * dx) {
                 edge = 2;
                 return true;
             }
-            boolean still = a == MotionEvent.ACTION_MOVE && dx < dpx(16) && dy < dpx(16)
+            boolean still = a == MotionEvent.ACTION_MOVE && Math.abs(dy) < dpx(16) && dx < dpx(16)
                     && SystemClock.uptimeMillis() - edgeAt < 200;
             if (still) return true;
             // Not a swipe: hand the held-back touch over, then this event / 밀기가 아님: 보류한 터치를 넘긴 뒤 이 이벤트
@@ -1364,8 +1373,8 @@ public class DisplayActivity extends Activity {
         if (edge == 2) {
             if (a == MotionEvent.ACTION_UP) {
                 edge = 0;
-                if (edgeX - e.getX() > dpx(72)) {
-                    log("메뉴: 오른쪽 끝에서 밀기");
+                if (e.getY() - edgeY > dpx(72)) {
+                    log("메뉴: 위에서 아래로 밀기");
                     openMenu();
                 }
             } else if (a == MotionEvent.ACTION_CANCEL) {
@@ -2489,6 +2498,50 @@ public class DisplayActivity extends Activity {
             return String.format(Locale.ROOT, "%.1fGB", st.getAvailableBytes() / 1e9);
         } catch (RuntimeException e) {
             return "-";
+        }
+    }
+
+    private android.net.ConnectivityManager.NetworkCallback netCallback;
+
+    /**
+     * Keep rootfs /tmp/ezs-net in step with the phone's network: "1 wifi", "1 ethernet",
+     * "1 cellular" or "0". The NetworkManager stand-in in the rootfs (ezs-netstate.py) reports it
+     * to the Steam client. Only the kind and up/down, nothing about the network itself.
+     * rootfs /tmp/ezs-net을 휴대폰 네트워크에 맞춰 둠: "1 wifi", "1 ethernet", "1 cellular" 또는 "0". rootfs 안
+     * NetworkManager 대역(ezs-netstate.py)이 Steam 클라이언트에 알림. 종류와 연결 여부만, 네트워크 자체 정보는 없음
+     */
+    private void watchNetwork(File rootfs) {
+        File f = new File(rootfs, "tmp/ezs-net");
+        android.net.ConnectivityManager cm =
+                (android.net.ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (cm == null || netCallback != null) return;
+        android.net.ConnectivityManager.NetworkCallback cb = new android.net.ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onCapabilitiesChanged(android.net.Network n, android.net.NetworkCapabilities nc) {
+                String kind = nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ? "wifi"
+                        : nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) ? "cellular" : "ethernet";
+                write(nc.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) ? "1 " + kind : "0");
+            }
+
+            @Override
+            public void onLost(android.net.Network n) {
+                write("0");
+            }
+
+            private void write(String v) {
+                try (java.io.FileOutputStream o = new java.io.FileOutputStream(f)) {
+                    o.write((v + "\n").getBytes(StandardCharsets.UTF_8));
+                } catch (IOException ignored) {
+                    // rootfs /tmp not there yet: the stand-in counts the network as up
+                    // rootfs /tmp가 아직 없음: 대역은 연결됨으로 봄
+                }
+            }
+        };
+        try {
+            cm.registerDefaultNetworkCallback(cb);
+            netCallback = cb;
+        } catch (RuntimeException e) {
+            log("네트워크 상태 감시 실패: " + e);
         }
     }
 
@@ -3879,6 +3932,13 @@ public class DisplayActivity extends Activity {
     @Override
     protected void onDestroy() {
         finishing = true;
+        android.net.ConnectivityManager.NetworkCallback nc = netCallback;
+        if (nc != null) {
+            try {
+                ((android.net.ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE)).unregisterNetworkCallback(nc);
+            } catch (RuntimeException ignored) {
+            }
+        }
         view.setFramebuffer(null);
         app.ezsteam.runtime.AudioServer a = audio;
         if (a != null) a.close();

@@ -122,6 +122,19 @@ public final class GlibcLauncher {
     public static final String ANDROID_FONTS = "/system/fonts";
     public static final String GUEST_FONTS = "/usr/local/share/fonts/android";
 
+    /** An empty file next to the rootfs (made when missing), null if it cannot be made
+     *  rootfs 옆의 빈 파일(없으면 만듦). 만들 수 없으면 null */
+    private static File emptyFile(Config c) {
+        File f = new File(c.rootfs.getParentFile(), "ezs-empty-file");
+        try {
+            if (f.length() != 0 && !f.delete()) return null;
+            if (!f.isFile() && !f.createNewFile()) return null;
+            return f;
+        } catch (java.io.IOException | SecurityException e) {
+            return null;
+        }
+    }
+
     public static List<String> prootArgs(Config c) {
         List<String> cmd = new ArrayList<>();
         cmd.add(new File(c.nativeLibDir, PROOT).getAbsolutePath());
@@ -135,6 +148,18 @@ public final class GlibcLauncher {
         cmd.add("--bind=/proc");
         cmd.add("--bind=/sys");
         cmd.add("--bind=" + shmDir(c).getAbsolutePath() + ":/dev/shm");
+        // An empty file over /proc/bus/pci/devices: libpci (used by Chromium's GPU process in the
+        // Steam web helper) picks its /proc backend because the folder is readable here, then fails
+        // on that file, which Android denies; the GPU process then gave up and drew on the CPU
+        // (reported by another Steam-on-Android project, read for behaviour only). Empty = no PCI
+        // devices, which is true on a phone
+        // /proc/bus/pci/devices 위에 빈 파일: libpci(Steam 웹 도우미 안 Chromium GPU 프로세스가 씀)는 여기서
+        // 폴더를 읽을 수 있어 /proc 방식을 고르고, 안드로이드가 막는 그 파일에서 실패함. 그러면 GPU 프로세스가 포기하고
+        // CPU로 그렸음(다른 Steam-on-Android 프로젝트 보고, 동작만 참고). 빈 파일 = PCI 장치 없음(휴대폰에서는 사실)
+        File noPci = emptyFile(c);
+        if (noPci != null && new File("/proc/bus/pci").isDirectory()) {
+            cmd.add("--bind=" + noPci.getAbsolutePath() + ":/proc/bus/pci/devices");
+        }
         // The phone's own fonts (read-only, includes Noto Sans CJK on Android) for Korean/Chinese/Japanese
         // text in the Steam client; the rootfs has only DejaVu. Nothing is copied or shipped: the
         // guest reads the system folder in place (same approach as DroidDeck). Fontconfig setup:

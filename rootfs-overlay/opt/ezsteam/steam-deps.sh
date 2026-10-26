@@ -39,6 +39,35 @@ scan() {
 
 missing=$(scan)
 
+# Packages for the session's system bus and NetworkManager stand-in (Steam's connection header and
+# Settings > Internet need NetworkManager; ezs-netstate.py, steam-run.sh): dbus-daemon, python3-gi.
+# Not in older rootfs builds, so they are installed here the same way as missing libraries
+# 세션 시스템 버스와 NetworkManager 대역용 패키지(Steam 연결 표시와 설정 > 인터넷에 NetworkManager가 필요함.
+# ezs-netstate.py, steam-run.sh): dbus-daemon, python3-gi. 이전 rootfs에는 없어 없는 라이브러리와 같은 방식으로 여기서 설치함
+EXTRA_PKGS="dbus-daemon python3-gi gir1.2-glib-2.0"
+extra_missing() {
+    command -v dbus-daemon >/dev/null 2>&1 && python3 -c 'import gi; gi.require_version("Gio", "2.0"); from gi.repository import Gio' 2>/dev/null \
+        || echo "$EXTRA_PKGS"
+}
+extra=$(extra_missing)
+if [ -n "$extra" ]; then
+    if [ "$MODE" = install ]; then
+        ls /var/lib/apt/lists/*Packages >/dev/null 2>&1 || $APT update >/dev/null || echo "FAIL apt-update"
+        if out=$($APT install -y --no-install-recommends $extra 2>&1); then
+            echo "OK   deps : 세션 버스·네트워크 대역 패키지 설치 ($extra)"
+        else
+            echo "FAIL deps : 세션 버스·네트워크 대역 패키지 설치 실패 ($extra)"
+            echo "$out" | tail -n 3 | sed 's/^/FAIL deps :   /'
+        fi
+    elif [ -n "${EZS_DEPS_REQUEST:-}" ]; then
+        : > "$EZS_DEPS_REQUEST"
+        echo "NEED deps : $extra"
+        exit 0
+    else
+        echo "WARN deps : 세션 버스·네트워크 대역 패키지 없음 ($extra)"
+    fi
+fi
+
 # First Debian package apt knows for a soname, empty when none (works as any user)
 # soname에 대해 apt가 아는 첫 데비안 패키지, 없으면 빈 값(아무 사용자로나 동작)
 # A package apt can really install: known AND with an install candidate. "apt-cache show" also

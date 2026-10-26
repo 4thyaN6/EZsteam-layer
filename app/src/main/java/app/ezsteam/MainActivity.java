@@ -481,7 +481,11 @@ public class MainActivity extends Activity {
     /** Start Steam in Big Picture. Off by default for now: it showed only a black screen on the
      *  device (2026-10-21), cause not found yet / Steam을 빅픽처로 시작. 지금은 기본 끔: 기기에서 검은
      *  화면만 나왔고(2026-10-21) 원인을 아직 찾지 못함 */
-    static final String KEY_BIG_PICTURE = "steam.bigpicture";
+    /** Start in Big Picture. Default on since 2026-10-27 (user decision: start in Big Picture drawn
+     *  in software, go to the library from there when needed); a new key so the earlier choice
+     *  "normal" (old default) does not carry over / 빅픽처로 시작. 2026-10-27부터 기본 켬(사용자 결정: 소프트웨어로
+     *  그리는 빅픽처로 시작하고 필요하면 거기서 라이브러리로 감). 이전 선택 "일반"(옛 기본값)이 이어지지 않게 새 키 */
+    static final String KEY_BIG_PICTURE = "steam.startBigPicture";
 
     /** End a still-running game when another one starts (false = only tell)
      *  다른 게임이 시작될 때 아직 실행 중인 게임을 끝냄(false = 알림만) */
@@ -500,7 +504,7 @@ public class MainActivity extends Activity {
     }
 
     static boolean bigPicture(android.content.Context ctx) {
-        return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_BIG_PICTURE, false);
+        return ctx.getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_BIG_PICTURE, true);
     }
 
 

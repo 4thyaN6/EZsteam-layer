@@ -195,6 +195,40 @@ fi
 
 
 cd "$STEAM_DIR" || exit 0
+# System bus with a NetworkManager stand-in, before the client starts (it looks for NetworkManager
+# at start). Two small processes for the whole session; skipped with EZS_NETSTATE=0 or when the
+# packages are not there yet (steam-deps.sh installs them on the next start)
+# 클라이언트가 뜨기 전에 NetworkManager 대역이 있는 시스템 버스를 띄움(클라이언트는 시작할 때 NetworkManager를
+# 찾음). 세션 동안 작은 프로세스 2개. EZS_NETSTATE=0이거나 패키지가 아직 없으면 건너뜀(다음 시작 때 steam-deps.sh가 설치함)
+start_netstate() {
+    [ "${EZS_NETSTATE:-1}" = 1 ] || { echo "INFO network : NetworkManager 대역 끔 (EZS_NETSTATE=0)"; return; }
+    if ! command -v dbus-daemon >/dev/null 2>&1; then
+        echo "INFO network : dbus-daemon 없음, NetworkManager 대역 건너뜀"
+        return
+    fi
+    mkdir -p /run/dbus 2>/dev/null
+    # D-Bus clients (libdbus in the Steam client) abort without a machine id: a random local one,
+    # made once (not tied to the device) / D-Bus 클라이언트(Steam 클라이언트의 libdbus)는 machine id가 없으면
+    # 멈춤: 한 번 만드는 임의의 로컬 값(기기와 무관)
+    if [ ! -s /etc/machine-id ]; then
+        tr -d '-' < /proc/sys/kernel/random/uuid > /etc/machine-id 2>/dev/null \
+            || echo "WARN network : /etc/machine-id를 만들지 못함"
+    fi
+    mkdir -p /var/lib/dbus 2>/dev/null
+    [ -e /var/lib/dbus/machine-id ] || ln -s /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null
+    rm -f /run/dbus/system_bus_socket
+    dbus-daemon --config-file=/opt/ezsteam/ezs-system-bus.conf --nofork --nopidfile >/dev/null 2>&1 &
+    w=0
+    while [ ! -S /run/dbus/system_bus_socket ] && [ $w -lt 30 ]; do sleep 0.1; w=$((w + 1)); done
+    if [ ! -S /run/dbus/system_bus_socket ]; then
+        echo "WARN network : 시스템 버스가 뜨지 않음"
+        return
+    fi
+    python3 /opt/ezsteam/ezs-netstate.py 2>&1 &
+    NETSTATE_UP=1
+}
+NETSTATE_UP=
+start_netstate
 # Big Picture restart asked by the app, read at the next start / 앱이 요청한 빅픽처 다시 시작. 다음 시작 때 읽음
 BPMARK=/tmp/ezs-bigpicture-next
 rm -f "$BPMARK"
@@ -235,6 +269,9 @@ while :; do
             sh /opt/ezsteam/steam-deps.sh check
         fi
     fi
+    # Packages for the stand-in may have just been installed by the deps step above
+    # 바로 위 deps 단계가 대역용 패키지를 방금 설치했을 수 있음
+    [ -n "$NETSTATE_UP" ] || start_netstate
     # File check of the client: skipped (-noverifyfiles, faster start) only while the client UI
     # library loads. A fresh install from the current bootstrap stopped at once with "dlmopen
     # steamui.so failed: libavcodec.so.62" right after "Verification skipped" (tester device): the
