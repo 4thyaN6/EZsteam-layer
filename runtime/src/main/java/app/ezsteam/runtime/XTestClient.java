@@ -51,8 +51,8 @@ public final class XTestClient implements Closeable {
     /** Atoms _NET_WM_STATE and _NET_WM_STATE_FULLSCREEN / 아톰 _NET_WM_STATE, _NET_WM_STATE_FULLSCREEN */
     private int atomNetState, atomFullscreen;
     private int atomActive;
-    /** Atoms _NET_WM_NAME, STEAM_GAME, STEAM_BIGPICTURE / 아톰 _NET_WM_NAME, STEAM_GAME, STEAM_BIGPICTURE */
-    private int atomNetName, atomSteamGame, atomSteamBp;
+    /** Atoms _NET_WM_NAME, STEAM_BIGPICTURE / 아톰 _NET_WM_NAME, STEAM_BIGPICTURE */
+    private int atomNetName, atomSteamBp;
     /** Steam windows already taken for Big Picture / 이미 빅픽처로 본 Steam 창 */
     private final java.util.Set<Integer> bigPictureWindows = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
@@ -232,22 +232,23 @@ public final class XTestClient implements Closeable {
             // 4d. _NET_ACTIVE_WINDOW(순번 9): 프로그램이 창 관리자에게 창을 올리고 포커스를 달라고 할 때 씀
             //     (HOME으로 연 Steam 메뉴가 게임 아래에 남았음, 2026-10-24)
             int aActive = internAtom(out, in, "_NET_ACTIVE_WINDOW");
-            // 4e. _NET_WM_NAME, STEAM_GAME, STEAM_BIGPICTURE (sequences 10..12): to tell Steam's Big
-            //     Picture window from its desktop window (title "Steam Big Picture Mode"; STEAM_GAME
-            //     769 or STEAM_BIGPICTURE non-zero are what gamescope reads, set by Steam at least
-            //     under gamescope). Read only for the decision, titles are not logged
-            // 4e. _NET_WM_NAME, STEAM_GAME, STEAM_BIGPICTURE(순번 10~12): Steam 빅픽처 창을 데스크톱 창과
-            //     구분하기 위함(제목 "Steam Big Picture Mode". STEAM_GAME 769 또는 0 아닌 STEAM_BIGPICTURE는
-            //     gamescope가 읽는 값이며 Steam이 적어도 gamescope 아래에서는 둠). 판단에만 쓰고 제목은 로그에 남기지 않음
+            // 4e. _NET_WM_NAME, STEAM_BIGPICTURE (sequences 10, 11): to tell Steam's Big Picture
+            //     window from its desktop window (title "Steam Big Picture Mode"; STEAM_BIGPICTURE
+            //     non-zero is what gamescope reads). STEAM_GAME 769 is not used: here Steam puts it on
+            //     every window, the login and library windows too (device log 2026-10-26 22:34).
+            //     Read only for the decision, titles are not logged
+            // 4e. _NET_WM_NAME, STEAM_BIGPICTURE(순번 10, 11): Steam 빅픽처 창을 데스크톱 창과 구분하기 위함(제목
+            //     "Steam Big Picture Mode". 0 아닌 STEAM_BIGPICTURE는 gamescope가 읽는 값). STEAM_GAME 769는 쓰지 않음:
+            //     여기서는 Steam이 로그인·라이브러리 창을 포함한 모든 창에 둠(기기 로그 2026-10-26 22:34).
+            //     판단에만 쓰고 제목은 로그에 남기지 않음
             int aNetName = internAtom(out, in, "_NET_WM_NAME");
-            int aSteamGame = internAtom(out, in, "STEAM_GAME");
             int aSteamBp = internAtom(out, in, "STEAM_BIGPICTURE");
 
-            // 5. Watch top-level windows appearing (SubstructureNotify on the root, sequence 13), so a
+            // 5. Watch top-level windows appearing (SubstructureNotify on the root, sequence 12), so a
             //    newly shown window gets the focus like under a window manager. Measured: a game
             //    window shown while the focus was still on the Steam window stayed black on its
             //    movie and took no keys until it was clicked.
-            // 5. 최상위 창이 나타나는 것을 지켜봄(루트에 SubstructureNotify, 순번 13). 창 관리자처럼 새로
+            // 5. 최상위 창이 나타나는 것을 지켜봄(루트에 SubstructureNotify, 순번 12). 창 관리자처럼 새로
             //    보인 창에 포커스를 주기 위함. 실측: 포커스가 Steam 창에 남은 채 뜬 게임 창이 동영상에서
             //    검은 화면으로 멈추고, 클릭하기 전까지 키를 받지 않았음
             ByteBuffer cw = le(16);
@@ -257,10 +258,9 @@ public final class XTestClient implements Closeable {
             out.write(cw.array());
             out.flush();
 
-            XTestClient c = new XTestClient(s, out, op, w, h, vendor, vmaj, vmin, rootWin, aProt, aTake, aState, aTime, 13);
+            XTestClient c = new XTestClient(s, out, op, w, h, vendor, vmaj, vmin, rootWin, aProt, aTake, aState, aTime, 12);
             c.atomActive = aActive;
             c.atomNetName = aNetName;
-            c.atomSteamGame = aSteamGame;
             c.atomSteamBp = aSteamBp;
             c.atomNetState = aNet;
             c.atomFullscreen = aFull;
@@ -507,10 +507,10 @@ public final class XTestClient implements Closeable {
 
     /**
      * Is this Steam window the Big Picture one? Title (_NET_WM_NAME, then WM_NAME) naming Big
-     * Picture, or STEAM_GAME = 769 (Big Picture's app id), or STEAM_BIGPICTURE non-zero. The
-     * listener hears it once per window.
-     * 이 Steam 창이 빅픽처 창인지: 제목(_NET_WM_NAME, 그다음 WM_NAME)에 빅픽처가 있거나, STEAM_GAME = 769(빅픽처
-     * 앱 번호), 또는 0 아닌 STEAM_BIGPICTURE. 리스너는 창마다 한 번 들음
+     * Picture, or STEAM_BIGPICTURE non-zero. The listener hears it once per window. The title was
+     * the sign on the device for every Big Picture window and for no other (2026-10-26 22:33-22:35)
+     * 이 Steam 창이 빅픽처 창인지: 제목(_NET_WM_NAME, 그다음 WM_NAME)에 빅픽처가 있거나, 0 아닌 STEAM_BIGPICTURE.
+     * 리스너는 창마다 한 번 들음. 기기에서는 제목이 모든 빅픽처 창에만 맞았음(2026-10-26 22:33~22:35)
      */
     private void checkBigPicture(int win) {
         if (bigPictureWindows.contains(win)) return;
@@ -533,17 +533,14 @@ public final class XTestClient implements Closeable {
                 if (t.contains("big picture") || t.contains("빅 픽처") || t.contains("빅픽처")) found.accept("제목");
             });
         }
-        for (int atom : new int[]{atomSteamGame, atomSteamBp}) {
-            if (atom == 0) continue;
-            final boolean game = atom == atomSteamGame;
-            // GetProperty(win, atom, CARDINAL (6), 0, 1) / GetProperty(창, 아톰, CARDINAL(6), 0, 1)
+        if (atomSteamBp != 0) {
+            // GetProperty(win, STEAM_BIGPICTURE, CARDINAL (6), 0, 1) / GetProperty(창, STEAM_BIGPICTURE, CARDINAL(6), 0, 1)
             ByteBuffer q = le(24);
-            q.put((byte) 20).put((byte) 0).putShort((short) 6).putInt(win).putInt(atom).putInt(6).putInt(0).putInt(1);
+            q.put((byte) 20).put((byte) 0).putShort((short) 6).putInt(win).putInt(atomSteamBp).putInt(6).putInt(0).putInt(1);
             send(q.array(), r -> {
                 ByteBuffer b = ByteBuffer.wrap(r).order(ByteOrder.LITTLE_ENDIAN);
                 if ((r[1] & 0xff) != 32 || b.getInt(16) < 1 || r.length < 36) return;
-                int v = b.getInt(32);
-                if (game ? v == 769 : v != 0) found.accept(game ? "STEAM_GAME 769" : "STEAM_BIGPICTURE");
+                if (b.getInt(32) != 0) found.accept("STEAM_BIGPICTURE");
             });
         }
     }

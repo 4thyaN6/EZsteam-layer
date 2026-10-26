@@ -2707,18 +2707,37 @@ public class DisplayActivity extends Activity {
                 return;
             }
             log(String.format(Locale.ROOT, "빅픽처 창 0x%x(%s): Steam 화면 GPU로는 검은 화면 → Steam을 빅픽처로 다시 시작", win, sign));
-            notice(s(R.string.notice_bp_restart));
-            // The client's main process (and its update helper) carry the name "steam"
-            // 클라이언트 주 프로세스(와 갱신 도우미)는 이름이 "steam"
+            // The client's main process (and its update helper): kernel name "steam". Proc.name is
+            // "comm | argv[0]", so the comm part is compared (the plain compare matched nothing,
+            // device log 2026-10-26 22:34: "Steam 프로세스 0개")
+            // 클라이언트 주 프로세스(와 갱신 도우미): 커널 이름 "steam". Proc.name은 "comm | argv[0]"이라 comm
+            // 부분을 비교함(그냥 비교하면 하나도 안 맞았음, 기기 로그 2026-10-26 22:34: "Steam 프로세스 0개")
             int n = 0;
             for (app.ezsteam.runtime.ChildProcessCounter.Proc pr
                     : app.ezsteam.runtime.ChildProcessCounter.descendants(android.os.Process.myPid())) {
-                if ("steam".equals(pr.name)) {
+                String comm = pr.name;
+                int bar = comm.indexOf(" | ");
+                if (bar >= 0) comm = comm.substring(0, bar);
+                if ("steam".equals(comm)) {
                     android.os.Process.sendSignal(pr.pid, 15);
                     n++;
                 }
             }
             log("빅픽처 다시 시작: Steam 프로세스 " + n + "개에 SIGTERM");
+            if (n == 0) {
+                // Nothing ended: take the mark back so a later exit does not restart Steam, and let
+                // the next Big Picture window try again / 끝낸 것이 없음: 표시를 되돌려 나중 종료가 Steam을 다시
+                // 시작하지 않게 하고, 다음 빅픽처 창에서 다시 시도하게 함
+                if (!mark.delete()) log("빅픽처 다시 시작 표시를 지우지 못함");
+                bpRestartAsked = false;
+                return;
+            }
+            notice(s(R.string.notice_bp_restart));
+            // The restart card at once, so the black Big Picture window is not what is seen
+            // (onSessionLine shows it again at the next start and the new window closes it)
+            // 다시 시작 카드를 바로 보임. 검은 빅픽처 창이 보이지 않게 함(onSessionLine이 다음 시작 때 다시
+            // 보이고 새 창이 닫음)
+            showSetup(s(R.string.setup_restart), -1, s(R.string.setup_restart_detail));
         }, "ezs-bp-restart").start();
     }
 
