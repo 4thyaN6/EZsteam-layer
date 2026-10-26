@@ -71,14 +71,13 @@
     <string name="main_start">Steam 시작</string>
     <string name="main_start_screen">시작 화면</string>
     <string name="menu_app_log">화면에 앱 로그</string>
-    <string name="menu_back">◀ 뒤로</string>
     <string name="menu_close">세션 닫기 (Steam 종료)</string>
     <string name="menu_diag">진단</string>
     <string name="menu_display">화면</string>
     <string name="menu_fps">프레임 제한</string>
     <string name="menu_fsr_out">FSR 출력</string>
     <string name="menu_fsr_sharp">FSR 선명도</string>
-    <string name="menu_hint">A 선택 · ◀▶ 바꾸기 · B 뒤로</string>
+    <string name="menu_hint">A 선택 · ◀▶ 바꾸기 · LB/RB 탭 · B 뒤로</string>
     <string name="menu_input">입력</string>
     <string name="menu_keyboard">키보드 열기</string>
     <string name="menu_lsfg">LSFG (다음 게임부터)</string>
@@ -95,6 +94,7 @@
     <string name="menu_scale">확대 방식</string>
     <string name="menu_stats">성능 표시</string>
     <string name="menu_steam">Steam 메뉴</string>
+    <string name="menu_tab_quick">빠른 메뉴</string>
     <string name="menu_title">EZsteam 메뉴</string>
     <string name="menu_touch_pad">터치 패드</string>
     <string name="note_channel">Steam 세션</string>

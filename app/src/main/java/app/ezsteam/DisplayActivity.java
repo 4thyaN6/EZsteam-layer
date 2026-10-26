@@ -190,14 +190,14 @@ public class DisplayActivity extends Activity {
     private static final String PREF_STATS = "view.stats";
 
     /**
-     * Rows of the app menu. The top-bar buttons of earlier versions all live here now (user
-     * decision 2026-10-26: no bar over the game): display settings, input, diagnosis as submenus,
-     * frequent actions at the top level.
-     * 앱 메뉴의 줄. 이전 버전의 위쪽 막대 버튼은 모두 여기로 옮김(사용자 결정 2026-10-26: 게임 위 막대 없음):
-     * 화면 설정·입력·진단은 하위 메뉴, 자주 쓰는 동작은 맨 위
+     * Tabs of the app menu (side panel with a vertical tab strip, user request 2026-10-26). The
+     * top-bar buttons of earlier versions all live here (no bar over the game): frequent actions
+     * in the first tab, then display settings, input, diagnosis.
+     * 앱 메뉴의 탭(세로 탭 줄이 있는 옆 판, 사용자 요청 2026-10-26). 이전 버전의 위쪽 막대 버튼은 모두 여기에 있음
+     * (게임 위 막대 없음): 첫 탭은 자주 쓰는 동작, 그다음 화면 설정·입력·진단
      */
     private void buildMenu() {
-        menu.setTexts(s(R.string.menu_title), s(R.string.menu_hint), s(R.string.menu_back));
+        menu.setHint(s(R.string.menu_hint));
         java.util.List<app.ezsteam.runtime.CompositorMenu.Item> display = new java.util.ArrayList<>();
         display.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_scale), () -> scaleNames()[view.getScaleMode()],
                 () -> setScale((view.getScaleMode() + SCALE_COUNT - 1) % SCALE_COUNT),
@@ -257,8 +257,6 @@ public class DisplayActivity extends Activity {
 
         java.util.List<app.ezsteam.runtime.CompositorMenu.Item> it = new java.util.ArrayList<>();
         it.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_resume), null, null, null, () -> menu.hide()));
-        it.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_display), display));
-        it.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_input), input));
         it.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_steam), null, null, null, () -> {
             menu.hide();
             raiseSteamOverGame();
@@ -267,14 +265,18 @@ public class DisplayActivity extends Activity {
             menu.hide();
             saveLogs();
         }));
-        it.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_diag), diag));
         it.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_quit_game),
                 () -> quitArmed ? s(R.string.menu_quit_again) : "", null, null, this::quitFromMenu));
         it.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_close), null, null, null, () -> {
             menu.hide();
             confirmClose();
         }));
-        menu.setItems(it);
+        java.util.List<app.ezsteam.runtime.CompositorMenu.Tab> tabs = new java.util.ArrayList<>();
+        tabs.add(new app.ezsteam.runtime.CompositorMenu.Tab(app.ezsteam.runtime.CompositorMenu.ICON_QUICK, s(R.string.menu_tab_quick), it));
+        tabs.add(new app.ezsteam.runtime.CompositorMenu.Tab(app.ezsteam.runtime.CompositorMenu.ICON_DISPLAY, s(R.string.menu_display), display));
+        tabs.add(new app.ezsteam.runtime.CompositorMenu.Tab(app.ezsteam.runtime.CompositorMenu.ICON_INPUT, s(R.string.menu_input), input));
+        tabs.add(new app.ezsteam.runtime.CompositorMenu.Tab(app.ezsteam.runtime.CompositorMenu.ICON_DIAG, s(R.string.menu_diag), diag));
+        menu.setTabs(tabs);
     }
 
     /** Open the menu from touch or the screen's back (no game needed) / 터치나 화면 뒤로 가기로 메뉴를 엶(게임 없어도 됨) */

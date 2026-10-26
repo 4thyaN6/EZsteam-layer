@@ -72,14 +72,13 @@
     <string name="main_start">Start Steam</string>
     <string name="main_start_screen">Start screen</string>
     <string name="menu_app_log">App log on screen</string>
-    <string name="menu_back">◀ Back</string>
     <string name="menu_close">Close session (end Steam)</string>
     <string name="menu_diag">Diagnosis</string>
     <string name="menu_display">Display</string>
     <string name="menu_fps">Frame limit</string>
     <string name="menu_fsr_out">FSR output</string>
     <string name="menu_fsr_sharp">FSR sharpness</string>
-    <string name="menu_hint">A select · ◀▶ change · B back</string>
+    <string name="menu_hint">A choose · ◀▶ change · LB/RB tab · B back</string>
     <string name="menu_input">Input</string>
     <string name="menu_keyboard">Open keyboard</string>
     <string name="menu_lsfg">LSFG (next game)</string>
@@ -96,6 +95,7 @@
     <string name="menu_scale">Scaling</string>
     <string name="menu_stats">Performance strip</string>
     <string name="menu_steam">Steam menu</string>
+    <string name="menu_tab_quick">Quick</string>
     <string name="menu_title">EZsteam menu</string>
     <string name="menu_touch_pad">Touch pad</string>
     <string name="note_channel">Steam session</string>
