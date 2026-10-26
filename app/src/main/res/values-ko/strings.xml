@@ -94,12 +94,15 @@
     <string name="menu_scale">확대 방식</string>
     <string name="menu_stats">성능 표시</string>
     <string name="menu_steam">Steam 메뉴</string>
+    <string name="menu_steam_guide">Steam 가이드 버튼 (HOME 길게)</string>
     <string name="menu_tab_quick">빠른 메뉴</string>
     <string name="menu_title">EZsteam 메뉴</string>
     <string name="menu_touch_pad">터치 패드</string>
     <string name="note_channel">Steam 세션</string>
     <string name="note_text">다운로드와 게임이 백그라운드에서도 계속됨</string>
     <string name="note_title">Steam 실행 중</string>
+    <string name="notice_bp_game">빅픽처는 Steam 화면 GPU 없이만 보임: 게임을 끝낸 뒤 열면 Steam을 빅픽처로 다시 시작함</string>
+    <string name="notice_bp_restart">빅픽처는 Steam 화면 GPU 없이만 보임: Steam을 빅픽처로 다시 시작함</string>
     <string name="notice_mouse_free">마우스 잠금 해제</string>
     <string name="notice_mouse_locked">마우스 잠금 (해제: 메뉴 &gt; 입력 &gt; 마우스 잠금)</string>
     <string name="notice_next_game">다음 게임 시작부터 적용됨</string>

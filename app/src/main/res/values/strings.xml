@@ -95,12 +95,15 @@
     <string name="menu_scale">Scaling</string>
     <string name="menu_stats">Performance strip</string>
     <string name="menu_steam">Steam menu</string>
+    <string name="menu_steam_guide">Steam guide button (or hold HOME)</string>
     <string name="menu_tab_quick">Quick</string>
     <string name="menu_title">EZsteam menu</string>
     <string name="menu_touch_pad">Touch pad</string>
     <string name="note_channel">Steam session</string>
     <string name="note_text">Downloads and games keep going in the background</string>
     <string name="note_title">Steam running</string>
+    <string name="notice_bp_game">Big Picture shows only without the Steam UI GPU: open it after the game ends (Steam restarts in Big Picture)</string>
+    <string name="notice_bp_restart">Big Picture shows only without the Steam UI GPU: restarting Steam in Big Picture</string>
     <string name="notice_mouse_free">Mouse released</string>
     <string name="notice_mouse_locked">Mouse locked (release: menu &gt; Input &gt; Mouse lock)</string>
     <string name="notice_next_game">Applies from the next game start</string>

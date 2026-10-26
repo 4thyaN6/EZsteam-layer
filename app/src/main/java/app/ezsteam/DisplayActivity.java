@@ -261,6 +261,10 @@ public class DisplayActivity extends Activity {
             menu.hide();
             raiseSteamOverGame();
         }));
+        it.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_steam_guide), null, null, null, () -> {
+            menu.hide();
+            sendSteamGuide();
+        }));
         it.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_save_logs), null, null, null, () -> {
             menu.hide();
             saveLogs();
@@ -283,6 +287,10 @@ public class DisplayActivity extends Activity {
     private void openMenu() {
         app.ezsteam.runtime.CompositorMenu m = menu;
         if (m == null) return;
+        // Two ways firing for one gesture (edge swipe and the system back) must not open and
+        // close it again / 한 동작에 두 경로가 함께 와도(가장자리 밀기와 시스템 뒤로 가기) 열었다 닫지 않게 함
+        long now = SystemClock.uptimeMillis();
+        if (now - menuOpenedAt < 400) return;
         if (m.isOpen()) {
             m.onBack();
             return;
@@ -291,8 +299,11 @@ public class DisplayActivity extends Activity {
         int f = x != null ? x.focusedWindow() : 0;
         if (f != 0 && x != null && !x.isSteamWindow(f)) gameTopBeforeMenu = f;
         quitArmed = false;
+        menuOpenedAt = now;
         m.show();
     }
+
+    private long menuOpenedAt;
 
     private String fpsName(int fps) {
         return fps == 0 ? s(R.string.v_none) : s(R.string.v_fps, fps);
@@ -409,14 +420,66 @@ public class DisplayActivity extends Activity {
         x.activate(sw);
     }
 
+    /** Main-thread handler for pad and gesture callbacks / 패드·제스처 콜백용 메인 스레드 핸들러 */
+    private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
+    /** HOME held, and held long enough to go to Steam (main thread) / HOME 누름, Steam으로 넘길 만큼 오래 누름(메인 스레드) */
+    private boolean homeHeld, homeLong;
+    /** Hold time after which HOME is Steam's guide button / 이 시간 넘게 누르면 HOME이 Steam 가이드 버튼이 됨 */
+    private static final long HOME_LONG_MS = 500;
+
+    /** HOME held past HOME_LONG_MS: Steam now sees the guide button, until it is released (Steam's
+     *  own chords such as guide + X keep working while it is held)
+     *  HOME을 HOME_LONG_MS 넘게 누름: 뗄 때까지 Steam이 가이드 버튼을 받음(누른 동안 가이드 + X 같은 Steam 자체
+     *  조합도 그대로 됨) */
+    private final Runnable homeLongCheck = () -> {
+        // Qualified: the fields are declared further down / 한정 이름: 필드가 아래쪽에 선언됨
+        app.ezsteam.runtime.CompositorMenu m = this.menu;
+        app.ezsteam.runtime.PadFile p = this.pad;
+        if (!this.homeHeld || p == null || (m != null && m.isOpen())) return;
+        homeLong = true;
+        p.setGuidePass(true);
+        log("HOME 길게: Steam 가이드 버튼으로 넘김");
+    };
+
+    private void homeDown() {
+        homeHeld = true;
+        homeLong = false;
+        ui.removeCallbacks(homeLongCheck);
+        ui.postDelayed(homeLongCheck, HOME_LONG_MS);
+    }
+
+    private void homeUp() {
+        homeHeld = false;
+        ui.removeCallbacks(homeLongCheck);
+        if (homeLong) {
+            homeLong = false;
+            app.ezsteam.runtime.PadFile p = pad;
+            if (p != null) p.setGuidePass(false);
+            return;
+        }
+        onHome();
+    }
+
+    /** Menu row: one guide press for Steam (after the menu closed, so Steam reads the pad again)
+     *  메뉴 줄: Steam에 가이드 한 번 누름(메뉴가 닫혀 Steam이 다시 패드를 읽은 뒤) */
+    private void sendSteamGuide() {
+        ui.postDelayed(() -> {
+            app.ezsteam.runtime.PadFile p = pad;
+            if (p == null) return;
+            p.setGuidePulse(true);
+            log("메뉴: Steam 가이드 버튼 보냄");
+            ui.postDelayed(() -> p.setGuidePulse(false), 150);
+        }, 250);
+    }
+
     /**
-     * HOME (GUIDE). With a game in front: the app's own menu over the game (game and Steam client
-     * get no pad input while it is open). HOME again closes it. After "Steam 메뉴" raised the Steam
-     * window, HOME brings the game back. Without a game Steam handles HOME itself (Big Picture).
-     * Decided 2026-10-24: HOME calls the compositor's menu, like gamescope.
-     * HOME(GUIDE). 게임이 앞에 있으면: 게임 위에 앱 자체 메뉴(열린 동안 게임과 Steam 클라이언트에는 패드 입력을
-     * 주지 않음). HOME을 다시 누르면 닫음. "Steam 메뉴"로 Steam 창을 올린 뒤에는 HOME이 게임을 되돌림. 게임이
-     * 없으면 Steam이 HOME을 직접 처리함(빅픽처). 2026-10-24 결정: HOME은 gamescope처럼 컴포지터 메뉴를 부름
+     * HOME (GUIDE), short press: the app's own menu, game or not (user decision 2026-10-26: Steam
+     * opening its library or Big Picture on HOME was not wanted; Steam's guide is a long press or a
+     * menu row now). HOME again closes it. After "Steam 메뉴" raised the Steam window, HOME brings
+     * the game back. Game and Steam client get no pad input while the menu is open.
+     * HOME(GUIDE) 짧게: 게임 유무와 상관없이 앱 자체 메뉴(사용자 결정 2026-10-26: HOME에 Steam이 라이브러리나
+     * 빅픽처를 여는 것은 원하지 않음. Steam 가이드는 이제 길게 누르기나 메뉴 줄). HOME을 다시 누르면 닫음. "Steam 메뉴"로
+     * Steam 창을 올린 뒤에는 HOME이 게임을 되돌림. 메뉴가 열린 동안 게임과 Steam 클라이언트에는 패드 입력을 주지 않음
      */
     private void onHome() {
         app.ezsteam.runtime.CompositorMenu m = menu;
@@ -441,8 +504,7 @@ public class DisplayActivity extends Activity {
         int f = x != null ? x.focusedWindow() : 0;
         log(String.format(Locale.ROOT, "HOME: 게임 %s, 앞 창 0x%x%s", game ? "실행 중" : "없음", f,
                 x != null && x.isSteamWindow(f) ? " (Steam)" : ""));
-        if (!game || (x != null && x.isSteamWindow(f))) return;
-        if (f != 0) gameTopBeforeMenu = f;
+        if (f != 0 && x != null && !x.isSteamWindow(f)) gameTopBeforeMenu = f;
         runOnUiThread(() -> {
             quitArmed = false;
             m.show();
@@ -1013,13 +1075,25 @@ public class DisplayActivity extends Activity {
                 try {
                     pad = app.ezsteam.runtime.PadFile.open(c.rootfs);
                     // HOME (GUIDE) from the touch pad or a real controller / 터치 패드나 실제 컨트롤러의 HOME(GUIDE)
-                    pad.setButtonListener(b -> {
-                        if (b == app.ezsteam.runtime.PadFile.GUIDE) {
-                            onHome();
-                            return;
+                    pad.setButtonListener(new app.ezsteam.runtime.PadFile.ButtonListener() {
+                        @Override
+                        public void pressed(int b) {
+                            // HOME: decided on release (short = app menu) or after a hold (long =
+                            // Steam's guide). Posted, never run inside the pad write
+                            // HOME: 뗄 때(짧게 = 앱 메뉴) 또는 누르고 있을 때(길게 = Steam 가이드) 정함. 패드 쓰기
+                            // 안에서 돌리지 않고 넘김
+                            if (b == app.ezsteam.runtime.PadFile.GUIDE) {
+                                ui.post(DisplayActivity.this::homeDown);
+                                return;
+                            }
+                            app.ezsteam.runtime.CompositorMenu mm = menu;
+                            if (mm != null) mm.onButton(b);
                         }
-                        app.ezsteam.runtime.CompositorMenu mm = menu;
-                        if (mm != null) mm.onButton(b);
+
+                        @Override
+                        public void released(int b) {
+                            if (b == app.ezsteam.runtime.PadFile.GUIDE) ui.post(DisplayActivity.this::homeUp);
+                        }
                     });
                     final app.ezsteam.runtime.PadFile opened = pad;
                     runOnUiThread(() -> touchPad.setPad(opened));
@@ -1112,6 +1186,7 @@ public class DisplayActivity extends Activity {
             xtest = XTestClient.connect(sock, this::log);
             // Raises done as a window manager (Steam menu on HOME) / 창 관리자처럼 한 올리기(HOME의 Steam 메뉴)
             xtest.setActivationListener(this::onActivated);
+            xtest.setBigPictureListener(this::onBigPicture);
             log("XTEST " + xtest.xtestMajor + "." + xtest.xtestMinor + " 연결, 서버 " + xtest.vendor
                     + " " + xtest.screenWidth + "x" + xtest.screenHeight);
         } catch (IOException e) {
@@ -1197,8 +1272,11 @@ public class DisplayActivity extends Activity {
                     x.button(1, false);
                     leftDown = false;
                 }
-                // Short two-finger tap without scrolling = right click / 스크롤 없는 짧은 두 손가락 탭 = 오른쪽 클릭
-                if (twoFinger && !scrolled && SystemClock.uptimeMillis() - twoFingerStart < 300) {
+                // Short two-finger tap without scrolling = right click; not on a cancel (a menu
+                // gesture took the touches) / 스크롤 없는 짧은 두 손가락 탭 = 오른쪽 클릭. 취소(메뉴 제스처가 터치를
+                // 가져감)에는 하지 않음
+                if (e.getActionMasked() == MotionEvent.ACTION_UP
+                        && twoFinger && !scrolled && SystemClock.uptimeMillis() - twoFingerStart < 300) {
                     x.button(3, true);
                     x.button(3, false);
                 }
@@ -1208,6 +1286,144 @@ public class DisplayActivity extends Activity {
                 break;
         }
         return true;
+    }
+
+    // ---- menu gestures: four-finger tap, swipe in from the right edge / 메뉴 제스처: 네 손가락 탭, 오른쪽 끝에서 밀기
+
+    /** Four-finger tap state: first finger time, all-four time, start points, moved too far
+     *  네 손가락 탭 상태: 첫 손가락 시각, 네 손가락이 된 시각, 시작점, 너무 움직임 */
+    private long tapStart, tapFour;
+    private final android.util.SparseArray<float[]> tapPoints = new android.util.SparseArray<>();
+    private boolean tapMoved, tapCancelled;
+    /** Edge swipe: 0 none, 1 waiting (down held back), 2 swiping / 가장자리 밀기: 0 없음, 1 대기(누름 보류), 2 미는 중 */
+    private int edge;
+    private MotionEvent edgeDown;
+    private float edgeX, edgeY;
+    private long edgeAt;
+
+    private float dpx(float v) {
+        return v * getResources().getDisplayMetrics().density;
+    }
+
+    /**
+     * Before any view: two ways to open the menu without HOME (user request 2026-10-26).
+     * - Four fingers down within 300 ms and all up within 700 ms of the first, none moving more
+     *   than 48 dp. Without the touch pad, the third finger cancels the mouse input (no meaning
+     *   there); with the touch pad the game keeps its touches (four-finger play stays possible).
+     * - A swipe that starts in the right 20 dp and goes left 72 dp, mostly sideways. The first
+     *   touch is held back until it is clear: a tap or another movement there is passed on as is.
+     *   When the system back gesture takes the swipe the app gets a cancel and the system back
+     *   opens the menu instead (same result).
+     * 모든 뷰보다 먼저: HOME 없이 메뉴를 여는 두 방법(사용자 요청 2026-10-26).
+     * - 첫 손가락부터 300ms 안에 네 손가락이 닿고 700ms 안에 모두 떼며, 48dp 넘게 움직인 손가락이 없음. 터치 패드가
+     *   없으면 세 번째 손가락에서 마우스 입력을 취소함(그때는 쓸모 없음). 터치 패드가 있으면 게임이 터치를 그대로 받음
+     *   (네 손가락 조작도 됨)
+     * - 오른쪽 20dp 안에서 시작해 왼쪽으로 72dp, 주로 가로로 민 경우. 판단될 때까지 첫 터치를 보류하고, 거기서의 탭이나
+     *   다른 움직임은 그대로 넘김. 시스템 뒤로 가기 제스처가 가져가면 앱은 취소를 받고 시스템 뒤로 가기가 메뉴를 엶(결과 같음)
+     */
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent e) {
+        app.ezsteam.runtime.CompositorMenu m = menu;
+        if (m == null || m.isOpen() || e.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
+            edge = 0;
+            return super.dispatchTouchEvent(e);
+        }
+        if (trackFourFingerTap(e)) return true;
+        int a = e.getActionMasked();
+        if (a == MotionEvent.ACTION_DOWN && e.getX() >= getWindow().getDecorView().getWidth() - dpx(20)
+                && !touchPad.hasControlAt(e.getX(), e.getY())) {
+            edge = 1;
+            edgeX = e.getX();
+            edgeY = e.getY();
+            edgeAt = SystemClock.uptimeMillis();
+            if (edgeDown != null) edgeDown.recycle();
+            edgeDown = MotionEvent.obtain(e);
+            return true;
+        }
+        if (edge == 1) {
+            float dx = edgeX - e.getX(), dy = Math.abs(e.getY() - edgeY);
+            if (a == MotionEvent.ACTION_MOVE && dx > dpx(16) && dx > 2 * dy) {
+                edge = 2;
+                return true;
+            }
+            boolean still = a == MotionEvent.ACTION_MOVE && dx < dpx(16) && dy < dpx(16)
+                    && SystemClock.uptimeMillis() - edgeAt < 200;
+            if (still) return true;
+            // Not a swipe: hand the held-back touch over, then this event / 밀기가 아님: 보류한 터치를 넘긴 뒤 이 이벤트
+            edge = 0;
+            if (edgeDown != null) {
+                super.dispatchTouchEvent(edgeDown);
+                edgeDown.recycle();
+                edgeDown = null;
+            }
+            return a == MotionEvent.ACTION_CANCEL || super.dispatchTouchEvent(e);
+        }
+        if (edge == 2) {
+            if (a == MotionEvent.ACTION_UP) {
+                edge = 0;
+                if (edgeX - e.getX() > dpx(72)) {
+                    log("메뉴: 오른쪽 끝에서 밀기");
+                    openMenu();
+                }
+            } else if (a == MotionEvent.ACTION_CANCEL) {
+                edge = 0;
+            }
+            return true;
+        }
+        return super.dispatchTouchEvent(e);
+    }
+
+    /** Four-finger tap bookkeeping; true when the event must not reach the views
+     *  네 손가락 탭 기록. 이벤트를 뷰에 넘기면 안 되면 true */
+    private boolean trackFourFingerTap(MotionEvent e) {
+        int a = e.getActionMasked();
+        long now = SystemClock.uptimeMillis();
+        if (a == MotionEvent.ACTION_DOWN) {
+            tapStart = now;
+            tapFour = 0;
+            tapMoved = false;
+            tapCancelled = false;
+            tapPoints.clear();
+        }
+        if (a == MotionEvent.ACTION_DOWN || a == MotionEvent.ACTION_POINTER_DOWN) {
+            int i = e.getActionIndex();
+            tapPoints.put(e.getPointerId(i), new float[]{e.getX(i), e.getY(i)});
+            int n = e.getPointerCount();
+            if (n >= 4 && tapFour == 0 && now - tapStart <= 300) tapFour = now;
+            // No touch pad: from the third finger on the touches are the menu's / 터치 패드 없음: 세 번째 손가락부터 터치는 메뉴 몫
+            if (n == 3 && !tapCancelled && touchPad.getVisibility() != View.VISIBLE) {
+                MotionEvent c = MotionEvent.obtain(e);
+                c.setAction(MotionEvent.ACTION_CANCEL);
+                super.dispatchTouchEvent(c);
+                c.recycle();
+                tapCancelled = true;
+            }
+        } else if (a == MotionEvent.ACTION_MOVE) {
+            for (int i = 0; i < e.getPointerCount(); i++) {
+                float[] p0 = tapPoints.get(e.getPointerId(i));
+                if (p0 != null && Math.hypot(e.getX(i) - p0[0], e.getY(i) - p0[1]) > dpx(48)) tapMoved = true;
+            }
+        } else if (a == MotionEvent.ACTION_UP) {
+            boolean cancelled = tapCancelled;
+            tapCancelled = false;
+            if (tapFour != 0 && !tapMoved && now - tapStart <= 700) {
+                tapFour = 0;
+                // Views that kept their touches (touch pad shown) still get the last finger up
+                // 터치를 계속 받던 뷰(터치 패드 보임)에도 마지막 손가락 뗌을 넘김
+                if (!cancelled) super.dispatchTouchEvent(e);
+                log("메뉴: 네 손가락 탭");
+                openMenu();
+                return true;
+            }
+            tapFour = 0;
+            return cancelled;
+        } else if (a == MotionEvent.ACTION_CANCEL) {
+            boolean cancelled = tapCancelled;
+            tapCancelled = false;
+            tapFour = 0;
+            return cancelled;
+        }
+        return tapCancelled;
     }
 
     // ---- keys / 키
@@ -2451,8 +2667,69 @@ public class DisplayActivity extends Activity {
         return null;
     }
 
+    /** This Steam start drew its UI with the GPU / was started in Big Picture (from the start line)
+     *  이번 Steam 시작이 화면을 GPU로 그림 / 빅픽처로 시작함(시작 줄에서 읽음) */
+    private volatile boolean steamUiGpu, steamStartBp, bpRestartAsked;
+
+    /**
+     * Steam's Big Picture window came up. Big Picture drawn with the Steam UI GPU stays black with
+     * only sound (Y700 Gen5 2026-10-22, another device 2026-10-26: "failed to create drawable" in the
+     * web helper output when Big Picture was entered from a normal window started with the GPU).
+     * steam-run.sh turns the GPU off only for a Big Picture start, so when Big Picture is entered
+     * inside a GPU session the app marks the next start as Big Picture (tmp/ezs-bigpicture-next,
+     * read by steam-run.sh) and ends the client with SIGTERM; steam-run.sh then starts it again
+     * with -gamepadui and without the GPU. No watcher process in the guest (the process limit).
+     * Steam 빅픽처 창이 뜸. Steam 화면 GPU로 그린 빅픽처는 소리만 나고 검은 화면임(Y700 Gen5 2026-10-22, 다른 기기
+     * 2026-10-26: GPU로 시작한 일반 창에서 빅픽처로 들어가자 웹 도우미 출력에 "failed to create drawable"). steam-run.sh는
+     * 빅픽처로 시작할 때만 GPU를 끄므로, GPU 세션 안에서 빅픽처로 들어가면 앱이 다음 시작을 빅픽처로 표시하고
+     * (tmp/ezs-bigpicture-next, steam-run.sh가 읽음) SIGTERM으로 클라이언트를 끝냄. 그러면 steam-run.sh가 -gamepadui,
+     * GPU 없이 다시 시작함. 게스트에 감시 프로세스는 두지 않음(프로세스 한도)
+     */
+    private void onBigPicture(int win, String sign) {
+        if (!steamUiGpu || steamStartBp || bpRestartAsked) return;
+        GlibcLauncher.Config c = sessionConfig;
+        if (c == null) return;
+        // A running game would end with the client: leave it, tell the user
+        // 실행 중인 게임은 클라이언트와 함께 끝나므로 두고 사용자에게 알림
+        java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps = lastProcs;
+        if (ps != null && gameOf(ps) != null) {
+            log(String.format(Locale.ROOT, "빅픽처 창 0x%x(%s): 게임 실행 중이라 다시 시작하지 않음", win, sign));
+            notice(s(R.string.notice_bp_game));
+            return;
+        }
+        bpRestartAsked = true;
+        new Thread(() -> {
+            File mark = new File(c.rootfs, "tmp/ezs-bigpicture-next");
+            try {
+                if (!mark.createNewFile() && !mark.isFile()) throw new IOException("만들 수 없음");
+            } catch (IOException e) {
+                log("빅픽처 다시 시작 표시 실패: " + e.getMessage());
+                return;
+            }
+            log(String.format(Locale.ROOT, "빅픽처 창 0x%x(%s): Steam 화면 GPU로는 검은 화면 → Steam을 빅픽처로 다시 시작", win, sign));
+            notice(s(R.string.notice_bp_restart));
+            // The client's main process (and its update helper) carry the name "steam"
+            // 클라이언트 주 프로세스(와 갱신 도우미)는 이름이 "steam"
+            int n = 0;
+            for (app.ezsteam.runtime.ChildProcessCounter.Proc pr
+                    : app.ezsteam.runtime.ChildProcessCounter.descendants(android.os.Process.myPid())) {
+                if ("steam".equals(pr.name)) {
+                    android.os.Process.sendSignal(pr.pid, 15);
+                    n++;
+                }
+            }
+            log("빅픽처 다시 시작: Steam 프로세스 " + n + "개에 SIGTERM");
+        }, "ezs-bp-restart").start();
+    }
+
     /** Session script lines that change the card (restart after an update) / 카드를 바꾸는 세션 스크립트 줄(갱신 뒤 재시작) */
     private void onSessionLine(String line) {
+        if (line.startsWith("INFO steam : 시작 ")) {
+            // "... 화면 GPU=1 빅픽처=0": what this start is / 이번 시작이 어떤 것인지
+            steamUiGpu = line.contains("화면 GPU=1");
+            steamStartBp = line.contains("빅픽처=1");
+            bpRestartAsked = false;
+        }
         if (line.startsWith("INFO steam : 종료 rc=42")) {
             steamWindowSeen = false;
             showSetup(s(R.string.setup_apply), -1, s(R.string.setup_apply_detail));
@@ -3332,6 +3609,10 @@ public class DisplayActivity extends Activity {
         // 웹 도우미 자체 출력(감쌈 스크립트가 Steam/logs/steamwebhelper.log로 보냄): Steam 화면 GPU 시험용
         // GPU·GL 시작 줄. IP 주소는 접속 로그처럼 가림
         java.util.Map<File, String> alias = new java.util.HashMap<>();
+        // The client's own web helper log: popup windows it makes ("SP BPM_uid0" = Big Picture,
+        // with its X window id) / 클라이언트 자체 웹 도우미 로그: 만드는 팝업 창("SP BPM_uid0" = 빅픽처, X 창 번호 포함)
+        File whTxt = new File(rootfs, "home/steam/.local/share/Steam/logs/webhelper.txt");
+        if (whTxt.isFile()) files.add(whTxt);
         File whLog = new File(rootfs, "home/steam/.local/share/Steam/logs/steamwebhelper.log");
         if (whLog.isFile()) {
             files.add(whLog);
@@ -3407,7 +3688,7 @@ public class DisplayActivity extends Activity {
             for (File f : files) {
                 zip.putNextEntry(new java.util.zip.ZipEntry("logs/" + alias.getOrDefault(f, f.getName())));
                 boolean image = f.getName().endsWith(".png");
-                boolean maskIp = f.getName().equals("connection_log.txt") || f.equals(whLog);
+                boolean maskIp = f.getName().equals("connection_log.txt") || f.equals(whLog) || f.equals(whTxt);
                 try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(f, "r")) {
                     long len = in.length();
                     if (len > LOG_SAVE_MAX) {

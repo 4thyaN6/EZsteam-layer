@@ -195,6 +195,9 @@ fi
 
 
 cd "$STEAM_DIR" || exit 0
+# Big Picture restart asked by the app, read at the next start / 앱이 요청한 빅픽처 다시 시작. 다음 시작 때 읽음
+BPMARK=/tmp/ezs-bigpicture-next
+rm -f "$BPMARK"
 n=0
 while :; do
     n=$((n + 1))
@@ -445,7 +448,15 @@ print(r, os.strerror(ctypes.get_errno()))' 2>&1 | tail -n 1)
     # (config/loginusers.vdf의 AllowAutoLogin "1")은 Steam이 시작마다 스스로 로그인했는데도 계속 거짓이라
     # 빅픽처가 한 번도 시작되지 않았음(connection_log, 2026-10-21). 계정 파일은 읽지 않음
     BPARG=
-    if [ "${EZS_STEAM_BIGPICTURE:-0}" = 1 ]; then
+    # One start in Big Picture asked by the app (Big Picture entered inside a session whose UI
+    # was drawn with the GPU, see after the client exits below)
+    # 앱이 요청한 한 번의 빅픽처 시작(GPU로 그리던 세션 안에서 빅픽처로 들어간 경우, 아래 클라이언트 종료 뒤 참고)
+    BPONCE=0
+    if [ -f "$BPMARK" ]; then
+        rm -f "$BPMARK"
+        BPONCE=1
+    fi
+    if [ "${EZS_STEAM_BIGPICTURE:-0}" = 1 ] || [ $BPONCE = 1 ]; then
         if grep -q "RecvMsgClientLogOnResponse() : .* 'OK'" "$STEAM_DIR/logs/connection_log.txt" 2>/dev/null; then
             BPARG=-gamepadui
         else
@@ -513,6 +524,14 @@ print(r, os.strerror(ctypes.get_errno()))' 2>&1 | tail -n 1)
         "$BIN" -no-cef-sandbox $GPUARG $BPARG -chromeosnopreallocate $VERIFY ${EZS_STEAM_EXTRA:-} >>"$LOG" 2>&1
     rc=$?
     echo "INFO steam : 종료 rc=$rc ($(date +%H:%M:%S))"
+    # Asked by the app: Big Picture came up in a session drawn with the GPU (black screen with
+    # sound there); the app wrote $BPMARK and ended the client with SIGTERM, so start it again in
+    # Big Picture without the GPU (at most 5 restarts in a row like below). No watcher process
+    # here: the app is near Android's process limit during game starts
+    # 앱이 요청함: GPU로 그리던 세션에서 빅픽처가 떴음(그때는 소리만 나는 검은 화면). 앱이 $BPMARK를 쓰고 SIGTERM으로
+    # 클라이언트를 끝냈으므로 빅픽처, GPU 없이 다시 시작함(아래와 같이 연속 5회까지). 여기에 감시 프로세스는 두지 않음:
+    # 게임 시작 때 앱이 안드로이드 프로세스 한도에 가까움
+    if [ -f "$BPMARK" ] && [ $n -lt 6 ]; then continue; fi
     # 42: restart after a self update (at most 5 times in a row) / 42: 자체 갱신 후 재시작(연속 5회까지)
     if [ $rc -eq 42 ] && [ $n -lt 6 ]; then continue; fi
     break

@@ -311,6 +311,12 @@ public final class TouchPadView extends View {
     }
 
     /** Topmost element whose box holds the point / 점이 상자 안에 드는 맨 위 요소 */
+    /** Whether a pad control is under this point (view pixels) while shown; the app's edge swipe
+     *  leaves those touches alone / 보이는 동안 이 점(뷰 화소)에 패드 조작부가 있는지. 앱의 가장자리 밀기는 그 터치를 건드리지 않음 */
+    public boolean hasControlAt(float x, float y) {
+        return getVisibility() == VISIBLE && hit(x, y) != null;
+    }
+
     private Item hit(float x, float y) {
         for (int i = items.size() - 1; i >= 0; i--) {
             if (items.get(i).box.contains(x, y)) return items.get(i);

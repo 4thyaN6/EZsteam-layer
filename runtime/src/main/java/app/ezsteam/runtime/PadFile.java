@@ -121,6 +121,31 @@ public final class PadFile implements Closeable {
      */
     public interface ButtonListener {
         void pressed(int button);
+
+        /** The button went up (same rules as pressed) / 버튼을 뗌(pressed와 같은 규칙) */
+        default void released(int button) {
+        }
+    }
+
+    /**
+     * HOME (GUIDE) is not written through by itself: the app decides when Steam sees it (short
+     * press = the app's menu, long press = Steam's guide, user decision 2026-10-26). guidePass:
+     * the held HOME goes to the file; guidePulse: HOME is down in the file whatever is held
+     * (menu row "Steam guide").
+     * HOME(GUIDE)은 그대로 쓰지 않음: Steam이 언제 받을지 앱이 정함(짧게 = 앱 메뉴, 길게 = Steam 가이드, 사용자
+     * 결정 2026-10-26). guidePass: 누르고 있는 HOME을 파일에 씀, guidePulse: 누름과 상관없이 파일의 HOME을 누름으로
+     * 둠(메뉴 줄 "Steam 가이드")
+     */
+    private volatile boolean guidePass, guidePulse;
+
+    public void setGuidePass(boolean on) {
+        guidePass = on;
+        write();
+    }
+
+    public void setGuidePulse(boolean on) {
+        guidePulse = on;
+        write();
     }
 
     private volatile ButtonListener buttonListener;
@@ -151,6 +176,7 @@ public final class PadFile implements Closeable {
             if (i == DPAD_LEFT) down |= lx < -0.6f;
             if (i == DPAD_RIGHT) down |= lx > 0.6f;
             if (down && !was[i] && bl != null) bl.pressed(i);
+            if (!down && was[i] && bl != null) bl.released(i);
             was[i] = down;
         }
         buf.position(0);
@@ -165,7 +191,12 @@ public final class PadFile implements Closeable {
         float rt = Math.max(physical.rightTrigger, touch.rightTrigger);
         buf.putShort((short) Math.round(lt * 65534 - 32767));
         buf.putShort((short) Math.round(rt * 65534 - 32767));
-        for (int i = 0; i < BUTTONS; i++) buf.put((byte) (physical.buttons[i] || touch.buttons[i] ? 1 : 0));
+        for (int i = 0; i < BUTTONS; i++) {
+            boolean down = physical.buttons[i] || touch.buttons[i];
+            // HOME only when the app lets it through / HOME은 앱이 넘길 때만
+            if (i == GUIDE) down = guidePulse || (down && guidePass);
+            buf.put((byte) (down ? 1 : 0));
+        }
         buf.put((byte) 0);
     }
 
