@@ -65,12 +65,21 @@ if python3 "$HERE/patches/mesa-01-kgsl-drm.py" "$SRC"; then DRMPATCH=1; fi
 
 # 3. Configure: Zink + Turnip(kgsl), GLX(dri) / EGL / GBM / GLES2 through glvnd, X11 platform
 #    설정: Zink + Turnip(kgsl), glvnd를 통한 GLX(dri) / EGL / GBM / GLES2, X11 플랫폼
+# freedreno-kmds=kgsl,msm: with kgsl alone and Turnip as the only Vulkan driver, Mesa's meson.build
+# turns off KMS/DRM support (system_has_kms_drm = false) and then refuses GBM ("GBM only supports
+# DRM/KMS platforms", CI 2026-10-28). Adding the msm kernel interface keeps DRM on. Turnip tries
+# kgsl first (its own enumerate hook) and the DRM path only when kgsl is not found; the fake
+# render node answers no msm version, so it is skipped there
+# freedreno-kmds=kgsl,msm: kgsl만 쓰고 Vulkan 드라이버가 Turnip 하나면 Mesa meson.build가 KMS/DRM 지원을 끄고
+# (system_has_kms_drm = false) 그다음 GBM을 거부함("GBM only supports DRM/KMS platforms", CI 2026-10-28). msm 커널
+# 인터페이스를 더하면 DRM이 켜진 채로 남음. Turnip은 kgsl을 먼저 찾고(자체 enumerate) kgsl이 없을 때만 DRM 경로를
+# 씀. 가짜 render 노드는 msm 버전에 답하지 않아 거기서 건너뜀
 meson setup "$WORK/build" "$SRC" \
     --prefix=/usr --libdir=lib \
     -Dbuildtype=release -Dstrip=true \
     -Dplatforms=x11 \
     -Dgallium-drivers=zink \
-    -Dvulkan-drivers=freedreno -Dfreedreno-kmds=kgsl -Dvulkan-layers= \
+    -Dvulkan-drivers=freedreno -Dfreedreno-kmds=kgsl,msm -Dvulkan-layers= \
     -Dopengl=true -Dglx=dri -Degl=enabled -Dgbm=enabled -Dgles1=disabled -Dgles2=enabled \
     -Dglvnd=enabled -Dxlib-lease=disabled \
     -Dllvm=disabled -Dvalgrind=disabled -Dlibunwind=disabled -Dlmsensors=disabled \
@@ -129,7 +138,7 @@ echo "$DRMPATCH" > "$P/drm-patch"
 cp "$SRC/docs/license.rst" "$P/LICENSE" 2>/dev/null || echo "Mesa license: docs/license.rst in $MESA_URL" > "$P/LICENSE"
 cat > "$P/source.txt" <<EOF
 mesa: $MESA_URL sha256 $MESA_SHA256 (MIT)
-config: gallium=zink vulkan=freedreno(kgsl) glx=dri egl gbm gles2 glvnd platforms=x11 rev $REV
+config: gallium=zink vulkan=freedreno(kgsl,msm) glx=dri egl gbm gles2 glvnd platforms=x11 rev $REV
 kgsl drm patch: $DRMPATCH
 EOF
 # Runtime libraries needed from the rootfs / rootfs에서 필요한 런타임 라이브러리
