@@ -13,7 +13,11 @@
  * 결과 한 줄을 출력함: "RESULT PASS ..." 또는 "RESULT FAIL <이유> ...". X 연결 실패(Xlib 입출력 오류)와 X 프로토콜 오류는 숨기지
  * 않고 알림
  *
- *   ezs-gltest [--argb] [--thread] [--timestamp] [--frames N] [--size WxH]
+ *   ezs-gltest [--argb] [--thread] [--timestamp] [--render-xpending] [--frames N] [--size WxH]
+ * --render-xpending: the drawing thread also calls XPending on the same display every frame, as
+ * Steam's "GL Composer Thr" does (its X connection failed there: XPending -> _XEventsQueued ->
+ * _XIOError, 2026-10-29) / 그리기 스레드도 프레임마다 같은 디스플레이에서 XPending을 부름. Steam "GL Composer Thr"와
+ * 같음(그곳에서 X 연결이 실패했음: XPending -> _XEventsQueued -> _XIOError, 2026-10-29)
  */
 #define _GNU_SOURCE
 #include <GL/gl.h>
@@ -34,7 +38,7 @@
 static Display *dpy;
 static Window win;
 static GLXContext ctx;
-static int frames = 180, W = 640, H = 400, use_argb, use_thread, use_ts;
+static int frames = 180, W = 640, H = 400, use_argb, use_thread, use_ts, render_xpending;
 static volatile int done_drawing, drawn, xerrors;
 static int last_xerror, last_xreq;
 
@@ -100,6 +104,7 @@ static void draw_loop(void)
             if (i == 0) printf("GL_TIMESTAMP first %lld\n", (long long)ts);
         }
         glXSwapBuffers(dpy, win);
+        if (render_xpending) XPending(dpy);
         drawn = i + 1;
     }
     glFinish();
@@ -120,6 +125,7 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "--argb")) use_argb = 1;
         else if (!strcmp(argv[i], "--thread")) use_thread = 1;
         else if (!strcmp(argv[i], "--timestamp")) use_ts = 1;
+        else if (!strcmp(argv[i], "--render-xpending")) render_xpending = 1;
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--size") && i + 1 < argc) sscanf(argv[++i], "%dx%d", &W, &H);
     }

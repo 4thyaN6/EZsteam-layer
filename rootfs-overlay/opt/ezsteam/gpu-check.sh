@@ -88,4 +88,16 @@ run bp-present-immediate MESA_VK_WSI_PRESENT_MODE=immediate -- "$T" --argb --thr
 run bp-present-fifo MESA_VK_WSI_PRESENT_MODE=fifo -- "$T" --argb --thread --timestamp
 run bp-wsi-noshm MESA_VK_WSI_DEBUG=sw,noshm -- "$T" --argb --thread --timestamp
 [ -n "$BASE_VK" ] && run bp-default-turnip VK_DRIVER_FILES="$BASE_VK" VK_ICD_FILENAMES="$BASE_VK" -- "$T" --argb --thread --timestamp
+# 4. As close as possible to Steam's Big Picture composer: screen size 1280x800, 32-bit window,
+#    drawing thread that also calls XPending on the same display (Steam's "GL Composer Thr" lost its
+#    X connection there: XPending -> _XIOError -> _exit(1), 2026-10-29), web helper settings
+#    (kopper on, present immediate), and variants of it
+# 4. Steam 빅픽처 합성기에 최대한 가깝게: 화면 크기 1280x800, 32비트 창, 같은 디스플레이에서 XPending도 부르는 그리기 스레드
+#    (Steam "GL Composer Thr"가 그곳에서 X 연결을 잃었음: XPending -> _XIOError -> _exit(1), 2026-10-29), 웹 도우미 설정
+#    (kopper 켬, present immediate), 그리고 그 변형
+BP="--argb --thread --timestamp --render-xpending --size 1280x800 --frames 300"
+run steam-exact MESA_VK_WSI_PRESENT_MODE=immediate -- "$T" $BP
+run steam-exact-noshm MESA_VK_WSI_PRESENT_MODE=immediate MESA_VK_WSI_DEBUG=sw,noshm -- "$T" $BP
+run steam-exact-mailbox MESA_VK_WSI_PRESENT_MODE=mailbox -- "$T" $BP
+run steam-exact-kopper-off LIBGL_KOPPER_DISABLE=true -- "$T" $BP
 say "CHECK 요약 : PASS $PASS, FAIL $FAIL (전체: ~/ezs-logs/gpu-check.log, [제보 저장]에 들어감)"

@@ -180,6 +180,49 @@ static void exit_report(const char *how, int code)
     if (fds[1] >= 0) close(fds[1]);
 }
 
+/* X connection failures: Xlib calls the program's I/O error handler and the program exits; the
+   handler set by the program is wrapped so the xcb error code (why xcb closed the connection) and
+   errno are written first. libX11/libxcb are looked up at run time (no link to them)
+   X 연결 실패: Xlib가 프로그램의 입출력 오류 처리기를 부르고 프로그램이 끝남. 프로그램이 정한 처리기를 감싸서, 먼저 xcb 오류
+   코드(xcb가 연결을 닫은 이유)와 errno를 남김. libX11/libxcb는 실행 중에 찾음(링크하지 않음) */
+typedef int (*xio_handler)(void *dpy);
+static xio_handler app_xio;
+
+static int our_xio(void *dpy)
+{
+    int saved = errno;
+    void *(*get_xcb)(void *) = dlsym(RTLD_DEFAULT, "XGetXCBConnection");
+    int (*has_error)(void *) = dlsym(RTLD_DEFAULT, "xcb_connection_has_error");
+    int code = -1;
+    if (get_xcb && has_error && dpy) code = has_error(get_xcb(dpy));
+    static const char *names[] = {"none", "socket/pipe error", "extension not supported", "out of memory",
+                                  "request too long", "parse error", "invalid screen", "fd passing failed"};
+    const char *name = code >= 0 && code < 8 ? names[code] : "?";
+    int fds[2] = {2, open("/tmp/ezs-crash.log", O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0666)};
+    for (int k = 0; k < 2; k++) {
+        if (fds[k] < 0) continue;
+        out(fds[k], "ezs-crash: X connection lost: pid %d tid %ld xcb error %d (%s) errno %d (%s)\n", getpid(),
+            (long)syscall(SYS_gettid), code, name, saved, strerror(saved));
+        void *bt[16];
+        int n = backtrace(bt, 16);
+        for (int i = 1; i < n; i++) where(fds[k], "bt", bt[i]);
+    }
+    if (fds[1] >= 0) close(fds[1]);
+    errno = saved;
+    return app_xio ? app_xio(dpy) : 0;
+}
+
+xio_handler XSetIOErrorHandler(xio_handler h)
+{
+    static xio_handler (*real)(xio_handler);
+    if (!real) real = (xio_handler (*)(xio_handler))dlsym(RTLD_NEXT, "XSetIOErrorHandler");
+    if (!real) return NULL;
+    xio_handler prev_app = app_xio;
+    app_xio = h;
+    xio_handler prev = real(our_xio);
+    return prev == our_xio ? prev_app : prev;
+}
+
 void exit(int code)
 {
     static void (*real)(int) __attribute__((noreturn));
