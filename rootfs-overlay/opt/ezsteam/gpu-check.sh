@@ -30,7 +30,7 @@ say() { echo "$*"; echo "$*" >> "$OUT"; }
 say "INFO check : 시작 $(date +%H:%M:%S), 스위치 Zink(점검은 항상 켬) GPU 장치 ${EZS_GPU_NODE:-0} X 서버 ${EZS_XSERVER_RUNNING:-xvfb}, 화면 $DISPLAY, 기본 Vulkan ${BASE_VK:-(없음)}, WSI ${BASE_WSI:-(없음)}"
 [ -x "$T" ] || { say "FAIL check : $T 없음"; exit 0; }
 [ -f "$MX/lib/libGLX_mesa.so.0" ] || { say "FAIL check : $MX 없음 (CI mesax 묶음)"; exit 0; }
-say "INFO check : mesax $(head -n 1 "$MX/source.txt" 2>/dev/null | cut -c1-70), DRM 패치 $(cat "$MX/drm-patch" 2>/dev/null || echo '?'), 시각 패치 $(cat "$MX/timestamp-patch" 2>/dev/null || echo '?'), 디스플레이 패치 $(cat "$MX/display-patch" 2>/dev/null || echo '?')"
+say "INFO check : mesax $(head -n 1 "$MX/source.txt" 2>/dev/null | cut -c1-70), DRM 패치 $(cat "$MX/drm-patch" 2>/dev/null || echo '?'), 시각 패치 $(cat "$MX/timestamp-patch" 2>/dev/null || echo '?'), 디스플레이 패치 $(cat "$MX/display-patch" 2>/dev/null || echo '?'), TFP 패치 $(cat "$MX/tfp-patch" 2>/dev/null || echo '?')"
 
 # Zink environment as in the Steam session (ezs-gpupath.sh) / Steam 세션과 같은 Zink 환경(ezs-gpupath.sh)
 EZS_ZINK=1
@@ -102,6 +102,9 @@ run steam-exact-mailbox MESA_VK_WSI_PRESENT_MODE=mailbox -- "$T" $BP
 run steam-exact-kopper-off LIBGL_KOPPER_DISABLE=true -- "$T" $BP
 # Swap interval as SDL sets it (vsync on, off, adaptive): changes Zink's present mode at run time
 # SDL이 정하는 스왑 간격(vsync 켬, 끔, 적응형): 실행 중에 Zink 출력 방식을 바꿈
+# Texture from pixmap as the composer binds X pixmaps (failed in Steam on Xvfb through DRI3)
+# 합성기가 X 픽스맵을 묶는 texture-from-pixmap(Xvfb의 Steam에서 DRI3 때문에 실패했음)
+run steam-exact-tfp MESA_VK_WSI_PRESENT_MODE=immediate -- "$T" $BP --tfp
 run steam-exact-swap1 MESA_VK_WSI_PRESENT_MODE=immediate -- "$T" $BP --swap-interval 1
 run steam-exact-swap0 MESA_VK_WSI_PRESENT_MODE=immediate -- "$T" $BP --swap-interval 0
 run steam-exact-swap-adaptive MESA_VK_WSI_PRESENT_MODE=immediate -- "$T" $BP --swap-interval -1

@@ -38,7 +38,7 @@ MESA_SHA256="$(sed -n 's/^MESA_SHA256=//p' "$HERE/build-turnip-glibc.sh")"
 MESA_URL="https://archive.mesa3d.org/mesa-$MESA_VER.tar.xz"
 [ -f "$TARBALL.url" ] && MESA_URL="$(cat "$TARBALL.url")"
 GUEST=/opt/ezsteam/mesax
-REV=3
+REV=4
 WORK=/tmp/mesax-build
 rm -rf "$WORK" && mkdir -p "$WORK"
 
@@ -70,6 +70,11 @@ if python3 "$HERE/patches/mesa-02-kgsl-timestamp.py" "$SRC"; then TSPATCH=1; fi
 # 앱이 VK_KHR_display를 켜도 kgsl GPU를 버리지 않게 함(vkcube가 GPU를 찾지 못했음)
 DISPATCH=0
 if python3 "$HERE/patches/mesa-03-kgsl-khr-display.py" "$SRC"; then DISPATCH=1; fi
+# Zink texture-from-pixmap without DRI3 (Xvfb): software fill instead of a DRI3 request that closed
+# the X connection of Steam's Big Picture composer / DRI3 없는 Zink texture-from-pixmap(Xvfb): Steam 빅픽처 합성기의 X 연결을
+# 닫은 DRI3 요청 대신 소프트웨어로 채움
+TFPPATCH=0
+if python3 "$HERE/patches/mesa-04-kopper-tfp-nodri3.py" "$SRC"; then TFPPATCH=1; fi
 
 # 3. Configure: Zink + Turnip(kgsl), GLX(dri) / EGL / GBM / GLES2 through glvnd, X11 platform
 #    설정: Zink + Turnip(kgsl), glvnd를 통한 GLX(dri) / EGL / GBM / GLES2, X11 플랫폼
@@ -145,6 +150,7 @@ EOF
 echo "$DRMPATCH" > "$P/drm-patch"
 echo "$TSPATCH" > "$P/timestamp-patch"
 echo "$DISPATCH" > "$P/display-patch"
+echo "$TFPPATCH" > "$P/tfp-patch"
 cp "$SRC/docs/license.rst" "$P/LICENSE" 2>/dev/null || echo "Mesa license: docs/license.rst in $MESA_URL" > "$P/LICENSE"
 cat > "$P/source.txt" <<EOF
 mesa: $MESA_URL sha256 $MESA_SHA256 (MIT)
@@ -152,6 +158,7 @@ config: gallium=zink vulkan=freedreno(kgsl,msm) glx=dri egl gbm gles2 glvnd plat
 kgsl drm patch: $DRMPATCH
 kgsl timestamp patch: $TSPATCH
 kgsl display patch: $DISPATCH
+kopper tfp patch: $TFPPATCH
 EOF
 # Runtime libraries needed from the rootfs / rootfs에서 필요한 런타임 라이브러리
 for f in "$P"/lib/*.so* "$P"/lib/gbm/*.so "$P"/lib/dri/*.so; do

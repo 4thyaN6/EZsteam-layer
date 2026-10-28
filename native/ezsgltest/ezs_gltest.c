@@ -13,7 +13,7 @@
  * 결과 한 줄을 출력함: "RESULT PASS ..." 또는 "RESULT FAIL <이유> ...". X 연결 실패(Xlib 입출력 오류)와 X 프로토콜 오류는 숨기지
  * 않고 알림
  *
- *   ezs-gltest [--argb] [--thread] [--timestamp] [--render-xpending] [--swap-interval N] [--frames N] [--size WxH]
+ *   ezs-gltest [--argb] [--thread] [--timestamp] [--render-xpending] [--swap-interval N] [--tfp] [--frames N] [--size WxH]
  * --render-xpending: the drawing thread also calls XPending on the same display every frame, as
  * Steam's "GL Composer Thr" does (its X connection failed there: XPending -> _XEventsQueued ->
  * _XIOError, 2026-10-29) / 그리기 스레드도 프레임마다 같은 디스플레이에서 XPending을 부름. Steam "GL Composer Thr"와
@@ -42,6 +42,12 @@ static int frames = 180, W = 640, H = 400, use_argb, use_thread, use_ts, render_
 /* --swap-interval N: glXSwapIntervalEXT(N) after make-current, as SDL_GL_SetSwapInterval does
    (-99 = not called) / --swap-interval N: make-current 뒤 glXSwapIntervalEXT(N), SDL_GL_SetSwapInterval과 같음(-99 = 안 부름) */
 static int swap_interval = -99;
+/* --tfp: every frame an X pixmap is drawn with core X and bound as a texture (GLX_EXT_texture_from_pixmap),
+   as Steam's Big Picture composer does (it failed there on Xvfb: kopper asked for the pixmap through
+   DRI3, 2026-10-29) / --tfp: 프레임마다 core X로 X 픽스맵을 그리고 텍스처로 묶음(GLX_EXT_texture_from_pixmap). Steam 빅픽처
+   합성기와 같음(Xvfb에서 그곳이 실패했음: kopper가 DRI3로 픽스맵을 요청, 2026-10-29) */
+static int use_tfp;
+static int tfp_fail;
 static volatile int done_drawing, drawn, xerrors;
 static int last_xerror, last_xreq;
 
@@ -87,6 +93,38 @@ static void draw_loop(void)
                (const char *)glGetString(GL_VERSION));
         fflush(stdout);
     }
+    /* Texture-from-pixmap set-up / texture-from-pixmap 준비 */
+    Pixmap pm = 0;
+    GLXPixmap gpm = 0;
+    GC gc = 0;
+    GLuint tex = 0;
+    void (*bind_tex)(Display *, GLXDrawable, int, const int *) = NULL;
+    void (*release_tex)(Display *, GLXDrawable, int) = NULL;
+    if (use_tfp) {
+        bind_tex = (void (*)(Display *, GLXDrawable, int, const int *))glXGetProcAddressARB((const GLubyte *)"glXBindTexImageEXT");
+        release_tex = (void (*)(Display *, GLXDrawable, int))glXGetProcAddressARB((const GLubyte *)"glXReleaseTexImageEXT");
+        int pattrs[] = {GLX_DRAWABLE_TYPE, GLX_PIXMAP_BIT, GLX_BIND_TO_TEXTURE_RGBA_EXT, True, GLX_RED_SIZE, 8,
+                        GLX_GREEN_SIZE, 8, GLX_BLUE_SIZE, 8, GLX_ALPHA_SIZE, 8, None};
+        int pn = 0;
+        GLXFBConfig *pcfgs = glXChooseFBConfig(dpy, DefaultScreen(dpy), pattrs, &pn);
+        XVisualInfo *pvi = pn > 0 ? glXGetVisualFromFBConfig(dpy, pcfgs[0]) : NULL;
+        if (!bind_tex || !release_tex || !pvi) {
+            printf("RESULT FAIL tfp-unsupported (bind %d, configs %d)\n", bind_tex != NULL, pn);
+            fflush(stdout);
+            _exit(5);
+        }
+        pm = XCreatePixmap(dpy, win, 256, 256, (unsigned)pvi->depth);
+        int tattrs[] = {GLX_TEXTURE_TARGET_EXT, GLX_TEXTURE_2D_EXT, GLX_TEXTURE_FORMAT_EXT, GLX_TEXTURE_FORMAT_RGBA_EXT, None};
+        gpm = glXCreatePixmap(dpy, pcfgs[0], pm, tattrs);
+        gc = XCreateGC(dpy, pm, 0, NULL);
+        printf("tfp pixmap depth %d\n", pvi->depth);
+        XFree(pvi);
+        XFree(pcfgs);
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    }
     if (swap_interval != -99 && drawn == 0) {
         void (*si)(Display *, GLXDrawable, int) =
             (void (*)(Display *, GLXDrawable, int))glXGetProcAddressARB((const GLubyte *)"glXSwapIntervalEXT");
@@ -116,6 +154,34 @@ static void draw_loop(void)
             get64(GL_TIMESTAMP, &ts);
             if (i == 0) printf("GL_TIMESTAMP first %lld\n", (long long)ts);
         }
+        if (use_tfp) {
+            /* Core X drawing into the pixmap, then sample it in GL / 픽스맵에 core X로 그린 뒤 GL에서 읽음 */
+            XSetForeground(dpy, gc, 0xff000000u | (unsigned long)(i * 0x010203u & 0xffffffu));
+            XFillRectangle(dpy, pm, gc, 0, 0, 256, 256);
+            XSync(dpy, False);
+            glEnable(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            bind_tex(dpy, gpm, GLX_FRONT_LEFT_EXT, NULL);
+            /* White, so the texture colour is not tinted by the triangle's last colour
+               흰색: 삼각형의 마지막 색으로 텍스처 색이 물들지 않게 함 */
+            glColor3f(1, 1, 1);
+            glBegin(GL_QUADS);
+            glTexCoord2f(0, 0); glVertex2f(-0.9f, -0.9f);
+            glTexCoord2f(1, 0); glVertex2f(-0.4f, -0.9f);
+            glTexCoord2f(1, 1); glVertex2f(-0.4f, -0.4f);
+            glTexCoord2f(0, 1); glVertex2f(-0.9f, -0.4f);
+            glEnd();
+            release_tex(dpy, gpm, GLX_FRONT_LEFT_EXT);
+            glDisable(GL_TEXTURE_2D);
+            if (i == frames / 2) {
+                /* The colour drawn by X must reach the texture / X가 그린 색이 텍스처까지 와야 함 */
+                unsigned char px[4] = {0, 0, 0, 0};
+                glReadPixels(W / 8, H / 8, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+                unsigned long want = (unsigned long)(i * 0x010203u & 0xffffffu);
+                printf("tfp sample rgb %02x%02x%02x, drawn %06lx\n", px[0], px[1], px[2], want);
+                if (px[0] == 0 && px[1] == 0 && px[2] == 0 && want != 0) tfp_fail = 1;
+            }
+        }
         glXSwapBuffers(dpy, win);
         if (render_xpending) XPending(dpy);
         drawn = i + 1;
@@ -140,6 +206,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--timestamp")) use_ts = 1;
         else if (!strcmp(argv[i], "--render-xpending")) render_xpending = 1;
         else if (!strcmp(argv[i], "--swap-interval") && i + 1 < argc) swap_interval = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--tfp")) use_tfp = 1;
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--size") && i + 1 < argc) sscanf(argv[++i], "%dx%d", &W, &H);
     }
@@ -219,6 +286,10 @@ int main(int argc, char **argv)
     }
     double dt = now_s() - t0;
     XSync(dpy, False);
+    if (tfp_fail) {
+        printf("RESULT FAIL tfp-empty-texture frames %d\n", drawn);
+        return 6;
+    }
     printf("RESULT %s frames %d in %.2f s (%.1f fps) xerrors %d\n", xerrors ? "PASS-with-xerrors" : "PASS", drawn,
            dt, dt > 0 ? drawn / dt : 0.0, xerrors);
     if (xerrors) printf("last xerror code %d request %d\n", last_xerror, last_xreq);
