@@ -2667,8 +2667,9 @@ public class DisplayActivity extends Activity {
                 String low = name.toLowerCase(Locale.ROOT);
                 if (low.startsWith("libegl") || low.startsWith("libglesv2") || low.startsWith("libvulkan")
                         || low.contains("swiftshader") || low.contains("freedreno") || low.startsWith("libgl.")
-                        || low.startsWith("libglx")) {
-                    libs.add(name);
+                        || low.startsWith("libglx") || low.startsWith("libgallium") || low.startsWith("libgbm")) {
+                    // Zink GL test: mark the copies from the mesax bundle / Zink GL 시험: mesax 묶음의 것은 표시함
+                    libs.add(line.contains("/opt/ezsteam/mesax/") ? name + "(mesax)" : name);
                 }
             }
         } catch (IOException | RuntimeException e) {
@@ -3813,6 +3814,30 @@ public class DisplayActivity extends Activity {
             zip.putNextEntry(new java.util.zip.ZipEntry("dx-usage.txt"));
             zip.write(scrub.scrub(app.ezsteam.runtime.ReportScan.dxUsage(libs)).getBytes(StandardCharsets.UTF_8));
             zip.closeEntry();
+            // Order: session, Steam, web helper and X server logs first, Proton logs (large, one per
+            // game) last with the newest first, and only the newest 2 kept copies (old-steam-*). A
+            // report cut off while being written (2026-10-28, 0.4 MB of a larger file) ended inside
+            // old Proton logs, and the web helper logs after them were missing
+            // 순서: 세션, Steam, 웹 도우미, X 서버 로그를 먼저, Proton 로그(크고 게임마다 하나)는 마지막에 최신 순으로,
+            // 보관본(old-steam-*)은 최근 2개만. 쓰는 중에 잘린 제보(2026-10-28, 더 큰 파일의 0.4 MB)가 옛 Proton
+            // 로그 안에서 끝나 그 뒤의 웹 도우미 로그가 빠졌음
+            java.util.List<File> proton = new java.util.ArrayList<>(), kept = new java.util.ArrayList<>();
+            for (java.util.Iterator<File> it = files.iterator(); it.hasNext(); ) {
+                File f = it.next();
+                String nm = f.getName();
+                if (nm.startsWith("old-steam-")) {
+                    kept.add(f);
+                    it.remove();
+                } else if (nm.startsWith("steam-") && nm.endsWith(".log")) {
+                    proton.add(f);
+                    it.remove();
+                }
+            }
+            java.util.Comparator<File> newest = (a, b) -> Long.compare(b.lastModified(), a.lastModified());
+            proton.sort(newest);
+            kept.sort(newest);
+            files.addAll(proton);
+            files.addAll(kept.subList(0, Math.min(2, kept.size())));
             byte[] buf = new byte[1 << 16];
             for (File f : files) {
                 zip.putNextEntry(new java.util.zip.ZipEntry("logs/" + alias.getOrDefault(f, f.getName())));
