@@ -251,6 +251,98 @@ xio_handler XSetIOErrorHandler(xio_handler h)
     return prev == our_xio ? prev_app : prev;
 }
 
+/* xcb requests for an extension the X server does not have: xcb then closes the whole connection
+   (XCB_CONN_CLOSED_EXT_NOTSUPPORTED, seen in the Steam web helper on Xvfb, 2026-10-29). The request
+   is checked before it is sent and the extension name and caller are written; the request itself
+   goes on unchanged. ABI from xcb.h / xcbext.h
+   X 서버에 없는 확장에 대한 xcb 요청: 그러면 xcb가 연결 전체를 닫음(XCB_CONN_CLOSED_EXT_NOTSUPPORTED, Xvfb 위 Steam 웹
+   도우미에서 확인, 2026-10-29). 보내기 전에 확인해 확장 이름과 부른 곳을 남기고, 요청 자체는 그대로 보냄. ABI는 xcb.h /
+   xcbext.h 기준 */
+typedef struct {
+    const char *name;
+    int global_id;
+} ezs_xcb_ext;
+typedef struct {
+    size_t count;
+    ezs_xcb_ext *ext;
+    uint8_t opcode;
+    uint8_t isvoid;
+} ezs_xcb_req;
+typedef struct {
+    uint8_t response_type, pad0;
+    uint16_t sequence;
+    uint32_t length;
+    uint8_t present, major_opcode, first_event, first_error;
+} ezs_xcb_ext_reply;
+
+/* The real libxcb function: next in the global scope, else the libxcb already loaded privately
+   (SDL opens X libraries with dlopen), else load it / 실제 libxcb 함수: 전역 범위의 다음 것, 없으면 따로 불러온 libxcb,
+   그래도 없으면 불러옴 */
+static void *real_xcb(const char *name)
+{
+    void *f = dlsym(RTLD_NEXT, name);
+    if (f) return f;
+    void *h = dlopen("libxcb.so.1", RTLD_LAZY | RTLD_NOLOAD);
+    if (!h) h = dlopen("libxcb.so.1", RTLD_LAZY);
+    return h ? dlsym(h, name) : NULL;
+}
+
+static void check_ext(void *c, const ezs_xcb_req *req)
+{
+    if (!req || !req->ext || !req->ext->name) return;
+    static const ezs_xcb_ext_reply *(*get)(void *, ezs_xcb_ext *);
+    if (!get) get = (const ezs_xcb_ext_reply *(*)(void *, ezs_xcb_ext *))real_xcb("xcb_get_extension_data");
+    if (!get) return;
+    const ezs_xcb_ext_reply *r = get(c, req->ext);
+    if (r && r->present) return;
+    int fds[2] = {2, open("/tmp/ezs-crash.log", O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0666)};
+    for (int k = 0; k < 2; k++) {
+        if (fds[k] < 0) continue;
+        out(fds[k], "ezs-crash: xcb request for missing extension %s (minor %d): pid %d tid %ld\n", req->ext->name,
+            req->opcode, getpid(), (long)syscall(SYS_gettid));
+        void *bt[20];
+        int n = backtrace(bt, 20);
+        for (int i = 2; i < n; i++) where(fds[k], "bt", bt[i]);
+    }
+    if (fds[1] >= 0) close(fds[1]);
+}
+
+unsigned int xcb_send_request(void *c, int flags, void *vector, const ezs_xcb_req *req)
+{
+    static unsigned int (*real)(void *, int, void *, const ezs_xcb_req *);
+    if (!real) real = (unsigned int (*)(void *, int, void *, const ezs_xcb_req *))real_xcb("xcb_send_request");
+    check_ext(c, req);
+    return real(c, flags, vector, req);
+}
+
+uint64_t xcb_send_request64(void *c, int flags, void *vector, const ezs_xcb_req *req)
+{
+    static uint64_t (*real)(void *, int, void *, const ezs_xcb_req *);
+    if (!real) real = (uint64_t (*)(void *, int, void *, const ezs_xcb_req *))real_xcb("xcb_send_request64");
+    check_ext(c, req);
+    return real(c, flags, vector, req);
+}
+
+unsigned int xcb_send_request_with_fds(void *c, int flags, void *vector, const ezs_xcb_req *req, unsigned int nfds,
+                                       int *fds)
+{
+    static unsigned int (*real)(void *, int, void *, const ezs_xcb_req *, unsigned int, int *);
+    if (!real)
+        real = (unsigned int (*)(void *, int, void *, const ezs_xcb_req *, unsigned int, int *))real_xcb("xcb_send_request_with_fds");
+    check_ext(c, req);
+    return real(c, flags, vector, req, nfds, fds);
+}
+
+uint64_t xcb_send_request_with_fds64(void *c, int flags, void *vector, const ezs_xcb_req *req, unsigned int nfds,
+                                     int *fds)
+{
+    static uint64_t (*real)(void *, int, void *, const ezs_xcb_req *, unsigned int, int *);
+    if (!real)
+        real = (uint64_t (*)(void *, int, void *, const ezs_xcb_req *, unsigned int, int *))real_xcb("xcb_send_request_with_fds64");
+    check_ext(c, req);
+    return real(c, flags, vector, req, nfds, fds);
+}
+
 void exit(int code)
 {
     static void (*real)(int) __attribute__((noreturn));

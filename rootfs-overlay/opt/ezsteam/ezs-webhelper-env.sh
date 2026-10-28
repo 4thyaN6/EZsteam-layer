@@ -39,7 +39,17 @@ if [ "${EZS_ZINK:-0}" = 1 ]; then
     if [ -f /opt/ezsteam/lib/libezs_crash.so ]; then
         export LD_PRELOAD="/opt/ezsteam/lib/libezs_crash.so${LD_PRELOAD:+:$LD_PRELOAD}"
     fi
+    # Xvfb has no DRI3: Mesa's GLX is told not to try it. The composer's X connection was closed by
+    # xcb for a request to an extension the server lacks ("xcb error 2 (extension not supported)",
+    # 2026-10-29); DRI3 is the one the helper loads (libxcb-dri3) that Xvfb does not have (Chromium:
+    # "dri3 extension not supported"). Inference; the crash reporter names the extension if not
+    # Xvfb에는 DRI3가 없음: Mesa GLX가 시도하지 않게 함. 합성기 X 연결은 서버에 없는 확장에 대한 요청 때문에 xcb가 닫았음("xcb error
+    # 2 (extension not supported)", 2026-10-29). 도우미가 불러오는 것(libxcb-dri3) 가운데 Xvfb에 없는 것이 DRI3임(Chromium:
+    # "dri3 extension not supported"). 추론이며, 아니면 크래시 보고기가 확장 이름을 남김
+    if [ "${EZS_XSERVER_RUNNING:-xvfb}" != xwayland ]; then
+        export LIBGL_DRI3_DISABLE=1
+    fi
     # Zink and Mesa messages to the helper output / Zink와 Mesa 메시지를 도우미 출력으로
     export MESA_DEBUG=1
-    echo "ezs-webhelper: Zink kopper=${EZS_WH_KOPPER:-1} present=$MESA_VK_WSI_PRESENT_MODE wsi=${MESA_VK_WSI_DEBUG:-} LIBGL_KOPPER_DISABLE=${LIBGL_KOPPER_DISABLE:-(없음)}"
+    echo "ezs-webhelper: Zink kopper=${EZS_WH_KOPPER:-1} present=$MESA_VK_WSI_PRESENT_MODE wsi=${MESA_VK_WSI_DEBUG:-} LIBGL_KOPPER_DISABLE=${LIBGL_KOPPER_DISABLE:-(없음)} LIBGL_DRI3_DISABLE=${LIBGL_DRI3_DISABLE:-(없음)}"
 fi
