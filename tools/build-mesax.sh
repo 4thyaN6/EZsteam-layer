@@ -38,7 +38,7 @@ MESA_SHA256="$(sed -n 's/^MESA_SHA256=//p' "$HERE/build-turnip-glibc.sh")"
 MESA_URL="https://archive.mesa3d.org/mesa-$MESA_VER.tar.xz"
 [ -f "$TARBALL.url" ] && MESA_URL="$(cat "$TARBALL.url")"
 GUEST=/opt/ezsteam/mesax
-REV=1
+REV=2
 WORK=/tmp/mesax-build
 rm -rf "$WORK" && mkdir -p "$WORK"
 
@@ -62,6 +62,10 @@ tar -xJf "$TARBALL" -C "$WORK"
 SRC="$WORK/mesa-$MESA_VER"
 DRMPATCH=0
 if python3 "$HERE/patches/mesa-01-kgsl-drm.py" "$SRC"; then DRMPATCH=1; fi
+# kgsl has no GPU timestamp read: calibrated timestamps off on kgsl (Zink failed on it in the web helper)
+# kgsl에는 GPU 시각 읽기가 없음: kgsl에서 calibrated timestamps 끔(웹 도우미에서 Zink가 이것으로 실패함)
+TSPATCH=0
+if python3 "$HERE/patches/mesa-02-kgsl-timestamp.py" "$SRC"; then TSPATCH=1; fi
 
 # 3. Configure: Zink + Turnip(kgsl), GLX(dri) / EGL / GBM / GLES2 through glvnd, X11 platform
 #    설정: Zink + Turnip(kgsl), glvnd를 통한 GLX(dri) / EGL / GBM / GLES2, X11 플랫폼
@@ -135,11 +139,13 @@ cat > "$P/egl.json" <<EOF
 }
 EOF
 echo "$DRMPATCH" > "$P/drm-patch"
+echo "$TSPATCH" > "$P/timestamp-patch"
 cp "$SRC/docs/license.rst" "$P/LICENSE" 2>/dev/null || echo "Mesa license: docs/license.rst in $MESA_URL" > "$P/LICENSE"
 cat > "$P/source.txt" <<EOF
 mesa: $MESA_URL sha256 $MESA_SHA256 (MIT)
 config: gallium=zink vulkan=freedreno(kgsl,msm) glx=dri egl gbm gles2 glvnd platforms=x11 rev $REV
 kgsl drm patch: $DRMPATCH
+kgsl timestamp patch: $TSPATCH
 EOF
 # Runtime libraries needed from the rootfs / rootfs에서 필요한 런타임 라이브러리
 for f in "$P"/lib/*.so* "$P"/lib/gbm/*.so "$P"/lib/dri/*.so; do

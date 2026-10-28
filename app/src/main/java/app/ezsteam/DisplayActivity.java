@@ -3597,7 +3597,15 @@ public class DisplayActivity extends Activity {
                     // while still being written arrived cut off (8 KB, 2026-10-20)
                     // ".part"로 쓰고 다 쓰면 이름을 바꿈: 쓰는 중에 컴퓨터로 복사한 제보가 잘린 채
                     // 도착했음(8 KB, 2026-10-20)
-                    File part = new File(dir, zip.getName() + ".part");
+                    // The zip is built in the app's own cache and copied into the shared folder in one
+                    // go at the end. Writing the ".part" file there took seconds while it grew, and a
+                    // computer browsing the phone over USB (MTP) saw a file changing size and being
+                    // renamed: Windows Explorer stopped responding until the cable was pulled (user
+                    // report 2026-10-28)
+                    // zip은 앱 자체 캐시에서 만들고 끝에 공용 폴더로 한 번에 복사함. 그곳에 ".part" 파일을 쓰면 커지는
+                    // 동안 몇 초가 걸렸고, USB(MTP)로 휴대폰을 보던 컴퓨터는 크기가 바뀌고 이름이 바뀌는 파일을 봤음:
+                    // Windows 탐색기가 케이블을 뽑을 때까지 응답하지 않았음(사용자 보고 2026-10-28)
+                    File part = new File(getCacheDir(), zip.getName() + ".part");
                     // Leftovers of a save that never finished (older than 10 minutes); a save in
                     // progress is not touched (two quick saves deleted each other's file, 2026-10-21)
                     // 끝나지 못한 저장의 남은 파일(10분 넘은 것). 진행 중인 저장은 건드리지 않음(연달아 두 번
@@ -3617,7 +3625,19 @@ public class DisplayActivity extends Activity {
                         part.delete();
                         throw e;
                     }
-                    if (!part.renameTo(zip)) throw new IOException("이름 바꾸기 실패: " + part);
+                    try (java.io.InputStream in = new java.io.FileInputStream(part);
+                         java.io.OutputStream out = new java.io.FileOutputStream(zip)) {
+                        byte[] b = new byte[1 << 16];
+                        int r;
+                        while ((r = in.read(b)) > 0) out.write(b, 0, r);
+                    } catch (IOException e) {
+                        //noinspection ResultOfMethodCallIgnored
+                        zip.delete();
+                        throw e;
+                    } finally {
+                        //noinspection ResultOfMethodCallIgnored
+                        part.delete();
+                    }
                     log("로그 저장 위치: " + zip.getAbsolutePath());
                     // Make the new file visible over USB (MTP) right away: a computer lists files from
                     // Android's media index, which did not know new reports yet (user report: the
