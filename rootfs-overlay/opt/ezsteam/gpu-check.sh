@@ -100,4 +100,9 @@ run steam-exact MESA_VK_WSI_PRESENT_MODE=immediate -- "$T" $BP
 run steam-exact-noshm MESA_VK_WSI_PRESENT_MODE=immediate MESA_VK_WSI_DEBUG=sw,noshm -- "$T" $BP
 run steam-exact-mailbox MESA_VK_WSI_PRESENT_MODE=mailbox -- "$T" $BP
 run steam-exact-kopper-off LIBGL_KOPPER_DISABLE=true -- "$T" $BP
+# Swap interval as SDL sets it (vsync on, off, adaptive): changes Zink's present mode at run time
+# SDL이 정하는 스왑 간격(vsync 켬, 끔, 적응형): 실행 중에 Zink 출력 방식을 바꿈
+run steam-exact-swap1 MESA_VK_WSI_PRESENT_MODE=immediate -- "$T" $BP --swap-interval 1
+run steam-exact-swap0 MESA_VK_WSI_PRESENT_MODE=immediate -- "$T" $BP --swap-interval 0
+run steam-exact-swap-adaptive MESA_VK_WSI_PRESENT_MODE=immediate -- "$T" $BP --swap-interval -1
 say "CHECK 요약 : PASS $PASS, FAIL $FAIL (전체: ~/ezs-logs/gpu-check.log, [제보 저장]에 들어감)"

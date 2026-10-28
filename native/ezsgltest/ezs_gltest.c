@@ -13,7 +13,7 @@
  * 결과 한 줄을 출력함: "RESULT PASS ..." 또는 "RESULT FAIL <이유> ...". X 연결 실패(Xlib 입출력 오류)와 X 프로토콜 오류는 숨기지
  * 않고 알림
  *
- *   ezs-gltest [--argb] [--thread] [--timestamp] [--render-xpending] [--frames N] [--size WxH]
+ *   ezs-gltest [--argb] [--thread] [--timestamp] [--render-xpending] [--swap-interval N] [--frames N] [--size WxH]
  * --render-xpending: the drawing thread also calls XPending on the same display every frame, as
  * Steam's "GL Composer Thr" does (its X connection failed there: XPending -> _XEventsQueued ->
  * _XIOError, 2026-10-29) / 그리기 스레드도 프레임마다 같은 디스플레이에서 XPending을 부름. Steam "GL Composer Thr"와
@@ -39,6 +39,9 @@ static Display *dpy;
 static Window win;
 static GLXContext ctx;
 static int frames = 180, W = 640, H = 400, use_argb, use_thread, use_ts, render_xpending;
+/* --swap-interval N: glXSwapIntervalEXT(N) after make-current, as SDL_GL_SetSwapInterval does
+   (-99 = not called) / --swap-interval N: make-current 뒤 glXSwapIntervalEXT(N), SDL_GL_SetSwapInterval과 같음(-99 = 안 부름) */
+static int swap_interval = -99;
 static volatile int done_drawing, drawn, xerrors;
 static int last_xerror, last_xreq;
 
@@ -84,6 +87,16 @@ static void draw_loop(void)
                (const char *)glGetString(GL_VERSION));
         fflush(stdout);
     }
+    if (swap_interval != -99 && drawn == 0) {
+        void (*si)(Display *, GLXDrawable, int) =
+            (void (*)(Display *, GLXDrawable, int))glXGetProcAddressARB((const GLubyte *)"glXSwapIntervalEXT");
+        if (si) {
+            si(dpy, win, swap_interval);
+            printf("glXSwapIntervalEXT(%d)\n", swap_interval);
+        } else {
+            printf("glXSwapIntervalEXT missing\n");
+        }
+    }
     void (*get64)(GLenum, GLint64 *) = (void (*)(GLenum, GLint64 *))glXGetProcAddressARB((const GLubyte *)"glGetInteger64v");
     for (int i = 0; i < frames; i++) {
         float t = (float)i / (float)frames;
@@ -126,6 +139,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--thread")) use_thread = 1;
         else if (!strcmp(argv[i], "--timestamp")) use_ts = 1;
         else if (!strcmp(argv[i], "--render-xpending")) render_xpending = 1;
+        else if (!strcmp(argv[i], "--swap-interval") && i + 1 < argc) swap_interval = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--size") && i + 1 < argc) sscanf(argv[++i], "%dx%d", &W, &H);
     }

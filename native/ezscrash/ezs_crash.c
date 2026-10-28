@@ -20,6 +20,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <execinfo.h>
+#include <link.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -188,11 +189,36 @@ static void exit_report(const char *how, int code)
 typedef int (*xio_handler)(void *dpy);
 static xio_handler app_xio;
 
+/* Loaded X11 / xcb / GL / Vulkan libraries with their full paths: two copies of libX11 or libxcb in
+   one process (for example one from the Steam client folder) would explain a broken connection
+   불러온 X11 / xcb / GL / Vulkan 라이브러리와 전체 경로: 한 프로세스에 libX11이나 libxcb가 두 벌이면(예: Steam 클라이언트
+   폴더의 것) 연결이 깨지는 이유가 됨 */
+static int list_lib(struct dl_phdr_info *info, size_t size, void *data)
+{
+    (void)size;
+    int fd = *(int *)data;
+    const char *n = info->dlpi_name;
+    if (n && (strstr(n, "X11") || strstr(n, "xcb") || strstr(n, "libGL") || strstr(n, "vulkan") ||
+              strstr(n, "gallium") || strstr(n, "SDL") || strstr(n, "Xext")))
+        out(fd, "ezs-crash:   lib %s\n", n);
+    return 0;
+}
+
+/* Symbol from an already loaded library (SDL loads libX11 privately, so RTLD_DEFAULT misses it)
+   이미 불러온 라이브러리의 심볼(SDL은 libX11을 따로 불러와 RTLD_DEFAULT로는 보이지 않음) */
+static void *loaded_sym(const char *lib, const char *sym)
+{
+    void *h = dlopen(lib, RTLD_LAZY | RTLD_NOLOAD);
+    void *f = h ? dlsym(h, sym) : NULL;
+    if (!f) f = dlsym(RTLD_DEFAULT, sym);
+    return f;
+}
+
 static int our_xio(void *dpy)
 {
     int saved = errno;
-    void *(*get_xcb)(void *) = dlsym(RTLD_DEFAULT, "XGetXCBConnection");
-    int (*has_error)(void *) = dlsym(RTLD_DEFAULT, "xcb_connection_has_error");
+    void *(*get_xcb)(void *) = loaded_sym("libX11-xcb.so.1", "XGetXCBConnection");
+    int (*has_error)(void *) = loaded_sym("libxcb.so.1", "xcb_connection_has_error");
     int code = -1;
     if (get_xcb && has_error && dpy) code = has_error(get_xcb(dpy));
     static const char *names[] = {"none", "socket/pipe error", "extension not supported", "out of memory",
@@ -206,6 +232,8 @@ static int our_xio(void *dpy)
         void *bt[16];
         int n = backtrace(bt, 16);
         for (int i = 1; i < n; i++) where(fds[k], "bt", bt[i]);
+        int fd = fds[k];
+        dl_iterate_phdr(list_lib, &fd);
     }
     if (fds[1] >= 0) close(fds[1]);
     errno = saved;
