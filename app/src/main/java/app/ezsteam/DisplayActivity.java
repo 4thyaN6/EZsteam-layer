@@ -3674,13 +3674,33 @@ public class DisplayActivity extends Activity {
         // UI 스레드에서 현재 내용을 떠 두고, 쓰기는 백그라운드에서 함
         String appLog = String.join("\n", saveLines) + "\n";
         String procs = processText();
+        // Written to a private file first and copied in one go: the picked file appeared at once and
+        // grew while the logs were collected, so a report shared before the end arrived cut off
+        // (0.4 MB of a larger report, 2026-10-28)
+        // 먼저 앱 전용 파일에 쓰고 한 번에 복사함: 고른 파일이 바로 생겨 로그를 모으는 동안 커졌기 때문에, 끝나기 전에
+        // 공유한 제보가 잘린 채 도착했음(더 큰 제보의 0.4 MB, 2026-10-28)
+        notice(s(R.string.notice_saving_scan));
         new Thread(() -> {
-            try (java.io.OutputStream os = getContentResolver().openOutputStream(uri)) {
-                writeLogZip(os, appLog, procs);
+            File tmp = new File(getCacheDir(), "ezs-report.zip.part");
+            try {
+                try (java.io.OutputStream os = new java.io.FileOutputStream(tmp)) {
+                    writeLogZip(os, appLog, procs);
+                }
+                try (java.io.InputStream in = new java.io.FileInputStream(tmp);
+                     java.io.OutputStream os = getContentResolver().openOutputStream(uri, "wt")) {
+                    if (os == null) throw new IOException("저장 위치를 열 수 없음");
+                    byte[] b = new byte[1 << 16];
+                    int r;
+                    while ((r = in.read(b)) > 0) os.write(b, 0, r);
+                }
+                log("로그 저장 완료(위치 선택): " + tmp.length() / 1024 + " KB");
                 notice(s(R.string.notice_saved));
             } catch (IOException | RuntimeException e) {
                 log("로그 저장 실패: " + e);
                 notice(s(R.string.notice_save_failed, e.getMessage()));
+            } finally {
+                //noinspection ResultOfMethodCallIgnored
+                tmp.delete();
             }
         }, "ezs-log-save").start();
     }
@@ -3736,6 +3756,12 @@ public class DisplayActivity extends Activity {
         // with its X window id) / 클라이언트 자체 웹 도우미 로그: 만드는 팝업 창("SP BPM_uid0" = 빅픽처, X 창 번호 포함)
         File whTxt = new File(rootfs, "home/steam/.local/share/Steam/logs/webhelper.txt");
         if (whTxt.isFile()) files.add(whTxt);
+        // Chromium's own log of the web helper (--log-file): GPU process and GL errors, kept across
+        // helper restarts (steamwebhelper.log holds only the last start)
+        // 웹 도우미의 Chromium 자체 로그(--log-file): GPU 프로세스와 GL 오류. 도우미가 다시 시작해도 남음
+        // (steamwebhelper.log는 마지막 시작분만 있음)
+        File cefLog = new File(rootfs, "home/steam/.local/share/Steam/logs/cef_log.txt");
+        if (cefLog.isFile()) files.add(cefLog);
         File whLog = new File(rootfs, "home/steam/.local/share/Steam/logs/steamwebhelper.log");
         if (whLog.isFile()) {
             files.add(whLog);
@@ -3842,7 +3868,8 @@ public class DisplayActivity extends Activity {
             for (File f : files) {
                 zip.putNextEntry(new java.util.zip.ZipEntry("logs/" + alias.getOrDefault(f, f.getName())));
                 boolean image = f.getName().endsWith(".png");
-                boolean maskIp = f.getName().equals("connection_log.txt") || f.equals(whLog) || f.equals(whTxt);
+                boolean maskIp = f.getName().equals("connection_log.txt") || f.equals(whLog) || f.equals(whTxt)
+                        || f.getName().equals("cef_log.txt");
                 try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(f, "r")) {
                     long len = in.length();
                     if (len > LOG_SAVE_MAX) {

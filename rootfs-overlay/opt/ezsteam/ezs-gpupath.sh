@@ -59,7 +59,10 @@ if [ "${EZS_ZINK:-0}" = 1 ]; then
             # 이 X 서버에 DRI3 없음: Zink가 Vulkan 스왑체인으로 출력함(kopper)
             export LIBGL_KOPPER_DRI2=true
         fi
-        echo "INFO zink : $EZG_P: Zink GL 켬 ($(cat "$EZG_MX/source.txt" 2>/dev/null | head -n 1 | cut -c1-60)), DRI3 $([ $EZG_DRI3 = 1 ] && echo 씀 || echo 안 씀)"
+        # Web helper: Steam's wrapper turns kopper off; take it back for Zink (ezsteam-prepare.sh hook)
+        # 웹 도우미: Steam 감쌈 스크립트가 kopper를 끔. Zink에서는 다시 켬(ezsteam-prepare.sh 고리)
+        export EZS_WH_KOPPER=1
+        echo "INFO zink : $EZG_P: Zink GL 켬 ($(cat "$EZG_MX/source.txt" 2>/dev/null | head -n 1 | cut -c1-60)), DRI3 $([ $EZG_DRI3 = 1 ] && echo 씀 || echo 안 씀), 웹 도우미 kopper 켬"
     else
         echo "WARN zink : $EZG_P: Zink GL 켬이나 $EZG_MX 없음 → 기존 GL"
     fi

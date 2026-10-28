@@ -111,6 +111,27 @@ else:
 # 이전 빌드가 넣은 기능 합치기 줄을 지움: Steam은 자체 --disable-features를 감쌈 스크립트 인자가
 # 아니라 내부에서 넘기므로 합치기가 적용되지 않았음(실측: 도우미 계속 4개, 2026-10-18). 덩어리는
 # 표식부터 닫는 "fi"까지임
+# Zink GL test: the wrapper sets LIBGL_KOPPER_DISABLE=true for the web helper ("to get store
+# working properly"). With Zink on Xvfb that left Zink drawing through the DRI software path, and
+# the Big Picture GL window died right after it was made ("Loaded GL 4.6", "mode: OpenGL window",
+# then "Fatal IO error 11 (Resource temporarily unavailable) on X server :98", 2026-10-28). One
+# line before the launch takes it back out when EZS_WH_KOPPER=1 (set by ezs-gpupath.sh with Zink),
+# so Zink presents through the Vulkan swapchain (kopper). Without that variable nothing changes.
+# Zink GL 시험: 감쌈 스크립트가 웹 도우미에 LIBGL_KOPPER_DISABLE=true를 줌("store가 제대로 동작하게"). Xvfb에서 Zink를
+# 켜자 Zink가 DRI 소프트웨어 경로로 그렸고, 빅픽처 GL 창이 만들어진 직후 죽었음("Loaded GL 4.6", "mode: OpenGL
+# window" 다음 "Fatal IO error 11 (Resource temporarily unavailable) on X server :98", 2026-10-28). 실행 줄 바로 앞의
+# 한 줄이 EZS_WH_KOPPER=1(Zink일 때 ezs-gpupath.sh가 정함)이면 이 값을 다시 빼서, Zink가 Vulkan 스왑체인(kopper)으로
+# 출력하게 함. 그 변수가 없으면 바뀌는 것 없음
+KMARK = "# ezs-kopper-hook"
+if KMARK not in s:
+    lines = s.split("\n")
+    idx = [i for i, l in enumerate(lines) if l.lstrip().startswith("exec ") and "/steamwebhelper" in l]
+    if len(idx) == 1:
+        lines[idx[0]:idx[0]] = [KMARK, '[ "${EZS_WH_KOPPER:-0}" = 1 ] && unset LIBGL_KOPPER_DISABLE']
+        s = "\n".join(lines)
+        print("ezsteam-prepare: webhelper kopper hook added")
+    else:
+        print(f"ezsteam-prepare: webhelper launch line for the kopper hook not found ({len(idx)})")
 MARK = "# ezs-cef-merge"
 if MARK in s:
     lines = s.split("\n")
