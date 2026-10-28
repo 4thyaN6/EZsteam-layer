@@ -62,7 +62,17 @@ if [ "${EZS_ZINK:-0}" = 1 ]; then
         # Web helper: Steam's wrapper turns kopper off; take it back for Zink (ezsteam-prepare.sh hook)
         # 웹 도우미: Steam 감쌈 스크립트가 kopper를 끔. Zink에서는 다시 켬(ezsteam-prepare.sh 고리)
         export EZS_WH_KOPPER=1
-        echo "INFO zink : $EZG_P: Zink GL 켬 ($(cat "$EZG_MX/source.txt" 2>/dev/null | head -n 1 | cut -c1-60)), DRI3 $([ $EZG_DRI3 = 1 ] && echo 씀 || echo 안 씀), 웹 도우미 kopper 켬, 시각 패치 $(cat "$EZG_MX/timestamp-patch" 2>/dev/null || echo 없음)"
+        # Zink with the Turnip of the same bundle (patched: no calibrated timestamps on kgsl). With
+        # only the Mesa libraries swapped, Zink still ran on the installed turnip package and kept
+        # calling the kgsl timestamp read that is not written there ("vkGetCalibratedTimestampsEXT
+        # failed" with "시각 패치 1" in the log, 2026-10-28). Games get the same Turnip while Zink is on.
+        # Zink를 같은 묶음의 Turnip과 씀(패치됨: kgsl에서 calibrated timestamps 없음). Mesa 라이브러리만 바꾸면 Zink가 설치된
+        # turnip 묶음 위에서 돌아, 그곳에 구현되지 않은 kgsl 시각 읽기를 계속 불렀음(로그에 "시각 패치 1"인데
+        # "vkGetCalibratedTimestampsEXT failed", 2026-10-28). Zink를 켠 동안 게임도 같은 Turnip을 씀
+        if [ -f "$EZG_MX/icd.json" ]; then
+            export VK_DRIVER_FILES="$EZG_MX/icd.json" VK_ICD_FILENAMES="$EZG_MX/icd.json"
+        fi
+        echo "INFO zink : $EZG_P: Zink GL 켬 ($(cat "$EZG_MX/source.txt" 2>/dev/null | head -n 1 | cut -c1-60)), DRI3 $([ $EZG_DRI3 = 1 ] && echo 씀 || echo 안 씀), 웹 도우미 kopper 켬, Vulkan ${VK_DRIVER_FILES:-(기본)}, 시각 패치 $(cat "$EZG_MX/timestamp-patch" 2>/dev/null || echo 없음)"
     else
         echo "WARN zink : $EZG_P: Zink GL 켬이나 $EZG_MX 없음 → 기존 GL"
     fi
