@@ -4,7 +4,9 @@
 # 프로젝트 폴더의 ezs-push.bat / ezs-install.bat(더블클릭)로 실행함
 param(
     # push = upload, install = download and install / push = 업로드, install = 받아서 설치
-    [Parameter(Mandatory = $true)][ValidateSet('push', 'install')][string]$Cmd
+    # check = GPU path check on the tablet + report, report = save and pull a report (adb, no MTP)
+    # check = 태블릿에서 GPU 경로 점검 + 제보, report = 제보 저장 후 가져오기(adb, MTP 안 씀)
+    [Parameter(Mandatory = $true)][ValidateSet('push', 'install', 'check', 'report')][string]$Cmd
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,6 +21,96 @@ $Url = 'https://github.com/4thyaN6/EZsteam-layer/releases/download/apk-latest'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 Set-Location $Repo
+# Korean output of adb shell (UTF-8) shown as it is / adb 셸의 한국어 출력(UTF-8)을 그대로 보이게 함
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+
+# ---- Tablet stays on the cable: everything through adb, Windows Explorer (MTP) is not used ----
+# (Explorer froze while reports were copied over MTP, 2026-10-28)
+# ---- 태블릿은 케이블에 꽂아 둔 채: 모두 adb로, Windows 탐색기(MTP)는 쓰지 않음 ----
+# (MTP로 제보를 복사하는 동안 탐색기가 멈췄음, 2026-10-28)
+$Pkg = 'app.ezsteam'
+$Reports = '/sdcard/Download/.EZlator/Reports'
+$GpuLog = 'files/ezs/home/steam/ezs-logs/gpu-check.log'
+
+function Invoke-Adb {
+    # adb output as text lines, stderr included, never stopping on it
+    # adb 출력을 글 줄로, stderr 포함, 그것 때문에 멈추지 않음
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $o = (& $Adb @args 2>&1 | ForEach-Object { "$_" })
+    $ErrorActionPreference = $prev
+    return $o
+}
+
+function Get-ReportNames {
+    return @(Invoke-Adb shell "ls $Reports 2>/dev/null" | Where-Object { $_ -match '^ezsteam_report_.*\.zip$' })
+}
+
+# Ask the running session for a report, wait for the new file, pull it into .\reports
+# 실행 중인 세션에 제보를 요청하고, 새 파일을 기다려 .\reports로 가져옴
+function Get-Report {
+    $before = Get-ReportNames
+    Invoke-Adb shell am broadcast -a app.ezsteam.SAVE_REPORT | Out-Null
+    Write-Host '제보 저장 요청 보냄 (세션 화면이 열려 있어야 함), 기다리는 중...'
+    $new = $null
+    for ($i = 0; $i -lt 90 -and -not $new; $i++) {
+        Start-Sleep -Seconds 2
+        $new = Get-ReportNames | Where-Object { $before -notcontains $_ } | Select-Object -Last 1
+    }
+    if (-not $new) {
+        Write-Host '새 제보가 생기지 않음: 앱의 Steam/점검 화면이 열려 있는지 확인'
+        return $null
+    }
+    # Size steady before pulling / 가져오기 전에 크기가 멈췄는지 확인
+    $last = ''
+    for ($i = 0; $i -lt 10; $i++) {
+        $size = (Invoke-Adb shell "stat -c %s $Reports/$new") -join ''
+        if ($size -eq $last) { break }
+        $last = $size
+        Start-Sleep -Seconds 1
+    }
+    $dir = Join-Path $Repo 'reports'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $local = Join-Path $dir $new
+    Invoke-Adb pull "$Reports/$new" $local | Out-Null
+    if (-not (Test-Path $local)) {
+        Write-Host "가져오기 실패: $new"
+        return $null
+    }
+    Write-Host "제보: $local ($([math]::Round((Get-Item $local).Length / 1KB)) KB)"
+    # Show it in Explorer on the PC disk (not the tablet) / PC 디스크에서 탐색기로 보여 줌(태블릿 아님)
+    try { Start-Process explorer.exe "/select,`"$local`"" } catch { }
+    return $local
+}
+
+if ($Cmd -eq 'report') {
+    Get-Report | Out-Null
+    return
+}
+
+if ($Cmd -eq 'check') {
+    # Fresh start of the app straight into the GPU path check (switches as set in the app)
+    # 앱을 새로 시작해 바로 GPU 경로 점검으로(스위치는 앱에서 정한 그대로)
+    $t0 = [int][double]::Parse((Invoke-Adb shell 'date +%s') -join '')
+    Invoke-Adb shell am force-stop $Pkg | Out-Null
+    $o = Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run gpucheck
+    if (($o -join ' ') -match 'Error') { Write-Host ($o -join "`n"); throw '앱 시작 실패 (태블릿 연결·USB 디버깅 확인)' }
+    Write-Host 'GPU 경로 점검 시작, 결과 기다리는 중 (최대 5분)...'
+    $done = $false
+    for ($i = 0; $i -lt 150 -and -not $done; $i++) {
+        Start-Sleep -Seconds 2
+        $m = (Invoke-Adb shell run-as $Pkg stat -c %Y $GpuLog) -join ''
+        if ($m -match '^\d+$' -and [int]$m -ge $t0) {
+            $txt = Invoke-Adb shell run-as $Pkg cat $GpuLog
+            if (($txt -join "`n") -match 'CHECK 요약') { $done = $true }
+        }
+    }
+    if (-not $done) { Write-Host '점검이 끝나지 않음 (5분). 지금 상태로 제보를 가져옴' }
+    $txt | Where-Object { $_ -match '^(CHECK|INFO check|FAIL check)' -and $_ -notmatch ':   ' } | ForEach-Object { Write-Host $_ }
+    Write-Host ''
+    Get-Report | Out-Null
+    return
+}
 
 if ($Cmd -eq 'push') {
     # Upload everything that changed in the project folder

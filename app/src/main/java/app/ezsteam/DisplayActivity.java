@@ -577,6 +577,7 @@ public class DisplayActivity extends Activity {
         // GPU path check (display.sh runs gpu-check.sh; otherwise like the display test)
         // GPU 경로 점검(display.sh가 gpu-check.sh를 돌림. 그 밖에는 화면 시험과 같음)
         if ("gpucheck".equals(m)) mode = "gpucheck";
+        registerPcReceiver();
 
         // Layout (user request: buttons, log and numbers overlapped and moved; the numbers covered
         // the DXVK HUD in the top-left corner):
@@ -3667,6 +3668,34 @@ public class DisplayActivity extends Activity {
         pickLogFile("ezsteam-logs-" + stamp + ".zip");
     }
 
+    /** Broadcast the PC helper sends (ezs-report.bat, through adb) / PC 도우미가 보내는 방송(ezs-report.bat, adb 경유) */
+    static final String ACTION_PC_REPORT = "app.ezsteam.SAVE_REPORT";
+    private android.content.BroadcastReceiver pcReceiver;
+
+    /**
+     * Save a report when the PC asks (tablet stays untouched on the cable). Only senders holding
+     * android.permission.DUMP may send it: the adb shell has it, ordinary apps do not. The file is
+     * then pulled with adb, not over MTP (Windows Explorer froze on MTP, 2026-10-28).
+     * PC가 요청하면 제보를 저장함(태블릿은 케이블에 꽂아 둔 채 손대지 않음). android.permission.DUMP를 가진 쪽만 보낼 수
+     * 있음: adb 셸은 가졌고 일반 앱은 없음. 파일은 MTP가 아니라 adb로 가져감(MTP에서 Windows 탐색기가 멈췄음, 2026-10-28)
+     */
+    private void registerPcReceiver() {
+        pcReceiver = new android.content.BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, android.content.Intent i) {
+                log("PC 요청: 제보 저장");
+                saveLogs();
+            }
+        };
+        try {
+            registerReceiver(pcReceiver, new android.content.IntentFilter(ACTION_PC_REPORT),
+                    "android.permission.DUMP", null);
+        } catch (RuntimeException e) {
+            pcReceiver = null;
+            log("PC 요청 받기 실패: " + e);
+        }
+    }
+
     /** Save through the system file picker / 시스템 파일 선택 창으로 저장 */
     private void pickLogFile(String name) {
         android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT);
@@ -4072,6 +4101,14 @@ public class DisplayActivity extends Activity {
     @Override
     protected void onDestroy() {
         finishing = true;
+        if (pcReceiver != null) {
+            try {
+                unregisterReceiver(pcReceiver);
+            } catch (RuntimeException ignored) {
+                // already gone / 이미 없음
+            }
+            pcReceiver = null;
+        }
         android.net.ConnectivityManager.NetworkCallback nc = netCallback;
         if (nc != null) {
             try {

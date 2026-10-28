@@ -435,7 +435,40 @@ public class MainActivity extends Activity {
         });
     }
 
+    /** Extra the PC helper passes through adb: "gpucheck" or "steam" / PC 도우미가 adb로 넘기는 값: "gpucheck" 또는 "steam" */
+    static final String EXTRA_PC_RUN = "ezs.run";
+
+    /**
+     * Run asked by the PC (ezs-check.bat: adb shell am start ... --es ezs.run gpucheck): the tablet
+     * stays on the cable untouched. Replaces the automatic Steam start for that launch.
+     * PC가 요청한 실행(ezs-check.bat: adb shell am start ... --es ezs.run gpucheck): 태블릿은 케이블에 꽂아 둔 채 손대지
+     * 않음. 그 실행에서는 자동 Steam 시작 대신 씀
+     */
+    private boolean pcRun(android.content.Intent i) {
+        String run = i == null ? null : i.getStringExtra(EXTRA_PC_RUN);
+        if (run == null) return false;
+        log("PC 요청: " + run);
+        if ("gpucheck".equals(run)) {
+            startActivity(new android.content.Intent(this, DisplayActivity.class)
+                    .putExtra(DisplayActivity.EXTRA_W, 1280).putExtra(DisplayActivity.EXTRA_H, 800)
+                    .putExtra(DisplayActivity.EXTRA_MODE, "gpucheck"));
+        } else if ("steam".equals(run)) {
+            openSteam(steamSize()[0], steamSize()[1]);
+        }
+        return true;
+    }
+
+    @Override
+    protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        pcRun(intent);
+    }
+
     private void maybeAutoStart() {
+        if (pcRun(getIntent())) {
+            autoStartPending = false;
+            return;
+        }
         if (!autoStartPending) return;
         autoStartPending = false;
         log("앱 시작 시 바로 Steam ([바로 실행]으로 끔)");

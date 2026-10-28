@@ -15,6 +15,9 @@ T=/opt/ezsteam/bin/ezs-gltest
 CRASH=/opt/ezsteam/lib/libezs_crash.so
 OUT="$HOME/ezs-logs/gpu-check.log"
 mkdir -p "$HOME/ezs-logs"
+# The previous run is kept (two runs with different switches go into one report)
+# 이전 실행 결과는 남김(스위치를 바꿔 두 번 돌린 결과가 제보 하나에 들어감)
+[ -s "$OUT" ] && mv -f "$OUT" "$HOME/ezs-logs/gpu-check-prev.log"
 : > "$OUT"
 : > /tmp/ezs-crash.log
 BASE_VK="${VK_DRIVER_FILES:-}"
@@ -24,7 +27,7 @@ FAIL=0
 
 say() { echo "$*"; echo "$*" >> "$OUT"; }
 
-say "INFO check : 시작 $(date +%H:%M:%S), 화면 $DISPLAY, 기본 Vulkan ${BASE_VK:-(없음)}, WSI ${BASE_WSI:-(없음)}"
+say "INFO check : 시작 $(date +%H:%M:%S), 스위치 Zink(점검은 항상 켬) GPU 장치 ${EZS_GPU_NODE:-0} X 서버 ${EZS_XSERVER_RUNNING:-xvfb}, 화면 $DISPLAY, 기본 Vulkan ${BASE_VK:-(없음)}, WSI ${BASE_WSI:-(없음)}"
 [ -x "$T" ] || { say "FAIL check : $T 없음"; exit 0; }
 [ -f "$MX/lib/libGLX_mesa.so.0" ] || { say "FAIL check : $MX 없음 (CI mesax 묶음)"; exit 0; }
 say "INFO check : mesax $(head -n 1 "$MX/source.txt" 2>/dev/null | cut -c1-70), DRM 패치 $(cat "$MX/drm-patch" 2>/dev/null || echo '?'), 시각 패치 $(cat "$MX/timestamp-patch" 2>/dev/null || echo '?')"
