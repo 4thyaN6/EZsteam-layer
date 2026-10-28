@@ -122,16 +122,25 @@ else:
 # window" 다음 "Fatal IO error 11 (Resource temporarily unavailable) on X server :98", 2026-10-28). 실행 줄 바로 앞의
 # 한 줄이 EZS_WH_KOPPER=1(Zink일 때 ezs-gpupath.sh가 정함)이면 이 값을 다시 빼서, Zink가 Vulkan 스왑체인(kopper)으로
 # 출력하게 함. 그 변수가 없으면 바뀌는 것 없음
-KMARK = "# ezs-kopper-hook"
+# One hook line before the launch sources /opt/ezsteam/ezs-webhelper-env.sh (Zink GL test only;
+# what it sets lives in that file, so changes reach the device without patching the wrapper again).
+# The first form of the hook (two lines, 2026-10-28) is replaced.
+# 실행 줄 앞의 고리 한 줄이 /opt/ezsteam/ezs-webhelper-env.sh를 불러옴(Zink GL 시험에서만 동작. 정하는 값은 그 파일에
+# 있어 감쌈 스크립트를 다시 고치지 않아도 기기에 반영됨). 고리의 첫 형태(두 줄, 2026-10-28)는 바꿈
+KMARK = "# ezs-webhelper-env"
+KLINE = '[ -f /opt/ezsteam/ezs-webhelper-env.sh ] && . /opt/ezsteam/ezs-webhelper-env.sh'
 if KMARK not in s:
     lines = s.split("\n")
+    if "# ezs-kopper-hook" in lines:
+        i = lines.index("# ezs-kopper-hook")
+        del lines[i:i + 2]
     idx = [i for i, l in enumerate(lines) if l.lstrip().startswith("exec ") and "/steamwebhelper" in l]
     if len(idx) == 1:
-        lines[idx[0]:idx[0]] = [KMARK, '[ "${EZS_WH_KOPPER:-0}" = 1 ] && unset LIBGL_KOPPER_DISABLE']
+        lines[idx[0]:idx[0]] = [KMARK, KLINE]
         s = "\n".join(lines)
-        print("ezsteam-prepare: webhelper kopper hook added")
+        print("ezsteam-prepare: webhelper env hook added")
     else:
-        print(f"ezsteam-prepare: webhelper launch line for the kopper hook not found ({len(idx)})")
+        print(f"ezsteam-prepare: webhelper launch line for the env hook not found ({len(idx)})")
 MARK = "# ezs-cef-merge"
 if MARK in s:
     lines = s.split("\n")

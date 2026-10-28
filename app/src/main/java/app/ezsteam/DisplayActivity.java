@@ -3762,6 +3762,13 @@ public class DisplayActivity extends Activity {
         // (steamwebhelper.log는 마지막 시작분만 있음)
         File cefLog = new File(rootfs, "home/steam/.local/share/Steam/logs/cef_log.txt");
         if (cefLog.isFile()) files.add(cefLog);
+        // Output of the previous helper start, kept by ezs-webhelper-env.sh in the Zink GL test
+        // 이전 도우미 시작의 출력. Zink GL 시험에서 ezs-webhelper-env.sh가 남김
+        File whPrev = new File(rootfs, "home/steam/.local/share/Steam/logs/steamwebhelper-prev.log");
+        if (whPrev.isFile()) {
+            files.add(whPrev);
+            alias.put(whPrev, "steamwebhelper-output-prev.log");
+        }
         File whLog = new File(rootfs, "home/steam/.local/share/Steam/logs/steamwebhelper.log");
         if (whLog.isFile()) {
             files.add(whLog);
@@ -3869,7 +3876,7 @@ public class DisplayActivity extends Activity {
                 zip.putNextEntry(new java.util.zip.ZipEntry("logs/" + alias.getOrDefault(f, f.getName())));
                 boolean image = f.getName().endsWith(".png");
                 boolean maskIp = f.getName().equals("connection_log.txt") || f.equals(whLog) || f.equals(whTxt)
-                        || f.getName().equals("cef_log.txt");
+                        || f.getName().equals("cef_log.txt") || f.getName().equals("steamwebhelper-prev.log");
                 try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(f, "r")) {
                     long len = in.length();
                     if (len > LOG_SAVE_MAX) {
