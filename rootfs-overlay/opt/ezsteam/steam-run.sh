@@ -22,6 +22,10 @@ sh /opt/ezsteam/ezsteam-prepare.sh
 
 # lsof wrapper first in PATH (see /opt/ezsteam/bin/lsof) / lsof 감쌈을 PATH 맨 앞에 둠(/opt/ezsteam/bin/lsof 참고)
 export PATH=/opt/ezsteam/bin:$PATH
+# GPU display path test switches (Zink GL, GPU device; nothing changes while they are off)
+# GPU 화면 경로 시험 스위치(Zink GL, GPU 장치. 꺼져 있으면 바뀌는 것 없음)
+EZG_P=steam
+. /opt/ezsteam/ezs-gpupath.sh
 # Vulkan present mode for games through Turnip's X11 software output: mailbox instead of the
 # FIFO that DXVK asks for (the Android proot Steam reference setup sets the same; a game stopped
 # right after creating its FIFO swapchain here). Set the variable beforehand to override.
@@ -513,7 +517,11 @@ print(r, os.strerror(ctypes.get_errno()))' 2>&1 | tail -n 1)
     # 빅픽처는 소프트웨어로 그림: Steam 화면 GPU를 켜면(ANGLE Vulkan, "Chromium 선택") 소리만 나고 검은
     # 화면이었고, 끄면 나왔음(사용자 제보 2026-10-22). 이번 시작에 한해 웹 도우미 플래그에서 GPU용
     # Chromium 플래그를 뺌
-    if [ -n "$BPARG" ] && [ -z "$GPUARG" ]; then
+    # Zink GL test: Big Picture keeps the GPU so its GL windows can be checked with Zink
+    # Zink GL 시험: Zink로 빅픽처 GL 창을 확인할 수 있게 GPU를 그대로 둠
+    if [ -n "$BPARG" ] && [ -z "$GPUARG" ] && [ "${EZS_ZINK:-0}" = 1 ]; then
+        echo "INFO steam : 빅픽처를 Steam 화면 GPU로 시작 (Zink GL 시험)"
+    elif [ -n "$BPARG" ] && [ -z "$GPUARG" ]; then
         GPUARG=-cef-disable-gpu
         EZS_CEF_FLAGS=$(echo "${EZS_CEF_FLAGS:-}" | tr ' ' '\n' \
             | grep -vE '^--(ignore-gpu-blocklist|use-gl=.*|use-angle=.*)$' | paste -sd' ' -)

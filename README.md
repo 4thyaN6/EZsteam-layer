@@ -38,6 +38,7 @@
 | `tools/patches/` | PRoot 패치: robust-list·SysV 세마포어 에뮬레이션(steamclienttermux, MIT, Valve ARM64 `steamclient.so`가 `get_robust_list`를 검사), `PROOT_CRASH_LOG` 크래시 위치 출력. 출처·라이선스는 `tools/patches/README.md` |
 | `tools/build-rootfs.sh` | Debian 13 trixie arm64 + python3 + Vulkan 로더·vulkaninfo + Turnip 런타임 라이브러리로 `rootfs.tar.xz`·sha256·버전·패키지 목록 생성 |
 | `tools/build-turnip-glibc.sh` | Mesa 26.2.4 Turnip(KGSL + X11, glibc aarch64)을 trixie 컨테이너에서 빌드해 `turnip.tar.xz` 묶음 생성 |
+| `tools/build-mesax.sh`, `tools/patches/mesa-01-kgsl-drm.py` | 같은 Mesa 릴리스로 Zink(GLX/EGL/GBM, glvnd) + libdrm Turnip 묶음 `mesax` 빌드(CI가 `/opt/ezsteam/mesax`에 넣음, APK마다 한 번 복사). 패치: `EZS_TU_DRM=1`이면 kgsl Turnip이 `VK_EXT_physical_device_drm`에 kgsl fd 장치 번호를 알림(기준 위치를 못 찾으면 패치 없이 빌드, 묶음 `drm-patch`=0) |
 | `tools/measure-phantom.ps1` | 자식 프로세스 수·종료 기록 측정(Windows PowerShell + adb) |
 | `tools/fix-abs-symlinks.sh` | rootfs 절대 심볼릭 링크를 상대 링크로 변환 |
 | `tools/device-smoke.sh` | `adb shell`에서 앱 없이 PRoot + rootfs 확인 |
@@ -47,6 +48,9 @@
 | `rootfs-overlay/opt/ezsteam/tools-install.sh` | [시험 도구 설치]: PRoot 가짜 root(`--root-id`) + 기기 DNS로 `apt-get install xvfb x11-apps`(기본 rootfs에는 넣지 않음) |
 | `rootfs-overlay/opt/ezsteam/drawtest.sh`, `xwd2png.py` | [그리기 시험]: Xvfb `:99` + Turnip `vkcube` 600프레임, fps, `xwd` 캡처를 `~/ezs-logs/drawtest.png`로 저장해 앱에 표시 |
 | `rootfs-overlay/opt/ezsteam/display.sh` | [화면 WxH]: Xvfb `:98` `-fbdir` + 시험 창(vkcube, xclock, xeyes, xcalc, keyview), 앱이 stdin을 닫으면 종료 |
+| `native/ezswl/ezs_wl.c` | rootfs 안 최소 Wayland 컴포지터 `ezs-wl`(자체 작성, MIT): rootful Xwayland 하나의 toplevel 프레임을 Xvfb와 같은 XWD 화면 파일로 복사(앱 쪽 변경 없음). wl_compositor, wl_shm, wl_output, xdg_wm_base, `--rdev`일 때 linux-dmabuf v4(주 장치 = GPU 노드, LINEAR만, mmap 읽기). seat 없음(입력은 XTEST) |
+| `native/ezsdrm/ezs_drm.c` | libdrm 심 `libezs_drm.so`(LD_PRELOAD, 자체 작성): kgsl fd/장치 번호에 대해 render 노드 형식, `/dev/dri/renderD128` platform 장치, GEM 핸들 대신 dma-buf 번호표. 나머지는 실제 libdrm |
+| `rootfs-overlay/opt/ezsteam/ezs-gpupath.sh` | GPU 화면 경로 시험 스위치 환경(steam-run.sh·EZ Proton이 불러옴): `EZS_ZINK=1` Zink 앞단, `EZS_GPU_NODE=1` 심 + mesax Turnip, Xwayland와 함께면 DRI3(소프트웨어 출력 끔). 스위치가 모두 꺼지면 아무것도 바꾸지 않음 |
 | `rootfs-overlay/opt/ezsteam/keyview.py` | 키 확인 창(libX11 ctypes): 키보드 포커스를 갖고 받은 X 키코드·키 이름을 창과 앱 로그(`KEY`)에 표시 |
 | `rootfs-overlay/opt/ezsteam/steam-install.sh` | [Steam 설치]: 사용자 steam(uid 1000), 클라이언트·CEF 라이브러리(apt), Valve 업데이트 서버(`client-update.steamstatic.com/steam_client_linuxarm64`)에서 기기가 직접 부트스트랩 받기(매니페스트 sha2 대조), `~/.local/share/Steam`에 풀기 |
 | `rootfs-overlay/opt/ezsteam/steam-deps.sh` | 설치된 클라이언트 ELF 파일에 ldd → 없는 라이브러리 목록, `install` 모드에서 이름 규칙(libfoo-1.2.so.3 → libfoo-1.2-3/…t64)으로 Debian 패키지를 찾아 설치 |
@@ -184,6 +188,7 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - PRoot 패치 일부: steamclienttermux(MIT), 원문 `tools/patches/LICENSE.steamclienttermux`
 - talloc: LGPL-3.0-or-later(Winlator-Cmod의 단일 파일본, 출처·해시는 `tools/build-proot-android.sh`)
 - Mesa(Turnip): MIT, 사용 소스·해시는 묶음 안 `source.txt`와 `tools/build-turnip-glibc.sh`
+- Mesa(Zink 묶음 mesax): MIT, `tools/build-mesax.sh`(같은 소스·해시). Xwayland·glvnd는 기기에서 Debian 패키지로 설치(앱에 넣어 배포하지 않음). `ezs-wl`, `libezs_drm.so`는 자체 작성(MIT), 프로토콜 코드는 빌드 때 Debian wayland-protocols에서 생성
 - rootfs의 Debian 패키지 목록: Release의 `rootfs.packages.txt`, rootfs 안 `/opt/ezsteam/packages.txt`
 - Steam 자체 갱신 창 한글: 창이 X 코어 글꼴 `-misc-fixed-medium-r-normal--*-120-*-*-c-*-iso10646-1`에 `XDrawString16`으로 그림(클라이언트 실행 파일 안 이름, 앱 로그 `INFO font`). display.sh가 X 글꼴 경로 맨 앞에 `/tmp/ezs-xfonts`(별칭 → 나눔고딕)를 둠. 휴대폰 Noto Sans CJK(CFF)는 X 서버가 읽지 못해 TrueType인 데비안 `fonts-nanum`(SIL OFL)을 [시험 도구 설치]가 기기에서 받음(앱에 포함하지 않음, 설치 약 33MB). 글꼴 경로로 시작이 실패하면 기본 글꼴로 다시 시작
 - 게임 실행 가림막: Steam이 게임을 시작하면(EZ Proton의 설치 스크립트 실행 또는 `waitforexitandrun` 줄) 화면 전체를 "게임 실행 준비 중(: 단계) · 경과"로 가리고, 게임 시작 뒤 폭 320px 이상인 첫 Wine 창(깊이 24, Steam 창은 깊이 32)이 뜨면 닫음. 두 번의 Proton 실행 사이와 마지막 준비 뒤에 Steam 화면이 몇 초 돌아와 멈춘 것처럼 보이던 것을 가림. 터치는 받기만 하고(닫히지 않음) 옆으로 밀면 밀려나며 닫히고, 3분 뒤 저절로 닫힘. 앱 로그 `게임 실행 가림막 닫힘: <이유> (<시간>)`
@@ -207,3 +212,4 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 - 소리 출력(AudioServer): 안드로이드 출력(AudioTrack 48kHz 스테레오, 버퍼 약 40ms) 하나를 세션 내내 열어 두고 모든 48kHz 연결을 섞음(5ms 단위, 스트림별 250ms 버퍼, 시작 20ms 모음). 다른 주파수는 전처럼 자체 AudioTrack. 전에는 연결마다 AudioTrack을 만들고 닫아 빅픽처 이동 효과음이 들리지 않았음. ALSA 플러그인은 앱 연결 실패를 프로세스마다 한 번 stderr에 남김(`ezs-audio: … 연결 실패`)
 - libpci: PRoot에서 /proc/bus/pci/devices 위에 빈 파일을 묶음(Chromium GPU 프로세스가 libpci에서 실패해 CPU로 그리는 것 방지)
 - NetworkManager 대역(`ezs-netstate.py`, 자체 작성, 공개 D-Bus API 기준): steam-run.sh가 세션 시스템 버스(`dbus-daemon`, `ezs-system-bus.conf`)와 함께 띄움. 유선 장치 1개·활성 연결 1개, 상태는 앱이 쓰는 /tmp/ezs-net("1 wifi" 등, 안드로이드 네트워크 변경 감시). Steam 연결 표시·설정 > 인터넷용. 패키지(dbus-daemon, python3-gi, gir1.2-glib-2.0)는 이전 rootfs에 없어 steam-deps.sh가 처음 한 번 설치(NEED deps). 끄기: EZS_NETSTATE=0. 세션 동안 프로세스 2개 추가
+- GPU 화면 경로 시험 스위치([관리자] > [시험 ▸], 파일 `~/.local/share/ezsteam/zink-gl`, `gpu-node`, `xwayland`, 각각 기본 끔 = 지금 경로, 다음 Steam 시작부터): **Zink GL**(OpenGL을 Vulkan 위 Zink로, Steam 클라이언트·게임, 이때 빅픽처 자동 재시작 안 함), **GPU 장치 노출**(`/dev/kgsl-3d0`을 `/dev/dri/renderD128`로도 바인드 + libdrm 심 + mesax Turnip), **화면 방식 Xvfb/Xwayland**(`ezs-wl` + rootful Xwayland, GPU 장치와 함께면 glamor·DRI3 시도). 필요한 패키지(xwayland, glvnd 앞단, mesax가 링크하는 라이브러리)는 스위치가 켜졌을 때만 Steam 시작의 라이브러리 설치가 받음. 로그: `INFO zink`, `INFO drm`, `INFO wayland`, `INFO xwayland`, `ezs-wl:`, 제보의 `logs/xserver.log`

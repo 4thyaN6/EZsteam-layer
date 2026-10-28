@@ -81,8 +81,97 @@ start_xvfb() {
         sleep 0.1; i=$((i + 1))
     done
 }
-start_xvfb "$XFP"
-if [ ! -S /tmp/.X11-unix/X$D ] && [ -n "$XFP" ]; then
+# 1b. Screen mode "Xwayland" (app test switch, EZS_XSERVER=xwayland): our guest Wayland compositor
+#     ezs-wl writes the same screen file the app reads for Xvfb, and a rootful Xwayland draws into
+#     it (XTEST input as with Xvfb). With the GPU device switch (EZS_GPU_NODE=1, /dev/dri/renderD128
+#     bound to the Android GPU) the compositor offers dma-buf on that node, so Xwayland can use glamor
+#     (Zink from /opt/ezsteam/mesax) and give X clients DRI3. Falls back to Xvfb when anything is missing.
+# 1b. 화면 방식 "Xwayland"(앱 시험 스위치, EZS_XSERVER=xwayland): 자체 rootfs 안 Wayland 컴포지터 ezs-wl이 앱이
+#     Xvfb용으로 읽는 것과 같은 화면 파일을 쓰고, rootful Xwayland가 그곳에 그림(입력은 Xvfb처럼 XTEST).
+#     GPU 장치 스위치(EZS_GPU_NODE=1, /dev/dri/renderD128을 안드로이드 GPU에 바인드)가 켜지면 컴포지터가 그 노드로
+#     dma-buf를 제공해, Xwayland가 glamor(/opt/ezsteam/mesax의 Zink)를 쓰고 X 클라이언트에 DRI3를 줄 수 있음.
+#     하나라도 없으면 Xvfb로 돌아감
+MX=/opt/ezsteam/mesax
+WL=/opt/ezsteam/bin/ezs-wl
+WPID=""
+start_xwayland() {
+    # $1: font path / $1: 글꼴 경로
+    # Own runtime folder for the Wayland socket, passed only to ezs-wl and Xwayland (Steam keeps its own)
+    # Wayland 소켓용 자체 런타임 폴더. ezs-wl과 Xwayland에만 넘김(Steam은 자기 것을 그대로 씀)
+    XR=/tmp/ezs-xdg
+    mkdir -p "$XR" && chmod 700 "$XR"
+    WSOCK=ezs-wl-$D
+    rm -f "$XR/$WSOCK" "$XR/$WSOCK.lock"
+    RDEV=""
+    GPUOK=0
+    if [ "${EZS_GPU_NODE:-0}" = 1 ] && [ -c /dev/dri/renderD128 ]; then
+        # Device number in decimal major:minor (stat prints hex) / 장치 번호를 10진 major:minor로(stat은 16진 출력)
+        RDEV=$(printf '%d:%d' "0x$(stat -c %t /dev/dri/renderD128)" "0x$(stat -c %T /dev/dri/renderD128)")
+        if [ -f "$MX/lib/libEGL_mesa.so.0" ] && [ -f /opt/ezsteam/lib/libezs_drm.so ]; then GPUOK=1; fi
+        echo "INFO drm : /dev/dri/renderD128 = $RDEV, mesax $([ -f "$MX/lib/libEGL_mesa.so.0" ] && echo 있음 || echo 없음), 심 $([ -f /opt/ezsteam/lib/libezs_drm.so ] && echo 있음 || echo 없음), 패치 $(cat "$MX/drm-patch" 2>/dev/null || echo ?)"
+    elif [ "${EZS_GPU_NODE:-0}" = 1 ]; then
+        echo "WARN drm : GPU 장치 켬인데 /dev/dri/renderD128 없음 (바인드 실패)"
+    fi
+    [ $GPUOK = 1 ] || RDEV=""
+    XDG_RUNTIME_DIR="$XR" "$WL" --socket "$WSOCK" --fb "$FB/Xvfb_screen0" --size ${W}x${H} ${RDEV:+--rdev "$RDEV"} &
+    WPID=$!
+    i=0
+    while { [ ! -S "$XR/$WSOCK" ] || [ ! -s "$FB/Xvfb_screen0" ]; } && [ $i -lt 50 ]; do
+        sleep 0.1; i=$((i + 1))
+    done
+    if [ ! -S "$XR/$WSOCK" ]; then
+        echo "WARN wayland : ezs-wl 시작 안 됨"
+        kill $WPID 2>/dev/null; WPID=""
+        return 1
+    fi
+    if [ $GPUOK = 1 ]; then
+        # glamor through Zink on the GPU node: Mesa from mesax, libdrm checks through the shim
+        # GPU 노드 위 Zink로 glamor: Mesa는 mesax, libdrm 검사는 심으로
+        env -u MESA_VK_WSI_DEBUG XDG_RUNTIME_DIR="$XR" WAYLAND_DISPLAY="$WSOCK" \
+            LD_PRELOAD="/opt/ezsteam/lib/libezs_drm.so${LD_PRELOAD:+:$LD_PRELOAD}" \
+            LD_LIBRARY_PATH="$MX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            __EGL_VENDOR_LIBRARY_FILENAMES="$MX/egl.json" GBM_BACKENDS_PATH="$MX/lib/gbm" \
+            LIBGL_DRIVERS_PATH="$MX/lib/dri" MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink \
+            VK_DRIVER_FILES="$MX/icd.json" VK_ICD_FILENAMES="$MX/icd.json" EZS_TU_DRM=1 \
+            Xwayland :$D -geometry ${W}x${H} -nolisten tcp -ac -noreset ${1:+-fp "$1"} >/tmp/ezs-xvfb-display.log 2>&1 &
+    else
+        # Shared memory buffers only (no GPU node) / 공유 메모리 버퍼만(GPU 노드 없음)
+        XDG_RUNTIME_DIR="$XR" WAYLAND_DISPLAY="$WSOCK" Xwayland :$D -geometry ${W}x${H} -shm -nolisten tcp -ac -noreset ${1:+-fp "$1"} \
+            >/tmp/ezs-xvfb-display.log 2>&1 &
+    fi
+    XPID=$!
+    i=0
+    while [ ! -S /tmp/.X11-unix/X$D ] && [ $i -lt 100 ]; do
+        sleep 0.1; i=$((i + 1))
+    done
+    if [ ! -S /tmp/.X11-unix/X$D ]; then
+        echo "WARN wayland : Xwayland 시작 안 됨"
+        head -n 20 /tmp/ezs-xvfb-display.log
+        kill $XPID $WPID 2>/dev/null; WPID=""
+        return 1
+    fi
+    # What glamor did (GPU drawing of the X server) / glamor 결과(X 서버의 GPU 그리기)
+    sleep 0.5
+    grep -i -E 'glamor|gbm|egl|dri3|zink|drm' /tmp/ezs-xvfb-display.log | head -n 8 | sed 's/^/INFO xwayland : /'
+    echo "INFO wayland : Xwayland :$D ${W}x${H}, $([ $GPUOK = 1 ] && echo "GPU 노드 $RDEV (glamor 시도)" || echo "공유 메모리")"
+    return 0
+}
+XSERVER=xvfb
+if [ "${EZS_XSERVER:-xvfb}" = xwayland ]; then
+    if ! command -v Xwayland >/dev/null 2>&1; then
+        echo "WARN wayland : Xwayland 없음 → Xvfb ([시험 도구 설치]나 Steam 시작의 라이브러리 설치가 받음)"
+    elif [ ! -x "$WL" ]; then
+        echo "WARN wayland : ezs-wl 없음 → Xvfb"
+    elif start_xwayland "$XFP"; then
+        XSERVER=xwayland
+    else
+        echo "WARN wayland : Xwayland 경로 실패 → Xvfb"
+        rm -f /tmp/.X11-unix/X$D /tmp/.X$D-lock
+        rm -rf "$FB" && mkdir -p "$FB"
+    fi
+fi
+[ $XSERVER = xvfb ] && start_xvfb "$XFP"
+if [ $XSERVER = xvfb ] && [ ! -S /tmp/.X11-unix/X$D ] && [ -n "$XFP" ]; then
     # Started without the Korean font folder if the font path was refused
     # 글꼴 경로가 거부되면 한글 글꼴 폴더 없이 다시 시작함
     echo "WARN font : X 글꼴 경로로 시작 실패, 기본 글꼴로 다시 시작"
@@ -98,7 +187,9 @@ if [ ! -S /tmp/.X11-unix/X$D ]; then
     echo "FAIL xvfb : 시작 안 됨"; head -n 40 /tmp/ezs-xvfb-display.log; kill $XPID 2>/dev/null; exit 0
 fi
 echo "INFO id : $(id -u):$(id -g) mode=$MODE"
-echo "OK   xvfb : :$D ${W}x${H}x24, $(ls -l "$FB/Xvfb_screen0" | awk '{print $5}') B"
+echo "OK   xvfb : :$D ${W}x${H}x24, $(ls -l "$FB/Xvfb_screen0" | awk '{print $5}') B, 서버 $XSERVER"
+# For steam-run.sh and EZ Proton: which X server is running / steam-run.sh와 EZ Proton용: 어떤 X 서버인지
+export EZS_XSERVER_RUNNING=$XSERVER
 export DISPLAY=:$D
 
 PIDS=""
@@ -154,7 +245,7 @@ fi
 while read -r _; do :; done
 kill ${LOOP:-} 2>/dev/null
 [ -f /tmp/ezs-vkcube.pid ] && kill "$(cat /tmp/ezs-vkcube.pid)" 2>/dev/null
-kill $PIDS $XPID 2>/dev/null
+kill $PIDS $XPID $WPID 2>/dev/null
 wait $XPID 2>/dev/null
 tail -n 3 /tmp/ezs-vkcube-display.log 2>/dev/null | sed 's/^/INFO vkcube : /'
 echo "DONE"

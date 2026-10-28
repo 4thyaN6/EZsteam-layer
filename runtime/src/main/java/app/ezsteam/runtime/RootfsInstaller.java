@@ -221,8 +221,40 @@ public final class RootfsInstaller {
         return copyAssetTree(ctx, SCRIPTS_ASSET, new File(root, "opt/" + SCRIPTS_ASSET));
     }
 
+    /** Large asset folders copied once per installed APK (not on every start) / 설치된 APK마다 한 번만 복사하는 큰 asset 폴더 */
+    private static final String[] ONCE_PER_APK = {SCRIPTS_ASSET + "/mesax"};
+
+    /** Identity of the installed APK (install time + version code) / 설치된 APK의 식별값(설치 시각 + 버전 코드) */
+    private static String apkStamp(Context ctx) {
+        try {
+            android.content.pm.PackageInfo pi = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0);
+            return pi.lastUpdateTime + " " + pi.versionCode;
+        } catch (android.content.pm.PackageManager.NameNotFoundException e) {
+            return "";
+        }
+    }
+
     /** Recursive asset copy; returns the number of files written / asset 재귀 복사, 쓴 파일 수를 돌려줌 */
     private static int copyAssetTree(Context ctx, String path, File dest) throws IOException {
+        // The Mesa bundle (tens of MB) only when the APK changed: a stamp file next to it says which
+        // APK it came from / Mesa 묶음(수십 MB)은 APK가 바뀌었을 때만: 옆의 표시 파일이 어느 APK에서 왔는지 알려 줌
+        for (String once : ONCE_PER_APK) {
+            if (!once.equals(path)) continue;
+            String stamp = apkStamp(ctx);
+            File mark = new File(dest, ".apk-stamp");
+            if (!stamp.isEmpty() && mark.isFile()
+                    && stamp.equals(new String(java.nio.file.Files.readAllBytes(mark.toPath()), StandardCharsets.UTF_8))) {
+                return 0;
+            }
+            if (mark.isFile() && !mark.delete()) throw new IOException("cannot replace " + mark);
+            int n = copyAssetFiles(ctx, path, dest);
+            if (n > 0 && !stamp.isEmpty()) java.nio.file.Files.write(mark.toPath(), stamp.getBytes(StandardCharsets.UTF_8));
+            return n;
+        }
+        return copyAssetFiles(ctx, path, dest);
+    }
+
+    private static int copyAssetFiles(Context ctx, String path, File dest) throws IOException {
         String[] names = ctx.getAssets().list(path);
         if (names == null || names.length == 0) {
             // A file (list() is empty for files) / 파일임(파일은 list()가 비어 있음)

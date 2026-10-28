@@ -157,8 +157,11 @@
     <string name="test_ahb">AHB compression</string>
     <string name="test_cpu">CPU placement</string>
     <string name="test_fsync">Fast sync</string>
+    <string name="test_gpu_node">GPU device</string>
     <string name="test_hidraw">HIDRAW</string>
     <string name="test_tso">FEX TSO</string>
+    <string name="test_xserver">Screen server</string>
+    <string name="test_zink">Zink GL</string>
     <string name="v_auto_end">End it</string>
     <string name="v_big_cores">Big cores only</string>
     <string name="v_big_picture">Big Picture</string>
@@ -174,6 +177,8 @@
     <string name="v_reduced">Reduced</string>
     <string name="v_shown">Shown</string>
     <string name="v_times">%1$dx</string>
+    <string name="v_xvfb">Xvfb</string>
+    <string name="v_xwayland">Xwayland</string>
     <string-array name="fsr_out">
         <item>Screen size</item>
         <item>1920x1200</item>

@@ -93,6 +93,56 @@ if m:
         [ -n "$c" ] && installable "$c" && { echo "$c"; break; }
     done
 }
+# Packages for the GPU display path test switches (app [시험], files in /home/steam/.local/share/ezsteam),
+# asked for only while a switch is on: Xwayland for the "Xwayland" screen server; the glvnd front
+# ends (libGL/libGLX/libEGL) and the libraries /opt/ezsteam/mesax needs for "Zink GL" / "GPU device".
+# Nothing is installed while all three are off.
+# GPU 화면 경로 시험 스위치용 패키지(앱 [시험], /home/steam/.local/share/ezsteam의 파일). 스위치가 켜졌을 때만 요청함:
+# "Xwayland" 화면 방식에는 Xwayland, "Zink GL" / "GPU 장치"에는 glvnd 앞단(libGL/libGLX/libEGL)과 /opt/ezsteam/mesax가
+# 필요로 하는 라이브러리. 셋 다 끄면 아무것도 설치하지 않음
+SW=/home/steam/.local/share/ezsteam
+MX=/opt/ezsteam/mesax
+gpu_missing() {
+    if [ -f "$SW/xwayland" ] && ! command -v Xwayland >/dev/null 2>&1; then echo xwayland; fi
+    if [ -f "$SW/zink-gl" ] || [ -f "$SW/gpu-node" ]; then
+        # glvnd front ends, looked up as files (ldconfig is not on the PATH here)
+        # glvnd 앞단, 파일로 찾음(여기서 ldconfig는 PATH에 없음)
+        LD=/usr/lib/aarch64-linux-gnu
+        [ -e "$LD/libGL.so.1" ] || echo libgl1
+        [ -e "$LD/libGLX.so.0" ] || echo libglx0
+        [ -e "$LD/libEGL.so.1" ] || echo libegl1
+        [ -e "$LD/libGLESv2.so.2" ] || echo libgles2
+        [ -e "$LD/libGLdispatch.so.0" ] || echo libglvnd0
+        # Libraries the bundle links to that are neither in the bundle nor in the rootfs (ldd)
+        # 묶음이 링크하지만 묶음에도 rootfs에도 없는 라이브러리(ldd)
+        for f in "$MX"/lib/*.so* "$MX"/lib/gbm/*.so; do
+            [ -f "$f" ] || continue
+            LD_LIBRARY_PATH="$MX/lib" ldd "$f" 2>/dev/null | awk '/not found/ {print $1}'
+        done | sort -u | while IFS= read -r so; do
+            p=$(pkg_for "$so")
+            if [ -n "$p" ]; then echo "$p"; else echo "WARN deps : $so 패키지 이름 없음" >&2; fi
+        done
+    fi
+}
+gpu=$(gpu_missing | sort -u | tr '\n' ' ' | sed 's/ *$//')
+if [ -n "$gpu" ]; then
+    if [ "$MODE" = install ]; then
+        ls /var/lib/apt/lists/*Packages >/dev/null 2>&1 || $APT update >/dev/null || echo "FAIL apt-update"
+        if out=$($APT install -y --no-install-recommends $gpu 2>&1); then
+            echo "OK   deps : GPU 화면 경로 시험 패키지 설치 ($gpu)"
+        else
+            echo "FAIL deps : GPU 화면 경로 시험 패키지 설치 실패 ($gpu)"
+            echo "$out" | tail -n 3 | sed 's/^/FAIL deps :   /'
+        fi
+    elif [ -n "${EZS_DEPS_REQUEST:-}" ]; then
+        : > "$EZS_DEPS_REQUEST"
+        echo "NEED deps : $gpu"
+        exit 0
+    else
+        echo "WARN deps : GPU 화면 경로 시험 패키지 없음 ($gpu)"
+    fi
+fi
+
 # Libraries the client ships itself somewhere deeper in its folder (e.g. libcef.so and its video
 # libraries) are not missing: the client loads them from there. A tester got FAIL lines for
 # libcef.so / libav*.so.* that apt cannot provide

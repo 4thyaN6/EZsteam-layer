@@ -186,6 +186,15 @@ case "${1:-}" in
         ;;
 esac
 
+# GPU display path test switches for the game (Steam passes the app's EZS_* settings on; the
+# switch files are read when they did not arrive). Output to the Proton log side (stderr)
+# 게임용 GPU 화면 경로 시험 스위치(Steam이 앱의 EZS_* 설정을 넘김. 오지 않았으면 스위치 파일을 읽음). 출력은 Proton
+# 로그 쪽(stderr)
+[ -n "${EZS_ZINK:-}" ] || { [ -f "$HOME/.local/share/ezsteam/zink-gl" ] && export EZS_ZINK=1; }
+[ -n "${EZS_GPU_NODE:-}" ] || { [ -f "$HOME/.local/share/ezsteam/gpu-node" ] && [ -c /dev/dri/renderD128 ] && export EZS_GPU_NODE=1; }
+EZG_P=ezproton
+. /opt/ezsteam/ezs-gpupath.sh >&2
+
 # Valve's script is "#!/usr/bin/env python3"; under PRoot it resolves to the rootfs python3
 # Valve 스크립트는 "#!/usr/bin/env python3"이며 PRoot 안에서는 rootfs의 python3로 실행됨
 echo "ezproton: $PROTON_DIR $*" >&2

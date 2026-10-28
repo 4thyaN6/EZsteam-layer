@@ -123,6 +123,31 @@ jobs:
           path: out/
           retention-days: 7
 
+  mesax:
+    # Mesa with Zink (OpenGL on Vulkan) + GLX/EGL/GBM + Turnip built with libdrm, for the Zink GL and
+    # GPU device test switches. Same Mesa release and source fetch as the turnip job; own cache key.
+    # Zink GL, GPU 장치 시험 스위치용 Mesa: Zink(Vulkan 위 OpenGL) + GLX/EGL/GBM + libdrm과 함께 빌드한
+    # Turnip. turnip 작업과 같은 Mesa 릴리스와 소스 받기, 캐시 키는 따로
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          key: mesax-${{ hashFiles('tools/build-mesax.sh', 'tools/build-turnip-glibc.sh', 'tools/patches/mesa-*') }}
+          path: out-mesax/
+      - name: mesa source
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: sh tools/build-turnip-glibc.sh fetch src-mesa/mesa.tar.xz
+      - name: mesax
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: docker run --rm -v "$PWD:/src" -w /src debian:trixie sh tools/build-mesax.sh out-mesax src-mesa/mesa.tar.xz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mesax
+          path: out-mesax/
+          retention-days: 14
+
   alsa:
     # ALSA playback plugin and game controller preload library for the rootfs (sound -> app ->
     # Android AudioTrack; Android controller -> app -> Wine), glibc aarch64,
@@ -174,7 +199,7 @@ jobs:
           retention-days: 14
 
   apk:
-    needs: [proot, rootfs, turnip, alsa, lsfg, present]
+    needs: [proot, rootfs, turnip, alsa, lsfg, present, mesax]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -221,6 +246,10 @@ jobs:
           # present 레이어를 설명 파일 옆에 둠(rootfs-overlay/opt/ezsteam/present)
           mkdir -p rootfs-overlay/opt/ezsteam/present
           cp alsa-artifact/libezs_present_layer.so rootfs-overlay/opt/ezsteam/present/
+          # Guest Wayland compositor (Xwayland screen mode) and libdrm shim (GPU device switch)
+          # rootfs 안 Wayland 컴포지터(Xwayland 화면 방식)와 libdrm 심(GPU 장치 스위치)
+          cp alsa-artifact/bin/ezs-wl rootfs-overlay/opt/ezsteam/bin/
+          cp alsa-artifact/libezs_drm.so rootfs-overlay/opt/ezsteam/lib/
           cat alsa-artifact/alsa-plugin.version
 
       # App side of the game frame path into the runtime module's jniLibs (next to PRoot)
@@ -247,6 +276,20 @@ jobs:
           mkdir -p rootfs-overlay/opt/ezsteam/lsfg
           cp -r lsfg-artifact/. rootfs-overlay/opt/ezsteam/lsfg/
           cat lsfg-artifact/source.txt
+
+      # Zink/GLX/EGL/GBM + Turnip-with-libdrm into /opt/ezsteam/mesax (used only with the Zink GL or
+      # GPU device test switch) / Zink/GLX/EGL/GBM + libdrm Turnip을 /opt/ezsteam/mesax에 넣음(Zink GL이나
+      # GPU 장치 시험 스위치일 때만 씀)
+      - uses: actions/download-artifact@v4
+        with:
+          name: mesax
+          path: mesax-artifact
+      - name: place mesax
+        run: |
+          mkdir -p rootfs-overlay/opt/ezsteam/mesax
+          tar -xJf mesax-artifact/mesax.tar.xz -C rootfs-overlay/opt/ezsteam/mesax
+          cat rootfs-overlay/opt/ezsteam/mesax/source.txt
+          du -sh rootfs-overlay/opt/ezsteam/mesax
 
       - uses: actions/setup-java@v4
         with:

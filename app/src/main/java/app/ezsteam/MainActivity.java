@@ -306,6 +306,16 @@ public class MainActivity extends Activity {
         fileSwitch(f, s(R.string.test_tso), "fex-tso-off", R.string.v_off, R.string.v_default);
         fileSwitch(f, s(R.string.test_cpu), "cpu-big", R.string.v_big_cores, R.string.v_default);
         fileSwitch(f, s(R.string.test_hidraw), "hidraw-off", R.string.v_off, R.string.v_default);
+        // GPU display path, step by step (each off = the current path): Zink GL = OpenGL through
+        // Zink on Vulkan (/opt/ezsteam/mesax) for the Steam client and games; GPU device = the
+        // Android GPU also shown as /dev/dri/renderD128 with the libdrm shim; screen server =
+        // Xwayland on our guest compositor ezs-wl instead of Xvfb. Read at the next Steam start
+        // GPU 화면 경로, 단계별(각각 끄면 지금 경로): Zink GL = Steam 클라이언트와 게임의 OpenGL을 Vulkan 위
+        // Zink로(/opt/ezsteam/mesax), GPU 장치 = 안드로이드 GPU를 libdrm 심과 함께 /dev/dri/renderD128로도 보임,
+        // 화면 방식 = Xvfb 대신 자체 rootfs 컴포지터 ezs-wl 위의 Xwayland. 다음 Steam 시작 때 읽음
+        fileSwitch(f, s(R.string.test_zink), SW_ZINK, R.string.v_on, R.string.v_off);
+        fileSwitch(f, s(R.string.test_gpu_node), SW_GPU_NODE, R.string.v_on, R.string.v_off);
+        fileSwitch(f, s(R.string.test_xserver), SW_XWAYLAND, R.string.v_xwayland, R.string.v_xvfb);
         // AHB compression test: GPU-only game buffers in the layout the start-up check found
         // (Qualcomm compressed). Off by default; this device's gralloc keeps them linear.
         // AHB 압축 시험: 시작 확인이 찾은 배치(Qualcomm 압축)로 GPU 전용 게임 버퍼. 기본 끔. 이 기기 gralloc은 linear로 둠
@@ -763,7 +773,7 @@ public class MainActivity extends Activity {
                     throw new IOException("지울 수 없음");
                 }
                 b.setText(s(R.string.fmt_name_value, name, s(on ? onRes : offRes)));
-                log(name + ": " + s(on ? onRes : offRes) + " (다음 게임 시작부터)");
+                log(name + ": " + s(on ? onRes : offRes) + " (다음 게임 시작부터, 화면 경로 스위치는 다음 Steam 시작부터)");
             } catch (IOException e) {
                 log(name + " 설정 실패: " + e.getMessage());
             }
@@ -929,6 +939,14 @@ public class MainActivity extends Activity {
     }
 
     /** The file compat/ezproton reads for the Native choice / compat/ezproton이 Native 선택으로 읽는 파일 */
+    /** Switch files of the GPU display path (see the [시험] section) / GPU 화면 경로 스위치 파일([시험] 영역 참고) */
+    static final String SW_ZINK = "zink-gl", SW_GPU_NODE = "gpu-node", SW_XWAYLAND = "xwayland";
+
+    /** True when a test switch file is present / 시험 스위치 파일이 있으면 참 */
+    static boolean testSwitch(android.content.Context ctx, String name) {
+        return new File(RootfsInstaller.rootfsDir(ctx), "home/steam/.local/share/ezsteam/" + name).isFile();
+    }
+
     private File dxNativeFile() {
         return new File(RootfsInstaller.rootfsDir(this), "home/steam/.local/share/ezsteam/dx-native");
     }

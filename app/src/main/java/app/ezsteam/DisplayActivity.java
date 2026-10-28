@@ -1015,6 +1015,7 @@ public class DisplayActivity extends Activity {
             }
             c.display = ":" + DISPLAY;
             log("모드 " + mode);
+            applyDisplayPathSwitches(c);
             // Sound of the programs in the rootfs (ALSA plugin -> socket -> AudioTrack), started
             // before them so the first sound already finds the socket
             // rootfs 프로그램의 소리(ALSA 플러그인 -> 소켓 -> AudioTrack). 첫 소리가 소켓을 찾도록 먼저 시작함
@@ -2723,6 +2724,45 @@ public class DisplayActivity extends Activity {
         return null;
     }
 
+    /** Zink GL test switch was on at this start / 이번 시작에 Zink GL 시험 스위치가 켜져 있었음 */
+    private volatile boolean zinkOn;
+
+    /**
+     * GPU display path test switches (MainActivity [시험], files in ~/.local/share/ezsteam), each off
+     * by default = the current path:
+     *   zink-gl   EZS_ZINK=1: steam-run.sh / EZ Proton put Zink (OpenGL on Vulkan, /opt/ezsteam/mesax)
+     *             in front of GL for the Steam client and games
+     *   gpu-node  /dev/kgsl-3d0 also bound to /dev/dri/renderD128, EZS_GPU_NODE=1 (libdrm shim,
+     *             Turnip DRM numbers, X11 DRI3 path)
+     *   xwayland  EZS_XSERVER=xwayland: display.sh starts ezs-wl + Xwayland instead of Xvfb
+     * GPU 화면 경로 시험 스위치(MainActivity [시험], ~/.local/share/ezsteam의 파일). 각각 기본 끔 = 지금 경로:
+     *   zink-gl   EZS_ZINK=1: steam-run.sh / EZ Proton이 Steam 클라이언트와 게임의 GL 앞에 Zink(Vulkan 위 OpenGL,
+     *             /opt/ezsteam/mesax)를 둠
+     *   gpu-node  /dev/kgsl-3d0을 /dev/dri/renderD128에도 바인드, EZS_GPU_NODE=1(libdrm 심, Turnip DRM 번호, X11 DRI3 경로)
+     *   xwayland  EZS_XSERVER=xwayland: display.sh가 Xvfb 대신 ezs-wl + Xwayland를 띄움
+     */
+    private void applyDisplayPathSwitches(GlibcLauncher.Config c) {
+        boolean zink = MainActivity.testSwitch(this, MainActivity.SW_ZINK);
+        boolean node = MainActivity.testSwitch(this, MainActivity.SW_GPU_NODE);
+        boolean xwl = MainActivity.testSwitch(this, MainActivity.SW_XWAYLAND);
+        zinkOn = zink;
+        if (zink) c.env.put("EZS_ZINK", "1");
+        String nodeState = "끔";
+        if (node) {
+            File kgsl = new File("/dev/kgsl-3d0");
+            if (kgsl.exists()) {
+                c.binds.add(new String[]{kgsl.getPath(), "/dev/dri/renderD128"});
+                c.env.put("EZS_GPU_NODE", "1");
+                nodeState = "켬 (/dev/kgsl-3d0 → /dev/dri/renderD128)";
+            } else {
+                nodeState = "켬이나 /dev/kgsl-3d0 없음 → 끔";
+            }
+        }
+        if (xwl) c.env.put("EZS_XSERVER", "xwayland");
+        log("시험 스위치: Zink GL " + (zink ? "켬" : "끔") + ", GPU 장치 " + nodeState
+                + ", 화면 방식 " + (xwl ? "Xwayland" : "Xvfb"));
+    }
+
     /** This Steam start drew its UI with the GPU / was started in Big Picture (from the start line)
      *  이번 Steam 시작이 화면을 GPU로 그림 / 빅픽처로 시작함(시작 줄에서 읽음) */
     private volatile boolean steamUiGpu, steamStartBp, bpRestartAsked;
@@ -2743,6 +2783,13 @@ public class DisplayActivity extends Activity {
      */
     private void onBigPicture(int win, String sign) {
         if (!steamUiGpu || steamStartBp || bpRestartAsked) return;
+        // Zink GL test: Big Picture stays on the GPU so the GL window can be checked (no restart)
+        // Zink GL 시험: GL 창을 확인할 수 있게 빅픽처를 GPU로 둠(다시 시작하지 않음)
+        if (zinkOn) {
+            bpRestartAsked = true;
+            log(String.format(Locale.ROOT, "빅픽처 창 0x%x(%s): Zink GL 켬 → GPU로 그대로 둠 (다시 시작 안 함)", win, sign));
+            return;
+        }
         GlibcLauncher.Config c = sessionConfig;
         if (c == null) return;
         // A running game would end with the client: leave it, tell the user
@@ -3692,6 +3739,13 @@ public class DisplayActivity extends Activity {
         if (whLog.isFile()) {
             files.add(whLog);
             alias.put(whLog, "steamwebhelper-output.log");
+        }
+        // X server output (Xvfb or Xwayland: glamor / GBM / EGL start-up for the GPU display path test)
+        // X 서버 출력(Xvfb 또는 Xwayland: GPU 화면 경로 시험용 glamor / GBM / EGL 시작 줄)
+        File xLog = new File(rootfs, "tmp/ezs-xvfb-display.log");
+        if (xLog.isFile()) {
+            files.add(xLog);
+            alias.put(xLog, "xserver.log");
         }
         // Unity games' own logs (Player.log in each prefix, newest 3): a game that stays on a black
         // screen leaves its reason there, not in the Proton log (2026-10-18)

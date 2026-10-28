@@ -15,3 +15,8 @@ runtime/src/main/assets/proot-source.txt
 # Built by tools/build-alsa-plugin.sh (CI artifact "alsa") / tools/build-alsa-plugin.sh가 만드는 파일
 out-alsa/
 rootfs-overlay/opt/ezsteam/lib/
+rootfs-overlay/opt/ezsteam/bin/ezs-wl
+# Built by tools/build-mesax.sh (CI artifact "mesax") / tools/build-mesax.sh가 만드는 파일
+out-mesax/
+src-mesa/
+rootfs-overlay/opt/ezsteam/mesax/

@@ -23,6 +23,7 @@
 # 소스: 아래 libsdl-org/SDL GitHub 릴리스 태그(zlib 라이선스)
 #
 # Output / 결과물: libasound_module_pcm_ezs.so, libezs_pad.so, libSDL2-2.0.so.0, libezs_compat.so, libezs_fsync.so,
+#                  bin/ezs-wl, libezs_drm.so,
 #                  alsa-plugin.version
 set -eu
 OUT="${1:-out-alsa}"
@@ -39,7 +40,7 @@ apt-get update -q
 # g++: SDL2 CMakeLists가 "project(SDL2 C CXX)"로 선언해서, 여기서 C++을 빌드하지 않아도 C++ 컴파일러가
 # 없으면 CMake가 멈춤
 apt-get install -y -q --no-install-recommends gcc g++ libc6-dev libasound2-dev libvulkan-dev binutils git cmake make \
-    ca-certificates pkgconf
+    ca-certificates pkgconf libwayland-dev libwayland-bin wayland-protocols
 
 mkdir -p "$OUT"
 # -DPIC: alsa-lib's plugin macros need it for a shared object (else snd_dlsym_start is undefined)
@@ -123,6 +124,32 @@ gcc -shared -fPIC -O2 -Wall -Wextra -fvisibility=hidden -o "$OUT/libezs_present_
 strip --strip-unneeded "$OUT/libezs_present_layer.so"
 nm -D "$OUT/libezs_present_layer.so" | grep -q ' T ezs_NegotiateLoaderLayerInterfaceVersion$'
 objdump -p "$OUT/libezs_present_layer.so" | grep NEEDED
+
+# Guest Wayland compositor for the Xwayland screen mode (native/ezswl): protocol code generated
+# from Debian's wayland-protocols, needs only libwayland-server
+# Xwayland 화면 방식용 rootfs 안 Wayland 컴포지터(native/ezswl): 프로토콜 코드는 Debian
+# wayland-protocols에서 생성함. libwayland-server만 필요함
+WP=/usr/share/wayland-protocols
+G=/tmp/ezswl-gen
+mkdir -p "$G"
+wayland-scanner server-header "$WP/stable/xdg-shell/xdg-shell.xml" "$G/xdg-shell-server-protocol.h"
+wayland-scanner private-code "$WP/stable/xdg-shell/xdg-shell.xml" "$G/xdg-shell-protocol.c"
+wayland-scanner server-header "$WP/stable/linux-dmabuf/linux-dmabuf-v1.xml" "$G/linux-dmabuf-v1-server-protocol.h"
+wayland-scanner private-code "$WP/stable/linux-dmabuf/linux-dmabuf-v1.xml" "$G/linux-dmabuf-v1-protocol.c"
+mkdir -p "$OUT/bin"
+gcc -O2 -Wall -Wextra -I"$G" -o "$OUT/bin/ezs-wl" native/ezswl/ezs_wl.c "$G/xdg-shell-protocol.c" \
+    "$G/linux-dmabuf-v1-protocol.c" $(pkg-config --cflags --libs wayland-server)
+strip --strip-unneeded "$OUT/bin/ezs-wl"
+objdump -p "$OUT/bin/ezs-wl" | grep NEEDED
+
+# libdrm checks for the Android GPU device (native/ezsdrm), preloaded only with the "GPU device"
+# test switch; no libdrm link (the real one is reached through RTLD_NEXT)
+# 안드로이드 GPU 장치용 libdrm 검사 심(native/ezsdrm). "GPU 장치" 시험 스위치일 때만 미리 불러옴.
+# libdrm에 링크하지 않음(실제 libdrm은 RTLD_NEXT로 부름)
+gcc -shared -fPIC -O2 -Wall -Wextra -o "$OUT/libezs_drm.so" native/ezsdrm/ezs_drm.c -ldl -lpthread
+strip --strip-unneeded "$OUT/libezs_drm.so"
+nm -D "$OUT/libezs_drm.so" | grep -q ' T drmGetDevice2$'
+nm -D "$OUT/libezs_drm.so" | grep -q ' T drmPrimeFDToHandle$'
 
 dpkg-query -W -f='libasound2-dev ${Version}\n' libasound2-dev > "$OUT/alsa-plugin.version"
 echo "SDL $SDL_TAG, SDL3 headers $SDL3_TAG" >> "$OUT/alsa-plugin.version"
