@@ -26,6 +26,20 @@ MODE=${3:-test}
 D=98
 FB=/tmp/ezs-fb
 
+# GPU path check runs without Steam, so nothing else installs what its switches need (Xwayland,
+# glvnd front ends): done here as fake root when something is missing (network, once)
+# GPU 경로 점검은 Steam 없이 돌아서 스위치에 필요한 것(Xwayland, glvnd 앞단)을 설치하는 곳이 없음: 빠진 것이 있으면 여기서
+# 가짜 root로 설치함(네트워크, 한 번)
+if [ "$MODE" = gpucheck ]; then
+    SWD=/home/steam/.local/share/ezsteam
+    need=0
+    if [ -f "$SWD/xwayland" ] && ! command -v Xwayland >/dev/null 2>&1; then need=1; fi
+    if { [ -f "$SWD/zink-gl" ] || [ -f "$SWD/gpu-node" ]; } && [ ! -e /usr/lib/aarch64-linux-gnu/libGLX.so.0 ]; then need=1; fi
+    if [ $need = 1 ]; then
+        echo "INFO deps : GPU 경로 점검에 필요한 패키지 설치 (네트워크 사용)"
+        sh /opt/ezsteam/steam-deps.sh install 2>&1 | grep -E '^(OK|FAIL|WARN) ' | sed 's/^/DEPS /'
+    fi
+fi
 command -v Xvfb >/dev/null 2>&1 || { echo "FAIL tools : Xvfb 없음 ([시험 도구 설치] 먼저)"; exit 0; }
 command -v xkbcomp >/dev/null 2>&1 || { echo "FAIL xkb : xkbcomp 없음 ([시험 도구 설치] 다시)"; exit 0; }
 echo "INFO driver : VK_DRIVER_FILES=${VK_DRIVER_FILES:-(없음)} MESA_VK_WSI_DEBUG=${MESA_VK_WSI_DEBUG:-(없음)}"

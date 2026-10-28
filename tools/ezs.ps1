@@ -10,7 +10,12 @@ param(
     # steam = Steam 새로 시작(스위치는 앱에서 정한 그대로), 기다린 뒤 제보
     [Parameter(Mandatory = $true)][ValidateSet('push', 'install', 'check', 'report', 'steam')][string]$Cmd,
     # steam: seconds to wait after the start before the report / steam: 시작 뒤 제보까지 기다리는 초
-    [int]$Wait = 90
+    [int]$Wait = 90,
+    # Display path for steam: '' = as set in the app, xvfb = Zink GL on Xvfb, xwayland = Zink GL +
+    # GPU device + Xwayland (set through the app's switch files, kept afterwards)
+    # steam의 화면 경로: '' = 앱에서 정한 그대로, xvfb = Xvfb 위 Zink GL, xwayland = Zink GL + GPU 장치 + Xwayland
+    # (앱의 스위치 파일로 정하고, 끝난 뒤에도 그대로 둠)
+    [ValidateSet('', 'xvfb', 'xwayland')][string]$Path = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -92,7 +97,45 @@ if ($Cmd -eq 'report') {
     return
 }
 
+# The app's test switch files (MainActivity [시험]), written with run-as (debug APK)
+# 앱의 시험 스위치 파일(MainActivity [시험]), run-as로 씀(디버그 APK)
+$SwDir = 'files/ezs/home/steam/.local/share/ezsteam'
+function Get-Switches {
+    $have = @(Invoke-Adb shell run-as $Pkg ls $SwDir)
+    return @('zink-gl', 'gpu-node', 'xwayland') | Where-Object { $have -contains $_ }
+}
+function Set-Switches([string[]]$On) {
+    Invoke-Adb shell run-as $Pkg mkdir -p $SwDir | Out-Null
+    foreach ($n in @('zink-gl', 'gpu-node', 'xwayland')) {
+        if ($On -contains $n) { Invoke-Adb shell run-as $Pkg touch "$SwDir/$n" | Out-Null }
+        else { Invoke-Adb shell run-as $Pkg rm -f "$SwDir/$n" | Out-Null }
+    }
+    Write-Host "스위치: $(if ($On) { $On -join ', ' } else { '모두 끔' })"
+}
+$PathSwitches = @{ 'xvfb' = @('zink-gl'); 'xwayland' = @('zink-gl', 'gpu-node', 'xwayland') }
+
+# One GPU path check run; returns its log lines / GPU 경로 점검 한 번, 그 로그 줄을 돌려줌
+function Invoke-Check {
+    # The previous result moves aside first, so only the new run's log can carry "CHECK 요약"
+    # 이전 결과를 먼저 옮겨 둠: "CHECK 요약"은 새 실행의 로그에만 있게 됨
+    Invoke-Adb shell run-as $Pkg mv -f $GpuLog ($GpuLog -replace 'gpu-check\.log$', 'gpu-check-prev.log') | Out-Null
+    Invoke-Adb shell am force-stop $Pkg | Out-Null
+    $o = Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run gpucheck
+    if (($o -join ' ') -match 'Error') { Write-Host ($o -join "`n"); throw '앱 시작 실패 (태블릿 연결·USB 디버깅 확인)' }
+    Write-Host 'GPU 경로 점검 시작, 결과 기다리는 중 (최대 5분)...'
+    $txt = @()
+    for ($i = 0; $i -lt 150; $i++) {
+        Start-Sleep -Seconds 2
+        $txt = @(Invoke-Adb shell run-as $Pkg cat $GpuLog)
+        if (($txt -join "`n") -match 'CHECK 요약') { break }
+    }
+    if (($txt -join "`n") -notmatch 'CHECK 요약') { Write-Host '점검이 끝나지 않음 (5분)' }
+    $txt | Where-Object { $_ -match '^(CHECK|INFO check|FAIL check|WARN)' -and $_ -notmatch ':   ' } | ForEach-Object { Write-Host $_ }
+    Write-Host ''
+}
+
 if ($Cmd -eq 'steam') {
+    if ($Path) { Set-Switches $PathSwitches[$Path] }
     # Fresh Steam start, the tablet untouched; the report after $Wait seconds (Big Picture failures
     # showed within about 15 s of the start, 2026-10-28)
     # Steam 새로 시작, 태블릿은 손대지 않음. $Wait초 뒤 제보(빅픽처 실패는 시작 뒤 약 15초 안에 나왔음, 2026-10-28)
@@ -106,26 +149,19 @@ if ($Cmd -eq 'steam') {
 }
 
 if ($Cmd -eq 'check') {
-    # Fresh start of the app straight into the GPU path check (switches as set in the app)
-    # 앱을 새로 시작해 바로 GPU 경로 점검으로(스위치는 앱에서 정한 그대로)
-    $t0 = [int][double]::Parse((Invoke-Adb shell 'date +%s') -join '')
-    Invoke-Adb shell am force-stop $Pkg | Out-Null
-    $o = Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run gpucheck
-    if (($o -join ' ') -match 'Error') { Write-Host ($o -join "`n"); throw '앱 시작 실패 (태블릿 연결·USB 디버깅 확인)' }
-    Write-Host 'GPU 경로 점검 시작, 결과 기다리는 중 (최대 5분)...'
-    $done = $false
-    for ($i = 0; $i -lt 150 -and -not $done; $i++) {
-        Start-Sleep -Seconds 2
-        $m = (Invoke-Adb shell run-as $Pkg stat -c %Y $GpuLog) -join ''
-        if ($m -match '^\d+$' -and [int]$m -ge $t0) {
-            $txt = Invoke-Adb shell run-as $Pkg cat $GpuLog
-            if (($txt -join "`n") -match 'CHECK 요약') { $done = $true }
-        }
-    }
-    if (-not $done) { Write-Host '점검이 끝나지 않음 (5분). 지금 상태로 제보를 가져옴' }
-    $txt | Where-Object { $_ -match '^(CHECK|INFO check|FAIL check)' -and $_ -notmatch ':   ' } | ForEach-Object { Write-Host $_ }
-    Write-Host ''
+    # Both display paths in one go, the app's own switches put back afterwards; the report holds
+    # both runs (gpu-check-prev.log = Xvfb, gpu-check.log = Xwayland + GPU device)
+    # 두 화면 경로를 한 번에 점검하고, 끝나면 앱의 스위치를 되돌림. 제보에 두 실행이 모두 들어감
+    # (gpu-check-prev.log = Xvfb, gpu-check.log = Xwayland + GPU 장치)
+    $saved = @(Get-Switches)
+    Write-Host '== 1/2: Zink GL + Xvfb'
+    Set-Switches $PathSwitches['xvfb']
+    Invoke-Check
+    Write-Host '== 2/2: Zink GL + GPU 장치 + Xwayland'
+    Set-Switches $PathSwitches['xwayland']
+    Invoke-Check
     Get-Report | Out-Null
+    Set-Switches $saved
     return
 }
 
