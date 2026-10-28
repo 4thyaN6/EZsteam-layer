@@ -3,7 +3,7 @@
 # (-fbdir, XWD format), shown live by the app (DisplayActivity) and driven by the app through XTEST.
 # Test windows: vkcube (Turnip), xclock, xeyes (follows the pointer), xcalc (click test),
 # keyview.py (key test, holds the keyboard focus).
-#   display.sh <width> <height> [test|steam]
+#   display.sh <width> <height> [test|steam|gpucheck]
 # Mode "steam": no test windows; starts the Steam client (steam-run.sh) once the screen is ready.
 # Prints "READY <width> <height> <framebuffer file>" when the app may open the screen, then waits
 # until the app closes stdin, and stops everything it started.
@@ -13,7 +13,7 @@
 # 앱(DisplayActivity)이 이 파일을 실시간으로 보여 주고 XTEST로 입력을 넣음.
 # 시험 창: vkcube(Turnip), xclock, xeyes(포인터를 따라봄), xcalc(클릭 시험),
 # keyview.py(키 시험, 키보드 포커스를 가짐).
-#   display.sh <가로> <세로> [test|steam]
+#   display.sh <가로> <세로> [test|steam|gpucheck]
 # "steam" 모드: 시험 창 없이, 화면이 준비되면 Steam 클라이언트(steam-run.sh)를 띄움.
 # 앱이 화면을 열어도 될 때 "READY <가로> <세로> <화면 파일>"을 출력하고, 앱이 stdin을 닫을
 # 때까지 기다린 뒤 자기가 띄운 것을 모두 끔.
@@ -108,7 +108,7 @@ start_xwayland() {
         # Device number in decimal major:minor (stat prints hex) / 장치 번호를 10진 major:minor로(stat은 16진 출력)
         RDEV=$(printf '%d:%d' "0x$(stat -c %t /dev/dri/renderD128)" "0x$(stat -c %T /dev/dri/renderD128)")
         if [ -f "$MX/lib/libEGL_mesa.so.0" ] && [ -f /opt/ezsteam/lib/libezs_drm.so ]; then GPUOK=1; fi
-        echo "INFO drm : /dev/dri/renderD128 = $RDEV, mesax $([ -f "$MX/lib/libEGL_mesa.so.0" ] && echo 있음 || echo 없음), 심 $([ -f /opt/ezsteam/lib/libezs_drm.so ] && echo 있음 || echo 없음), 패치 $(cat "$MX/drm-patch" 2>/dev/null || echo ?)"
+        echo "INFO drm : /dev/dri/renderD128 = $RDEV, mesax $([ -f "$MX/lib/libEGL_mesa.so.0" ] && echo 있음 || echo 없음), 심 $([ -f /opt/ezsteam/lib/libezs_drm.so ] && echo 있음 || echo 없음), 패치 $(cat "$MX/drm-patch" 2>/dev/null || echo '?')"
     elif [ "${EZS_GPU_NODE:-0}" = 1 ]; then
         echo "WARN drm : GPU 장치 켬인데 /dev/dri/renderD128 없음 (바인드 실패)"
     fi
@@ -200,6 +200,12 @@ if [ "$MODE" = steam ]; then
     # This shell becomes the Steam run script (one process less; the app ends everything on close)
     # 이 셸이 Steam 실행 스크립트로 바뀜(프로세스 1개 절약, 닫을 때는 앱이 모두 종료시킴)
     exec sh /opt/ezsteam/steam-run.sh
+elif [ "$MODE" = gpucheck ]; then
+    # 2b. GPU path check: no test windows, the checks draw their own (gpu-check.sh)
+    # 2b. GPU 경로 점검: 시험 창 없음, 점검이 자기 창을 그림(gpu-check.sh)
+    echo "READY $W $H $FB/Xvfb_screen0"
+    sh /opt/ezsteam/gpu-check.sh &
+    PIDS="$PIDS $!"
 else
 # 2. Test windows (skipped when the program is missing); positions follow the screen width
 # 2. 시험 창(프로그램이 없으면 건너뜀). 위치는 화면 가로에 맞춤

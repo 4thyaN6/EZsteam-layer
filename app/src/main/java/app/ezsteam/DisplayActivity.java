@@ -574,6 +574,9 @@ public class DisplayActivity extends Activity {
         int h = getIntent().getIntExtra(EXTRA_H, 720);
         String m = getIntent().getStringExtra(EXTRA_MODE);
         if ("steam".equals(m)) mode = "steam";
+        // GPU path check (display.sh runs gpu-check.sh; otherwise like the display test)
+        // GPU 경로 점검(display.sh가 gpu-check.sh를 돌림. 그 밖에는 화면 시험과 같음)
+        if ("gpucheck".equals(m)) mode = "gpucheck";
 
         // Layout (user request: buttons, log and numbers overlapped and moved; the numbers covered
         // the DXVK HUD in the top-left corner):
@@ -3801,6 +3804,10 @@ public class DisplayActivity extends Activity {
             files.add(xLog);
             alias.put(xLog, "xserver.log");
         }
+        // Crash reports of libezs_crash.so (GPU path check, web helper in the Zink GL test)
+        // libezs_crash.so의 크래시 보고(GPU 경로 점검, Zink GL 시험의 웹 도우미)
+        File crashLog = new File(rootfs, "tmp/ezs-crash.log");
+        if (crashLog.isFile() && crashLog.length() > 0) files.add(crashLog);
         // Unity games' own logs (Player.log in each prefix, newest 3): a game that stays on a black
         // screen leaves its reason there, not in the Proton log (2026-10-18)
         // Unity 게임 자체 로그(prefix마다 있는 Player.log, 최근 3개): 검은 화면에서 멈춘 게임은 이유를

@@ -87,7 +87,7 @@ if [ "${EZS_GPU_NODE:-0}" = 1 ]; then
             # Vulkan 프레임을 소프트웨어 복사 대신 DRI3/Present로 Xwayland에 보냄(GPU 버퍼)
             unset MESA_VK_WSI_DEBUG
         fi
-        echo "INFO drm : $EZG_P: GPU 장치 켬 (Turnip mesax, 심, 패치 $(cat "$EZG_MX/drm-patch" 2>/dev/null || echo ?)), MESA_VK_WSI_DEBUG=${MESA_VK_WSI_DEBUG:-(없음)}"
+        echo "INFO drm : $EZG_P: GPU 장치 켬 (Turnip mesax, 심, 패치 $(cat "$EZG_MX/drm-patch" 2>/dev/null || echo '?')), MESA_VK_WSI_DEBUG=${MESA_VK_WSI_DEBUG:-(없음)}"
     else
         echo "WARN drm : $EZG_P: GPU 장치 켬이나 준비 안 됨 (노드 $([ -c /dev/dri/renderD128 ] && echo 있음 || echo 없음), 심 $([ -f "$EZG_SHIM" ] && echo 있음 || echo 없음), mesax $([ -f "$EZG_MX/icd.json" ] && echo 있음 || echo 없음))"
     fi

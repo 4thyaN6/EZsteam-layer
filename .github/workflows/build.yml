@@ -250,6 +250,10 @@ jobs:
           # rootfs 안 Wayland 컴포지터(Xwayland 화면 방식)와 libdrm 심(GPU 장치 스위치)
           cp alsa-artifact/bin/ezs-wl rootfs-overlay/opt/ezsteam/bin/
           cp alsa-artifact/libezs_drm.so rootfs-overlay/opt/ezsteam/lib/
+          # GPU path check: crash reporter and GLX check program
+          # GPU 경로 점검: 크래시 보고기와 GLX 확인 프로그램
+          cp alsa-artifact/libezs_crash.so rootfs-overlay/opt/ezsteam/lib/
+          cp alsa-artifact/bin/ezs-gltest rootfs-overlay/opt/ezsteam/bin/
           cat alsa-artifact/alsa-plugin.version
 
       # App side of the game frame path into the runtime module's jniLibs (next to PRoot)

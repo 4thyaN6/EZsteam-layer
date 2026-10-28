@@ -23,7 +23,7 @@
 # 소스: 아래 libsdl-org/SDL GitHub 릴리스 태그(zlib 라이선스)
 #
 # Output / 결과물: libasound_module_pcm_ezs.so, libezs_pad.so, libSDL2-2.0.so.0, libezs_compat.so, libezs_fsync.so,
-#                  bin/ezs-wl, libezs_drm.so,
+#                  bin/ezs-wl, libezs_drm.so, libezs_crash.so, bin/ezs-gltest,
 #                  alsa-plugin.version
 set -eu
 OUT="${1:-out-alsa}"
@@ -40,7 +40,7 @@ apt-get update -q
 # g++: SDL2 CMakeLists가 "project(SDL2 C CXX)"로 선언해서, 여기서 C++을 빌드하지 않아도 C++ 컴파일러가
 # 없으면 CMake가 멈춤
 apt-get install -y -q --no-install-recommends gcc g++ libc6-dev libasound2-dev libvulkan-dev binutils git cmake make \
-    ca-certificates pkgconf libwayland-dev libwayland-bin wayland-protocols
+    ca-certificates pkgconf libwayland-dev libwayland-bin wayland-protocols libgl-dev libx11-dev
 
 mkdir -p "$OUT"
 # -DPIC: alsa-lib's plugin macros need it for a shared object (else snd_dlsym_start is undefined)
@@ -150,6 +150,17 @@ gcc -shared -fPIC -O2 -Wall -Wextra -o "$OUT/libezs_drm.so" native/ezsdrm/ezs_dr
 strip --strip-unneeded "$OUT/libezs_drm.so"
 nm -D "$OUT/libezs_drm.so" | grep -q ' T drmGetDevice2$'
 nm -D "$OUT/libezs_drm.so" | grep -q ' T drmPrimeFDToHandle$'
+
+# Crash reporter for diagnosis (native/ezscrash): GPU path check and the web helper in the Zink GL test
+# 진단용 크래시 보고기(native/ezscrash): GPU 경로 점검과 Zink GL 시험의 웹 도우미
+gcc -shared -fPIC -O2 -Wall -Wextra -o "$OUT/libezs_crash.so" native/ezscrash/ezs_crash.c -ldl
+strip --strip-unneeded "$OUT/libezs_crash.so"
+nm -D "$OUT/libezs_crash.so" | grep -q ' T sigaction$'
+# GLX check program of the GPU path check (native/ezsgltest), links glvnd libGL + libX11
+# GPU 경로 점검의 GLX 확인 프로그램(native/ezsgltest), glvnd libGL + libX11에 링크
+gcc -O2 -Wall -Wextra -o "$OUT/bin/ezs-gltest" native/ezsgltest/ezs_gltest.c -lGL -lX11 -lpthread
+strip --strip-unneeded "$OUT/bin/ezs-gltest"
+objdump -p "$OUT/bin/ezs-gltest" | grep NEEDED
 
 dpkg-query -W -f='libasound2-dev ${Version}\n' libasound2-dev > "$OUT/alsa-plugin.version"
 echo "SDL $SDL_TAG, SDL3 headers $SDL3_TAG" >> "$OUT/alsa-plugin.version"

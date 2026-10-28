@@ -156,6 +156,7 @@
     <string name="test_ahb">AHB 압축</string>
     <string name="test_cpu">CPU 배치</string>
     <string name="test_fsync">빠른 동기화</string>
+    <string name="test_gpu_check">GPU 경로 점검</string>
     <string name="test_gpu_node">GPU 장치 노출</string>
     <string name="test_hidraw">HIDRAW</string>
     <string name="test_tso">FEX TSO</string>

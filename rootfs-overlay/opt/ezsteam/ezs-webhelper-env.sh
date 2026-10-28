@@ -32,6 +32,13 @@ if [ "${EZS_ZINK:-0}" = 1 ]; then
     # WSI 대기열 스레드 없이 출력(immediate): 세션 기본값(mailbox, 게임용)은 도우미의 X 연결 위에서 스레드를 하나 더
     # 돌림. 그 연결에서 하는 일을 하나 줄임(추론: X 연결 실패). EZS_WH_PRESENT로 바꿀 수 있음
     export MESA_VK_WSI_PRESENT_MODE="${EZS_WH_PRESENT:-immediate}"
+    # Crash reporter: a crash or a non-zero exit of a helper process names library + offset in
+    # /tmp/ezs-crash.log (the helper ended with no message, 2026-10-28)
+    # 크래시 보고기: 도우미 프로세스가 죽거나 0이 아닌 코드로 끝나면 /tmp/ezs-crash.log에 라이브러리 + 오프셋을 남김
+    # (도우미가 메시지 없이 끝났음, 2026-10-28)
+    if [ -f /opt/ezsteam/lib/libezs_crash.so ]; then
+        export LD_PRELOAD="/opt/ezsteam/lib/libezs_crash.so${LD_PRELOAD:+:$LD_PRELOAD}"
+    fi
     # Zink and Mesa messages to the helper output / Zink와 Mesa 메시지를 도우미 출력으로
     export MESA_DEBUG=1
     echo "ezs-webhelper: Zink kopper=${EZS_WH_KOPPER:-1} present=$MESA_VK_WSI_PRESENT_MODE wsi=${MESA_VK_WSI_DEBUG:-} LIBGL_KOPPER_DISABLE=${LIBGL_KOPPER_DISABLE:-(없음)}"

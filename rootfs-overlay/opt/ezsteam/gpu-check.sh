@@ -1,0 +1,85 @@
+#!/bin/sh
+# GPU path check: runs the GL/Vulkan pieces the Zink GL test depends on, one after another, each
+# with a time limit, and prints one line per case ("CHECK <case> : PASS|FAIL ..."). Started by
+# display.sh in "gpucheck" mode (app: [시험 ▸] [GPU 경로 점검]) on its own X screen, no Steam.
+# One run covers what took one Steam start per variant before (2026-10-28: four rounds for four
+# variants). Every case runs with the crash reporter (libezs_crash.so), so a crash names the
+# library and offset. Full output: ~/ezs-logs/gpu-check.log (in the report).
+# GPU 경로 점검: Zink GL 시험이 기대는 GL/Vulkan 부분을 차례로, 각각 시간 제한을 두고 돌려 경우마다 한 줄을 출력함
+# ("CHECK <경우> : PASS|FAIL ..."). display.sh "gpucheck" 모드(앱: [시험 ▸] [GPU 경로 점검])가 자체 X 화면에서 띄움, Steam 없음.
+# 전에는 변형마다 Steam 시작이 한 번씩 필요했던 것을 한 번에 봄(2026-10-28: 변형 4개에 4번). 모든 경우를 크래시 보고기
+# (libezs_crash.so)와 함께 돌려, 죽으면 라이브러리와 오프셋이 나옴. 전체 출력: ~/ezs-logs/gpu-check.log(제보에 들어감)
+set -u
+MX=/opt/ezsteam/mesax
+T=/opt/ezsteam/bin/ezs-gltest
+CRASH=/opt/ezsteam/lib/libezs_crash.so
+OUT="$HOME/ezs-logs/gpu-check.log"
+mkdir -p "$HOME/ezs-logs"
+: > "$OUT"
+: > /tmp/ezs-crash.log
+BASE_VK="${VK_DRIVER_FILES:-}"
+BASE_WSI="${MESA_VK_WSI_DEBUG:-}"
+PASS=0
+FAIL=0
+
+say() { echo "$*"; echo "$*" >> "$OUT"; }
+
+say "INFO check : 시작 $(date +%H:%M:%S), 화면 $DISPLAY, 기본 Vulkan ${BASE_VK:-(없음)}, WSI ${BASE_WSI:-(없음)}"
+[ -x "$T" ] || { say "FAIL check : $T 없음"; exit 0; }
+[ -f "$MX/lib/libGLX_mesa.so.0" ] || { say "FAIL check : $MX 없음 (CI mesax 묶음)"; exit 0; }
+say "INFO check : mesax $(head -n 1 "$MX/source.txt" 2>/dev/null | cut -c1-70), DRM 패치 $(cat "$MX/drm-patch" 2>/dev/null || echo '?'), 시각 패치 $(cat "$MX/timestamp-patch" 2>/dev/null || echo '?')"
+
+# Zink environment as in the Steam session (ezs-gpupath.sh) / Steam 세션과 같은 Zink 환경(ezs-gpupath.sh)
+EZS_ZINK=1
+EZG_P=check
+. /opt/ezsteam/ezs-gpupath.sh >> "$OUT" 2>&1
+say "INFO check : GL 라이브러리 $(LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" ldd "$T" 2>/dev/null | awk '/libGL/ {print $1"="$3}' | tr '\n' ' ')"
+
+# run <case> <env...> -- <command...>: time limit 25 s, crash reporter on, result line kept
+# run <경우> <환경...> -- <명령...>: 시간 제한 25초, 크래시 보고기 켬, 결과 줄 보관
+run() {
+    name=$1
+    shift
+    envs=""
+    while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs="$envs $1"; shift; done
+    shift
+    log=/tmp/ezs-check-$name.log
+    lines_before=$(wc -l < /tmp/ezs-crash.log 2>/dev/null || echo 0)
+    # shellcheck disable=SC2086
+    env $envs LD_PRELOAD="$CRASH${LD_PRELOAD:+:$LD_PRELOAD}" timeout 25 "$@" > "$log" 2>&1
+    rc=$?
+    res=$(grep -m1 '^RESULT' "$log" || true)
+    if [ $rc -eq 0 ] && { [ -z "$res" ] || echo "$res" | grep -q '^RESULT PASS'; }; then
+        PASS=$((PASS + 1))
+        say "CHECK $name : PASS ${res#RESULT PASS}"
+    else
+        FAIL=$((FAIL + 1))
+        why=$([ $rc -eq 124 ] && echo "시간 초과" || echo "rc $rc")
+        say "CHECK $name : FAIL ($why) ${res#RESULT }"
+        # Last lines of the case and any crash report it left / 그 경우의 마지막 줄과 남긴 크래시 보고
+        grep -v '^ezs-crash' "$log" | tail -n 6 | sed "s/^/CHECK $name :   /" | tee -a "$OUT"
+        tail -n +$((lines_before + 1)) /tmp/ezs-crash.log | head -n 14 | sed "s/^/CHECK $name :   /" | tee -a "$OUT"
+    fi
+    { echo "---- $name: env$envs, rc $rc"; cat "$log"; } >> "$OUT"
+}
+
+# 1. Vulkan alone, the Turnip of the bundle / 1. Vulkan만, 묶음의 Turnip
+if command -v vkcube >/dev/null 2>&1; then
+    run vk-mesax -- vkcube --c 120
+    [ -n "$BASE_VK" ] && run vk-default VK_DRIVER_FILES="$BASE_VK" VK_ICD_FILENAMES="$BASE_VK" -- vkcube --c 120
+else
+    say "INFO check : vkcube 없음, Vulkan 경우 건너뜀"
+fi
+# 2. GL through Zink, from simple to what Big Picture does (32-bit window, drawing thread, timestamps)
+# 2. Zink를 거친 GL, 단순한 것부터 빅픽처가 하는 것까지(32비트 창, 그리기 스레드, 시각 읽기)
+run gl-basic -- "$T"
+run gl-argb -- "$T" --argb
+run gl-argb-thread -- "$T" --argb --thread
+run gl-bp-like -- "$T" --argb --thread --timestamp
+# 3. Variants of the Big Picture-like case / 3. 빅픽처와 비슷한 경우의 변형
+run bp-kopper-off LIBGL_KOPPER_DISABLE=true -- "$T" --argb --thread --timestamp
+run bp-present-immediate MESA_VK_WSI_PRESENT_MODE=immediate -- "$T" --argb --thread --timestamp
+run bp-present-fifo MESA_VK_WSI_PRESENT_MODE=fifo -- "$T" --argb --thread --timestamp
+run bp-wsi-noshm MESA_VK_WSI_DEBUG=sw,noshm -- "$T" --argb --thread --timestamp
+[ -n "$BASE_VK" ] && run bp-default-turnip VK_DRIVER_FILES="$BASE_VK" VK_ICD_FILENAMES="$BASE_VK" -- "$T" --argb --thread --timestamp
+say "CHECK 요약 : PASS $PASS, FAIL $FAIL (전체: ~/ezs-logs/gpu-check.log, [제보 저장]에 들어감)"

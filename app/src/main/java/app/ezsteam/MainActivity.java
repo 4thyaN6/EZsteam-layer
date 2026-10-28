@@ -316,6 +316,20 @@ public class MainActivity extends Activity {
         fileSwitch(f, s(R.string.test_zink), SW_ZINK, R.string.v_on, R.string.v_off);
         fileSwitch(f, s(R.string.test_gpu_node), SW_GPU_NODE, R.string.v_on, R.string.v_off);
         fileSwitch(f, s(R.string.test_xserver), SW_XWAYLAND, R.string.v_xwayland, R.string.v_xvfb);
+        // One run of the GL/Vulkan cases behind the switches above, without Steam (gpu-check.sh): one
+        // line per case and crash locations, instead of one Steam start per variant
+        // 위 스위치 뒤의 GL/Vulkan 경우들을 Steam 없이 한 번에 돌림(gpu-check.sh): 경우마다 한 줄과 크래시 위치. 변형마다
+        // Steam을 한 번씩 시작하지 않아도 됨
+        f.add(s(R.string.test_gpu_check), v -> {
+            if (busy || RootfsInstaller.installedVersion(this).isEmpty()) {
+                log(busy ? "다른 작업 진행 중" : "먼저 rootfs 설치");
+                return;
+            }
+            log("== GPU 경로 점검");
+            startActivity(new android.content.Intent(this, DisplayActivity.class)
+                    .putExtra(DisplayActivity.EXTRA_W, 1280).putExtra(DisplayActivity.EXTRA_H, 800)
+                    .putExtra(DisplayActivity.EXTRA_MODE, "gpucheck"));
+        });
         // AHB compression test: GPU-only game buffers in the layout the start-up check found
         // (Qualcomm compressed). Off by default; this device's gralloc keeps them linear.
         // AHB 압축 시험: 시작 확인이 찾은 배치(Qualcomm 압축)로 GPU 전용 게임 버퍼. 기본 끔. 이 기기 gralloc은 linear로 둠
