@@ -4,9 +4,13 @@
 # 프로젝트 폴더의 ezs-push.bat / ezs-install.bat(더블클릭)로 실행함
 param(
     # push = upload, install = download and install / push = 업로드, install = 받아서 설치
-    # check = GPU path check on the tablet + report, report = save and pull a report (adb, no MTP)
-    # check = 태블릿에서 GPU 경로 점검 + 제보, report = 제보 저장 후 가져오기(adb, MTP 안 씀)
-    [Parameter(Mandatory = $true)][ValidateSet('push', 'install', 'check', 'report')][string]$Cmd
+    # check = GPU path check on the tablet + report, report = save and pull a report (adb, no MTP),
+    # steam = fresh Steam start (switches as set in the app), wait, then report
+    # check = 태블릿에서 GPU 경로 점검 + 제보, report = 제보 저장 후 가져오기(adb, MTP 안 씀),
+    # steam = Steam 새로 시작(스위치는 앱에서 정한 그대로), 기다린 뒤 제보
+    [Parameter(Mandatory = $true)][ValidateSet('push', 'install', 'check', 'report', 'steam')][string]$Cmd,
+    # steam: seconds to wait after the start before the report / steam: 시작 뒤 제보까지 기다리는 초
+    [int]$Wait = 90
 )
 
 $ErrorActionPreference = 'Stop'
@@ -84,6 +88,19 @@ function Get-Report {
 }
 
 if ($Cmd -eq 'report') {
+    Get-Report | Out-Null
+    return
+}
+
+if ($Cmd -eq 'steam') {
+    # Fresh Steam start, the tablet untouched; the report after $Wait seconds (Big Picture failures
+    # showed within about 15 s of the start, 2026-10-28)
+    # Steam 새로 시작, 태블릿은 손대지 않음. $Wait초 뒤 제보(빅픽처 실패는 시작 뒤 약 15초 안에 나왔음, 2026-10-28)
+    Invoke-Adb shell am force-stop $Pkg | Out-Null
+    $o = Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run steam
+    if (($o -join ' ') -match 'Error') { Write-Host ($o -join "`n"); throw '앱 시작 실패 (태블릿 연결·USB 디버깅 확인)' }
+    Write-Host "Steam 시작, ${Wait}초 기다린 뒤 제보를 가져옴..."
+    Start-Sleep -Seconds $Wait
     Get-Report | Out-Null
     return
 }

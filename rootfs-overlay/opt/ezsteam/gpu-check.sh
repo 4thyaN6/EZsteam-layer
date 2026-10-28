@@ -60,7 +60,7 @@ run() {
         why=$([ $rc -eq 124 ] && echo "시간 초과" || echo "rc $rc")
         say "CHECK $name : FAIL ($why) ${res#RESULT }"
         # Last lines of the case and any crash report it left / 그 경우의 마지막 줄과 남긴 크래시 보고
-        grep -v '^ezs-crash' "$log" | tail -n 6 | sed "s/^/CHECK $name :   /" | tee -a "$OUT"
+        grep -v '^ezs-crash' "$log" | tail -n 12 | sed "s/^/CHECK $name :   /" | tee -a "$OUT"
         tail -n +$((lines_before + 1)) /tmp/ezs-crash.log | head -n 14 | sed "s/^/CHECK $name :   /" | tee -a "$OUT"
     fi
     { echo "---- $name: env$envs, rc $rc"; cat "$log"; } >> "$OUT"
@@ -68,7 +68,10 @@ run() {
 
 # 1. Vulkan alone, the Turnip of the bundle / 1. Vulkan만, 묶음의 Turnip
 if command -v vkcube >/dev/null 2>&1; then
-    run vk-mesax -- vkcube --c 120
+    # Turnip and loader start-up messages: vkcube stopped in its device selection with this Turnip
+    # while Zink on the same Turnip worked (2026-10-28) / Turnip과 로더 시작 메시지: 이 Turnip으로 vkcube가 장치 선택에서
+    # 멈췄고 같은 Turnip 위 Zink는 동작했음(2026-10-28)
+    run vk-mesax TU_DEBUG=startup VK_LOADER_DEBUG=error,warn,driver -- vkcube --c 120
     [ -n "$BASE_VK" ] && run vk-default VK_DRIVER_FILES="$BASE_VK" VK_ICD_FILENAMES="$BASE_VK" -- vkcube --c 120
 else
     say "INFO check : vkcube 없음, Vulkan 경우 건너뜀"
