@@ -1,8 +1,18 @@
 diff --git a/src/syscall/syscall.c b/src/syscall/syscall.c
-index 7e5a72e..23ca944 100644
+index 7e5a72e..c6be435 100644
 --- a/src/syscall/syscall.c
 +++ b/src/syscall/syscall.c
-@@ -100,10 +100,30 @@ static void sysstat_count_path(const Tracee *tracee, Sysnum n, const char *exe)
+@@ -38,6 +38,9 @@
+ #include <stdlib.h>      /* getenv(3), atoi(3), */
+ #include <stdint.h>      /* uint32_t, uint64_t, */
+ #include <time.h>        /* clock_gettime(2), */
++/* readlink(2) for the close kinds; NDK clang refuses implicit declarations
++ * close 종류용 readlink(2). NDK clang은 암시 선언을 받지 않음 */
++#include <unistd.h>
+ #include <signal.h>      /* SIGTRAP, SIGSYS, */
+ #include <sys/ptrace.h>  /* PTRACE_EVENT_*, */
+ #include "compat.h"
+@@ -100,10 +103,30 @@ static void sysstat_count_path(const Tracee *tracee, Sysnum n, const char *exe)
  	char key[200];
  	size_t k = 0;
  
