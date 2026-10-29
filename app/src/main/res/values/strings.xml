@@ -220,6 +220,7 @@
         <item>Off</item>
         <item>Chromium\'s choice</item>
         <item>ANGLE Vulkan</item>
+        <item>Chromium\'s choice + SW compositing</item>
     </string-array>
     <string-array name="wsi_modes">
         <item>PutImage</item>

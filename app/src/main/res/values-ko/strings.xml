@@ -219,6 +219,7 @@
         <item>끔</item>
         <item>Chromium 선택</item>
         <item>ANGLE Vulkan</item>
+        <item>Chromium 선택 + 합성 SW</item>
     </string-array>
     <string-array name="wsi_modes">
         <item>PutImage</item>

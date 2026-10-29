@@ -227,5 +227,9 @@ if ($out -match 'INSTALL_FAILED_UPDATE_INCOMPATIBLE') {
     Write-Host $out
 }
 if ($out -notmatch 'Success') { throw 'adb install 실패 (태블릿 연결·USB 디버깅 확인)' }
+# Driver package too: the app installs it only when the Release has a different version
+# 드라이버 묶음도: Release 버전이 다를 때만 앱이 설치함
+Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run driver | Out-Null
+Write-Host '드라이버 묶음 확인 요청 보냄 (새 버전이면 앱이 받아 설치, 앱 로그 "설치 완료: turnip" 또는 "이미 같은 버전")'
 Write-Host ''
 Write-Host "설치 완료. 앱 첫 줄이 'app build=$built'인지 확인"

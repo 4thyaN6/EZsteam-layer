@@ -63,7 +63,7 @@ jobs:
       - id: cache
         uses: actions/cache@v4
         with:
-          key: turnip-${{ hashFiles('tools/build-turnip-glibc.sh') }}
+          key: turnip-${{ hashFiles('tools/build-turnip-glibc.sh', 'tools/patches/mesa-02-kgsl-timestamp.py') }}
           path: out-turnip/
 
       # Mesa source is fetched on the runner host (retries, mirrors, sha256), then built in the container

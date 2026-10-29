@@ -1,0 +1,39 @@
+diff --git a/src/syscall/syscall.c b/src/syscall/syscall.c
+index 7e5a72e..23ca944 100644
+--- a/src/syscall/syscall.c
++++ b/src/syscall/syscall.c
+@@ -100,10 +100,30 @@ static void sysstat_count_path(const Tracee *tracee, Sysnum n, const char *exe)
+ 	char key[200];
+ 	size_t k = 0;
+ 
+-	if (arg < 0)
+-		return;
+-	if (get_sysarg_path(tracee, path, arg == 1 ? SYSARG_1 : SYSARG_2) < 0)
+-		return;
++	if (n == PR_close) {
++		/* close: what the descriptor is, read from the host side before it goes away (pipe,
++		 * socket, anon_inode:[sync_file], /dev/kgsl-3d0, ...). Why: one display program's close
++		 * calls stopped PRoot about 3,000 times a second in the Xwayland test (2026-10-29), and
++		 * whether a cheaper filter is safe depends on what they close.
++		 * close: 디스크립터가 무엇인지 사라지기 전에 호스트 쪽에서 읽음(pipe, socket,
++		 * anon_inode:[sync_file], /dev/kgsl-3d0 등). 이유: Xwayland 시험에서 화면 프로그램의 close 호출이
++		 * PRoot를 초당 약 3,000번 멈췄고(2026-10-29), 더 가벼운 필터가 안전한지는 무엇을 닫는지에 달림 */
++		char fdp[64];
++		ssize_t l;
++		snprintf(fdp, sizeof(fdp), "/proc/%d/fd/%d", (int) tracee->pid,
++			 (int) peek_reg(tracee, CURRENT, SYSARG_1));
++		l = readlink(fdp, path, sizeof(path) - 1);
++		if (l < 0)
++			snprintf(path, sizeof(path), "%s", "(no fd)");
++		else
++			path[l] = '\0';
++	}
++	else {
++		if (arg < 0)
++			return;
++		if (get_sysarg_path(tracee, path, arg == 1 ? SYSARG_1 : SYSARG_2) < 0)
++			return;
++	}
+ 	if (sysstat_paths == NULL) {
+ 		sysstat_paths = calloc(SYSSTAT_PATHS, sizeof(*sysstat_paths));
+ 		if (sysstat_paths == NULL)

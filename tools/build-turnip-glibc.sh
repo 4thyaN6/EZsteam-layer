@@ -35,7 +35,9 @@ MESA_URL=https://archive.mesa3d.org/mesa-$MESA_VER.tar.xz
 MESA_MIRRORS="$MESA_URL https://mesa.freedesktop.org/archive/mesa-$MESA_VER.tar.xz"
 MESA_SHA256=bce5f7fbebb934373b86c999a064d52fb5065878dc57f287f95346648ec832e9
 PKG=turnip
-REV=1
+# REV 2: kgsl timestamp patch (mesa-02) applied, so the app installs the new package once
+# REV 2: kgsl 시각 패치(mesa-02) 적용. 앱이 새 묶음을 한 번 설치하게 함
+REV=2
 
 # fetch <file>: download the release tarball (host side) and verify it
 # fetch <파일>: 릴리스 tarball을 받고(본체 쪽) 확인함
@@ -83,6 +85,15 @@ glslangValidator --version | head -n 1
 echo "$MESA_SHA256  $TARBALL" | sha256sum -c -
 tar -xJf "$TARBALL" -C "$WORK"
 SRC="$WORK/mesa-$MESA_VER"
+# kgsl has no GPU timestamp read: calibrated timestamps off on kgsl, as in mesax. In the default
+# package Zink on this driver printed "vkGetCalibratedTimestampsEXT failed" 180 times in the GPU
+# path check (2026-10-29), and games reaching that function hit an unwritten path (undefined behaviour)
+# kgsl에는 GPU 시각 읽기가 없음: mesax처럼 kgsl에서 calibrated timestamps 끔. 기본 묶음에서는 이 드라이버 위
+# Zink가 GPU 경로 점검에서 "vkGetCalibratedTimestampsEXT failed"를 180번 냈고(2026-10-29), 그 함수에 닿는 게임은
+# 구현되지 않은 경로(정의되지 않은 동작)를 탐
+HERE="$(cd "$(dirname "$0")" && pwd)"
+TSPATCH=0
+if python3 "$HERE/patches/mesa-02-kgsl-timestamp.py" "$SRC"; then TSPATCH=1; fi
 
 # 3. Configure: Turnip only, KGSL kernel interface, X11 platform, everything else off
 #    설정: Turnip만, KGSL 커널 인터페이스, X11 플랫폼, 나머지는 끔
@@ -133,7 +144,9 @@ cp "$SRC/docs/license.rst" "$P/LICENSE" 2>/dev/null \
 cat > "$P/source.txt" <<EOF
 mesa: $MESA_URL sha256 $MESA_SHA256 (MIT)
 config: platforms=x11 vulkan-drivers=freedreno freedreno-kmds=kgsl buildtype=release
+kgsl timestamp patch: $TSPATCH
 EOF
+echo "$TSPATCH" > "$P/timestamp-patch"
 # Runtime libraries the driver needs (must exist in the rootfs)
 # 드라이버가 필요로 하는 런타임 라이브러리(rootfs에 있어야 함)
 objdump -p "$P/lib/libvulkan_freedreno.so" | awk '/NEEDED/ {print $2}' | tee "$P/needed.txt"

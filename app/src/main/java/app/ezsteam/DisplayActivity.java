@@ -1340,6 +1340,9 @@ public class DisplayActivity extends Activity {
      */
     @Override
     public boolean dispatchTouchEvent(MotionEvent e) {
+        // Input to screen time (PERF line) / 입력→화면 시간(PERF 줄)
+        int am = e.getActionMasked();
+        if ((am == MotionEvent.ACTION_DOWN || am == MotionEvent.ACTION_POINTER_DOWN) && view != null) view.markInput();
         app.ezsteam.runtime.CompositorMenu m = menu;
         if (m == null || m.isOpen() || e.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
             edge = 0;
@@ -1447,6 +1450,9 @@ public class DisplayActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
+        // Key and controller button presses for the input to screen time (PERF line)
+        // 입력→화면 시간용 키·컨트롤러 버튼 누름(PERF 줄)
+        if (e.getAction() == KeyEvent.ACTION_DOWN && e.getRepeatCount() == 0 && view != null) view.markInput();
         // Volume and mute keys stay with Android (they were sent to X and the volume did not change,
         // user report); the game sound plays through Android's media volume
         // 볼륨·음소거 키는 안드로이드가 처리함(X로 보내져 볼륨이 바뀌지 않았음, 사용자 보고).
@@ -2419,9 +2425,9 @@ public class DisplayActivity extends Activity {
                     changedCount = 0;
                     String out = view.showingGame
                             ? String.format(Locale.ROOT, "직접(창 %.0f%%)", view.gameCover * 100f) : "X11";
-                    log(String.format(Locale.ROOT, "PERF %s  새 프레임 %.0f/s  출력 %s  수신 %s  화면 %s  CPU 최고 클럭 %s  배터리 %s  여유 메모리 %.1fGB",
+                    log(String.format(Locale.ROOT, "PERF %s  새 프레임 %.0f/s  출력 %s  수신 %s  화면 %s  CPU 최고 클럭 %s  배터리 %s  여유 메모리 %.1fGB  입력→화면 %s",
                             cpuText, avgChanged, out, mbps < 0 ? "-" : String.format(Locale.ROOT, "%.1f Mbps", mbps),
-                            inFront ? "앞" : "뒤", maxCpuClock(), batteryTemp(), memFreeMb / 1024f));
+                            inFront ? "앞" : "뒤", maxCpuClock(), batteryTemp(), memFreeMb / 1024f, view.takeInputLatency()));
                 }
                 SystemClock.sleep(2000);
             }
@@ -2432,10 +2438,10 @@ public class DisplayActivity extends Activity {
 
     /**
      * CPU use of each child process since the previous pass (tick difference / elapsed time;
-     * 100 = one core fully busy), and the top-bar summary: all children, the game, Xvfb, PRoot.
+     * 100 = one core fully busy), and the top-bar summary: all children, the game, X server, PRoot.
      * First pass only records the ticks. Processes gone since then are dropped.
      * 이전 회차 이후 자식 프로세스별 CPU 사용률(틱 차이 / 경과 시간, 100 = 코어 하나를 다 씀)과
-     * 위쪽 막대 요약: 자식 전체, 게임, Xvfb, PRoot. 첫 회차는 틱만 기록함. 그사이 끝난 프로세스는 뺌
+     * 위쪽 막대 요약: 자식 전체, 게임, X 서버, PRoot. 첫 회차는 틱만 기록함. 그사이 끝난 프로세스는 뺌
      */
     private void updateCpu(java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps,
                            java.util.Map<Integer, Long> lastTicks, long lastNs) {
@@ -2455,7 +2461,10 @@ public class DisplayActivity extends Activity {
             pct.put(pr.pid, p);
             all += p;
             String comm = exeName(pr);
-            if (comm.equals("Xvfb")) xvfb += p;
+            // X server column: Xvfb, or Xwayland plus its compositor ezs-wl (the column counted only
+            // Xvfb and showed 0% in Xwayland sessions, 2026-10-29)
+            // X 서버 칸: Xvfb, 또는 Xwayland와 그 컴포지터 ezs-wl(Xvfb만 세어 Xwayland 세션에서 0%로 보였음, 2026-10-29)
+            if (comm.equals("Xvfb") || comm.equals("Xwayland") || comm.equals("ezs-wl")) xvfb += p;
             if (comm.contains("libproot")) proot += p;
             // Steam screen (web helper processes), to compare GPU and software drawing
             // Steam 화면(웹 도우미 프로세스). GPU 그리기와 소프트웨어 그리기 비교용
@@ -2466,7 +2475,7 @@ public class DisplayActivity extends Activity {
         cpuPct = pct;
         if (sec <= 0) return;
         Float g = game == null ? null : pct.get(game.pid);
-        cpuText = String.format(Locale.ROOT, "CPU 전체 %.0f%%  게임 %s  Steam 화면 %.0f%%  Xvfb %.0f%%  PRoot %.0f%%",
+        cpuText = String.format(Locale.ROOT, "CPU 전체 %.0f%%  게임 %s  Steam 화면 %.0f%%  X 서버 %.0f%%  PRoot %.0f%%",
                 all, g == null ? "-" : String.format(Locale.ROOT, "%.0f%%", g), ui, xvfb, proot);
     }
 
@@ -3767,6 +3776,11 @@ public class DisplayActivity extends Activity {
      * 글은 개인 값을 가림(Steam 계정·표시 이름, SteamID64, 토큰, 이메일: LogScrubber). 그림은 그대로 넣음
      */
     private void writeLogZip(java.io.OutputStream os, String appLog, String procs) throws IOException {
+        // Screen frames first, before the slow scans below, so they show the moment of the save
+        // (only with the admin IO statistics switch: the picture is the screen as it is)
+        // 화면 프레임을 먼저 잡음(아래 느린 검사 전에): 저장한 순간을 보여 주게 함
+        // (관리자 IO 통계 스위치가 켜졌을 때만: 그림은 화면 그대로임)
+        java.util.List<byte[]> shots = MainActivity.ioStat(this) ? screenFrames(8, 1200) : new java.util.ArrayList<byte[]>();
         File rootfs = RootfsInstaller.rootfsDir(this);
         java.util.List<File> files = new java.util.ArrayList<>();
         File[] logs = new File(rootfs, "home/steam/ezs-logs").listFiles(File::isFile);
@@ -3959,13 +3973,73 @@ public class DisplayActivity extends Activity {
                 zip.closeEntry();
                 n++;
             }
+            for (int i = 0; i < shots.size(); i++) {
+                zip.putNextEntry(new java.util.zip.ZipEntry(String.format(Locale.ROOT, "screen/frame-%d.png", i + 1)));
+                zip.write(shots.get(i));
+                zip.closeEntry();
+            }
             zip.finish();
-            log("로그 저장 완료: 로그 파일 " + n + "개 + 앱 로그 + 프로세스 목록 (계정·표시 이름, SteamID, 이메일은 가림)");
+            log("로그 저장 완료: 로그 파일 " + n + "개 + 앱 로그 + 프로세스 목록 (계정·표시 이름, SteamID, 이메일은 가림)"
+                    + (shots.isEmpty() ? "" : " + 화면 " + shots.size() + "장(IO 통계 켬일 때만, 화면 그대로라 이름이 보일 수 있음)"));
         }
         // Failures go to the caller (it reports them and removes or replaces the file); before this
         // a failure was logged inside and the caller still reported the file as saved
         // 실패는 호출한 쪽으로 넘김(호출한 쪽이 알리고 파일을 지우거나 다른 방법으로 저장함). 전에는 안에서
         // 실패를 기록만 하고 호출한 쪽은 저장됐다고 알렸음
+    }
+
+    /**
+     * Up to max consecutive distinct frames of the X screen file within ms, as PNG. The fourth byte
+     * of each pixel is kept as the PNG alpha (unpremultiplied): the padding byte of Xvfb / ezs-wl or
+     * whatever the X server copied from a 32-bit window. Why: white bands at the top and bottom of
+     * Steam's HOME menu panel on Xwayland (2026-10-29) can be transparent pixels with white colour or
+     * parts not drawn in some frames; only the stored values tell which. Frames are copied first and
+     * compressed afterwards, so the copies follow each other closely.
+     * X 화면 파일에서 ms 안의 서로 다른 연속 프레임을 최대 max장 PNG로 만듦. 픽셀의 넷째 바이트는 PNG 알파로 그대로
+     * 둠(곱하지 않은 값): Xvfb·ezs-wl의 채움 바이트, 또는 X 서버가 32비트 창에서 복사한 값. 이유: Xwayland에서 Steam
+     * HOME 메뉴 패널 위·아래의 흰 띠(2026-10-29)는 색이 흰 투명 픽셀일 수도, 어떤 프레임에서 그려지지 않은 부분일
+     * 수도 있음. 저장된 값만이 어느 쪽인지 알려 줌. 먼저 복사만 하고 압축은 나중에 해서 복사가 촘촘히 이어지게 함
+     */
+    private java.util.List<byte[]> screenFrames(int max, long ms) {
+        java.util.List<byte[]> out = new java.util.ArrayList<>();
+        XvfbFramebuffer f = fb;
+        if (f == null || f.bitsPerPixel != 32) return out;
+        int w = f.width, h = f.height, stride = f.bytesPerLine / 4;
+        java.util.List<int[]> frames = new java.util.ArrayList<>();
+        try {
+            int[] cur = new int[w * h];
+            int[] prev = null;
+            long end = SystemClock.uptimeMillis() + ms;
+            while (frames.size() < max && SystemClock.uptimeMillis() < end) {
+                // Little-endian ints: B,G,R,X in memory = 0xXXRRGGBB, the layout of an Android colour
+                // 리틀 엔디언 int: 메모리의 B,G,R,X = 0xXXRRGGBB, 안드로이드 색 배치와 같음
+                java.nio.IntBuffer ib = f.pixels().asIntBuffer();
+                for (int y = 0; y < h; y++) {
+                    ib.position(y * stride);
+                    ib.get(cur, y * w, w);
+                }
+                if (prev == null || !Arrays.equals(prev, cur)) {
+                    frames.add(cur);
+                    prev = cur;
+                    cur = new int[w * h];
+                }
+                SystemClock.sleep(4);
+            }
+            for (int[] px : frames) {
+                android.graphics.Bitmap bm = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888);
+                // Stored as given (no premultiply), so the fourth byte reaches the PNG unchanged
+                // 받은 값 그대로 저장(알파 곱하기 없음): 넷째 바이트가 바뀌지 않고 PNG에 들어감
+                bm.setPremultiplied(false);
+                bm.setPixels(px, 0, w, 0, 0, w, h);
+                java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                bm.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bo);
+                bm.recycle();
+                out.add(bo.toByteArray());
+            }
+        } catch (RuntimeException | OutOfMemoryError e) {
+            log("화면 캡처 실패: " + e);
+        }
+        return out;
     }
 
     /**

@@ -282,7 +282,12 @@ static void surf_commit(struct wl_client *c, struct wl_resource *r)
                            strerror(errno));
             }
         }
-        if (shm_frames + dma_frames == 1) {
+        /* Once per session: the minute counters start over, so a "first frame of the minute" test
+           printed this line again every minute (2026-10-29)
+           세션에 한 번만: 1분 카운터가 새로 시작하므로 "그 분의 첫 프레임" 검사로는 매분 다시 출력됐음(2026-10-29) */
+        static int first_logged;
+        if (!first_logged && shm_frames + dma_frames > 0) {
+            first_logged = 1;
             printf("ezs-wl: 첫 프레임 (%s)\n", shm ? "공유 메모리" : "dma-buf");
             fflush(stdout);
         }

@@ -495,6 +495,24 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         statUploadNs += t1 - t0;
         if (changed) statChanged++;
         long now = System.nanoTime();
+        // Input to screen: the first refresh with new content after a marked input closes it;
+        // an input with no visible answer within 1 s is dropped
+        // 입력→화면: 표시한 입력 뒤 새 내용이 처음 보인 갱신에서 끝냄. 1초 안에 보이는 답이 없으면 버림
+        long in = inputNs;
+        if (changed) {
+            if (in != 0) {
+                long d = now - in;
+                synchronized (latLock) {
+                    latSumNs += d;
+                    latMaxNs = Math.max(latMaxNs, d);
+                    latCount++;
+                }
+                inputNs = 0;
+            }
+            lastChangeNs = now;
+        } else if (in != 0 && now - in > 1_000_000_000L) {
+            inputNs = 0;
+        }
         if (now - statStart >= 1_000_000_000L) {
             float sec = (now - statStart) / 1e9f;
             StatsListener l = stats;
@@ -550,6 +568,54 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         GLES20.glUniform1i(uMode, mode == SCALE_FSR ? SCALE_SHARP : mode);
         GLES20.glUniform1f(uSharp, 0.5f);
         drawQuad(aPos, aTex);
+    }
+
+    // ---- input to screen time / 입력→화면 시간 ----
+
+    /** Time of a marked input still waiting for new screen content, 0 = none / 새 화면 내용을 기다리는 표시한 입력 시각, 0 = 없음 */
+    private volatile long inputNs;
+    /** Last refresh with new content / 새 내용이 있던 마지막 갱신 */
+    private volatile long lastChangeNs;
+    private final Object latLock = new Object();
+    private long latSumNs, latMaxNs;
+    private int latCount, latBusy;
+
+    /**
+     * Mark an input (touch, key, controller button) from the host. Measured only when the screen
+     * was still for 100 ms before it: with an animation or a running game every refresh is new and
+     * the time would say nothing about the input. Why: "controls feel a bit slow" with Xwayland
+     * (2026-10-29); this gives input to new content as the app sees it (X server, Steam, compositor
+     * and upload included; the panel's own scan-out not included).
+     * 호스트가 받은 입력(터치, 키, 컨트롤러 버튼)을 표시함. 입력 전 100ms 동안 화면이 멈춰 있었을 때만 잼:
+     * 애니메이션이나 게임 중에는 갱신마다 새 내용이라 그 시간이 입력에 대해 아무것도 말해 주지 않음. 이유: Xwayland에서
+     * "조작 반응이 살짝 느림"(2026-10-29). 앱이 보는 기준의 입력→새 내용 시간을 줌(X 서버, Steam, 컴포지터, 업로드 포함.
+     * 화면 패널 자체의 표시 시간은 미포함)
+     */
+    public void markInput() {
+        long now = System.nanoTime();
+        if (inputNs != 0) return;
+        if (now - lastChangeNs < 100_000_000L) {
+            synchronized (latLock) {
+                latBusy++;
+            }
+            return;
+        }
+        inputNs = now;
+    }
+
+    /**
+     * Summary since the last call, then start over: "평균 Nms 최대 Nms (N회)" or "-"
+     * 지난 호출 이후 요약을 돌려주고 새로 시작함: "평균 Nms 최대 Nms (N회)" 또는 "-"
+     */
+    public String takeInputLatency() {
+        synchronized (latLock) {
+            String r = latCount == 0 ? "-" : String.format(java.util.Locale.ROOT, "평균 %.0fms 최대 %.0fms (%d회)",
+                    latSumNs / 1e6 / latCount, latMaxNs / 1e6, latCount);
+            if (latBusy > 0) r += ", 화면 변화 중이라 뺀 입력 " + latBusy + "회";
+            latSumNs = latMaxNs = 0;
+            latCount = latBusy = 0;
+            return r;
+        }
     }
 
     /** A game frame from the present layer was drawn in the last refresh, and how much of the X

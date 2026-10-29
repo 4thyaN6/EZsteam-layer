@@ -435,7 +435,8 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** Extra the PC helper passes through adb: "gpucheck" or "steam" / PC 도우미가 adb로 넘기는 값: "gpucheck" 또는 "steam" */
+    /** Extra the PC helper passes through adb: "gpucheck", "steam" or "driver"
+     *  PC 도우미가 adb로 넘기는 값: "gpucheck", "steam" 또는 "driver" */
     static final String EXTRA_PC_RUN = "ezs.run";
 
     /**
@@ -454,6 +455,11 @@ public class MainActivity extends Activity {
                     .putExtra(DisplayActivity.EXTRA_MODE, "gpucheck"));
         } else if ("steam".equals(run)) {
             openSteam(steamSize()[0], steamSize()[1]);
+        } else if ("driver".equals(run)) {
+            // Driver package from the Release after an APK install (ezs-install.bat): installs only
+            // when the published version differs from the installed one
+            // APK 설치 뒤 Release의 드라이버 묶음(ezs-install.bat): 올라온 버전이 설치된 것과 다를 때만 설치함
+            runTask("driver", this::doDriverInstall);
         }
         return true;
     }
@@ -783,6 +789,14 @@ public class MainActivity extends Activity {
             {"끔", ""},
             {"Chromium 선택", "--ignore-gpu-blocklist"},
             {"ANGLE Vulkan", "--ignore-gpu-blocklist --use-gl=angle --use-angle=vulkan"},
+            // GPU drawing with Chromium's own compositing in software. Test for the white bands at
+            // the top and bottom of Steam's HOME menu panel (240x800 MainMenu popup) seen with
+            // "Chromium's choice" on Xwayland (2026-10-29): if they go away here, they come from
+            // the GPU compositing of the popup's transparent parts
+            // GPU로 그리되 Chromium 자체 합성은 소프트웨어로. Xwayland에서 "Chromium 선택"일 때 Steam HOME 메뉴
+            // 패널(240x800 MainMenu 팝업) 위·아래에 보인 흰 띠 시험용(2026-10-29): 여기서 사라지면 팝업 투명 부분의
+            // GPU 합성에서 생긴 것임
+            {"Chromium 선택 + 합성 SW", "--ignore-gpu-blocklist --disable-gpu-compositing"},
     };
 
     static int steamGpu(android.content.Context ctx) {
