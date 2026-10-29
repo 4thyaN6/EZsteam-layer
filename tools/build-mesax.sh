@@ -48,12 +48,19 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
     ca-certificates xz-utils build-essential meson ninja-build pkgconf bison flex glslang-tools \
-    python3 python3-mako python3-yaml python3-packaging patchelf \
+    python3 python3-mako python3-yaml python3-packaging patchelf ccache \
     libexpat1-dev zlib1g-dev libzstd-dev libdrm-dev libglvnd-dev libvulkan-dev \
     libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxxf86vm-dev libxrandr-dev \
     libxcb1-dev libxcb-glx0-dev libxcb-dri2-0-dev libxcb-dri3-dev libxcb-present-dev libxcb-shm0-dev \
     libxcb-xfixes0-dev libxcb-randr0-dev libxcb-sync-dev libxshmfence-dev
 meson --version
+# Compiler cache (CCACHE_DIR from CI, kept between runs); meson uses ccache by itself when it is
+# installed / 컴파일러 캐시(CI가 CCACHE_DIR을 주고 실행 사이에 보관). ccache가 설치되어 있으면 meson이 스스로 씀
+if [ -n "${CCACHE_DIR:-}" ]; then
+    mkdir -p "$CCACHE_DIR"
+    export CCACHE_MAXSIZE=2G CCACHE_COMPRESS=1
+    ccache -z >/dev/null
+fi
 
 # 2. Source (checked again) and the kgsl DRM patch (env-gated inside, EZS_TU_DRM=1)
 #    소스(다시 확인)와 kgsl DRM 패치(안에서 환경 변수로 켬, EZS_TU_DRM=1)
@@ -100,6 +107,7 @@ meson setup "$WORK/build" "$SRC" \
 
 # 4. Build and install into a staging folder / 빌드하고 임시 폴더에 설치
 ninja -C "$WORK/build"
+if [ -n "${CCACHE_DIR:-}" ]; then ccache -s | head -n 12; fi
 DESTDIR="$WORK/stage" meson install -C "$WORK/build"
 L="$WORK/stage/usr/lib"
 

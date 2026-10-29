@@ -35,8 +35,13 @@
 #include <sys/sysmacros.h>
 #include <unistd.h>
 
+/* Overridable for a host test only (-DEZS_NODE=...) / 호스트 시험에서만 바꿀 수 있음(-DEZS_NODE=...) */
+#ifndef EZS_NODE
 #define EZS_NODE "/dev/dri/renderD128"
+#endif
+#ifndef EZS_GPU
 #define EZS_GPU "/dev/kgsl-3d0"
+#endif
 
 /* libdrm ABI (xf86drm.h) / libdrm ABI(xf86drm.h) */
 #define DRM_NODE_PRIMARY 0
@@ -118,16 +123,28 @@ static int is_gpu_fd(int fd)
     return is_gpu_rdev(st.st_rdev);
 }
 
-/* ---- fake device: one malloc, freed by the real drmFreeDevice (free of the block)
-   가짜 장치: malloc 하나, 실제 drmFreeDevice(블록 free)로 해제됨 ---- */
+/* ---- fake device, laid out the way the real drmFreeDevice frees it: one block for the device,
+   node table, node name and bus/device info, plus the platform "compatible" list and each of its
+   strings in their own allocations (drmFreeDevice frees those first for DRM_BUS_PLATFORM). A
+   single block for everything made drmFreeDevice abort in Xwayland ("free(): invalid pointer",
+   from Zink's device match, 2026-10-29)
+   가짜 장치. 실제 drmFreeDevice가 해제하는 방식대로 배치함: 장치, 노드 표, 노드 이름, 버스/장치 정보는 한 블록이고, platform
+   "compatible" 목록과 그 문자열은 각각 따로 할당함(DRM_BUS_PLATFORM이면 drmFreeDevice가 그것들을 먼저 해제함). 전부 한
+   블록에 두었더니 Xwayland에서 drmFreeDevice가 중단됐음("free(): invalid pointer", Zink 장치 맞춤에서, 2026-10-29) ---- */
 
 static drmDevicePtr fake_device(void)
 {
-    static const char compat[] = "qcom,adreno";
     size_t sz = sizeof(drmDevice) + sizeof(char *) * DRM_NODE_MAX + sizeof(EZS_NODE) + sizeof(drmPlatformBusInfo) +
-                sizeof(drmPlatformDeviceInfo) + sizeof(char *) * 2 + sizeof(compat);
+                sizeof(drmPlatformDeviceInfo);
     uint8_t *m = calloc(1, sz);
-    if (!m) return NULL;
+    char **list = calloc(2, sizeof(char *));
+    char *compat = strdup("qcom,adreno");
+    if (!m || !list || !compat) {
+        free(m);
+        free(list);
+        free(compat);
+        return NULL;
+    }
     drmDevicePtr d = (drmDevicePtr)m;
     uint8_t *p = m + sizeof(drmDevice);
     d->nodes = (char **)p;
@@ -141,11 +158,7 @@ static drmDevicePtr fake_device(void)
     snprintf(d->businfo.platform->fullname, DRM_PLATFORM_DEVICE_NAME_LEN, "/soc/kgsl-3d0");
     p += sizeof(drmPlatformBusInfo);
     d->deviceinfo.platform = (drmPlatformDeviceInfo *)p;
-    p += sizeof(drmPlatformDeviceInfo);
-    char **list = (char **)p;
-    p += sizeof(char *) * 2;
-    memcpy(p, compat, sizeof(compat));
-    list[0] = (char *)p;
+    list[0] = compat;
     list[1] = NULL;
     d->deviceinfo.platform->compatible = list;
     return d;

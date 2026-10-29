@@ -18,12 +18,14 @@ bundled by it and keep their own licenses.
 | LSFG frame generation layer (`/opt/ezsteam/lsfg/liblsfg-vk.so`), lsfg-vk 1.0.0 lineage | MIT | https://github.com/GameNative/lsfg-vk-android, commit in `lsfg/source.txt`; build script `tools/build-lsfg.sh` |
 | pe-parse, toml11, volk (inside the LSFG layer) | MIT | submodules of the above, commits in `lsfg/source.txt` |
 | dxbc (inside the LSFG layer, from DXVK) | zlib | submodule of the above |
+| Mesa "mesax" bundle (`/opt/ezsteam/mesax`): Zink (`libgallium-*.so`), `libGLX_mesa.so.0`, `libEGL_mesa.so.0`, `libgbm.so.1`, `gbm/dri_gbm.so`, Turnip `libvulkan_freedreno.so` | MIT (Mesa) | https://archive.mesa3d.org, version and SHA-256 in `mesax/source.txt` and `tools/build-turnip-glibc.sh`; build script `tools/build-mesax.sh`; this project's patches `tools/patches/mesa-0*.py` (MIT) |
+| Wayland protocol code inside `ezs-wl` (xdg-shell, linux-dmabuf-v1), generated at build time | MIT (wayland-protocols, wayland-scanner output) | Debian `wayland-protocols`, `libwayland-bin` in `tools/build-alsa-plugin.sh` |
 
 ## Downloaded by the app from this repository's Release / 앱이 이 저장소 Release에서 받는 것
 
 | Component / 구성 요소 | License / 라이선스 | Source / 출처 |
 |---|---|---|
-| Debian 13 (trixie) arm64 rootfs | each package its own license (GPL, LGPL, MIT, BSD and others) | package list `rootfs.packages.txt` (Release) and `/opt/ezsteam/packages.txt` (rootfs); sources from the Debian archive (https://snapshot.debian.org) |
+| Debian 13 (trixie) arm64 rootfs, plus Debian packages the app installs on the device when a test switch needs them (Xwayland, glvnd, libdrm) | each package its own license (GPL, LGPL, MIT, BSD and others) | package list `rootfs.packages.txt` (Release) and `/opt/ezsteam/packages.txt` (rootfs); sources from the Debian archive (https://snapshot.debian.org) |
 | Mesa Turnip Vulkan driver (glibc build) | MIT | sources and hashes in the bundle's `source.txt` and `tools/build-turnip-glibc.sh` |
 
 ## Not distributed / 배포하지 않는 것

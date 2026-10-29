@@ -139,9 +139,20 @@ jobs:
       - name: mesa source
         if: steps.cache.outputs.cache-hit != 'true'
         run: sh tools/build-turnip-glibc.sh fetch src-mesa/mesa.tar.xz
+      # Compiler cache across runs: a Mesa patch change rebuilds only the files it touches instead of
+      # all of Mesa (each patch round cost a full Mesa build, 2026-10-28)
+      # 실행 사이 컴파일러 캐시: Mesa 패치를 바꿔도 Mesa 전체가 아니라 바뀐 파일만 다시 빌드함(패치 한 번마다 Mesa 전체
+      # 빌드가 걸렸음, 2026-10-28)
+      - name: ccache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          key: mesax-ccache-${{ github.sha }}
+          restore-keys: mesax-ccache-
+          path: .ccache-mesax/
       - name: mesax
         if: steps.cache.outputs.cache-hit != 'true'
-        run: docker run --rm -v "$PWD:/src" -w /src debian:trixie sh tools/build-mesax.sh out-mesax src-mesa/mesa.tar.xz
+        run: docker run --rm -v "$PWD:/src" -w /src -e CCACHE_DIR=/src/.ccache-mesax debian:trixie sh tools/build-mesax.sh out-mesax src-mesa/mesa.tar.xz
       - uses: actions/upload-artifact@v4
         with:
           name: mesax

@@ -19,6 +19,7 @@ rootfs-overlay/opt/ezsteam/bin/ezs-wl
 rootfs-overlay/opt/ezsteam/bin/ezs-gltest
 # Built by tools/build-mesax.sh (CI artifact "mesax") / tools/build-mesax.sh가 만드는 파일
 out-mesax/
+.ccache-mesax/
 src-mesa/
 rootfs-overlay/opt/ezsteam/mesax/
 # Reports pulled by ezs-report.bat / ezs-check.bat (never uploaded) / ezs-report.bat·ezs-check.bat이 가져온 제보(올리지 않음)
