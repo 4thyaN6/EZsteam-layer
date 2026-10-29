@@ -225,6 +225,18 @@ static void surf_damage(struct wl_client *c, struct wl_resource *r, int32_t x, i
     (void)c; (void)r; (void)x; (void)y; (void)w; (void)h;
 }
 
+/* Frame callbacks sit in the surface lists through their resource link. libwayland does not take a
+   resource out of such a list when it is destroyed, so the destroy handler does; without it the
+   list keeps the freed callback and the next tick sends to freed memory (compositor crash, the
+   client sees the socket close: Xwayland "failed to read Wayland events: Broken pipe")
+   프레임 콜백은 리소스 link로 표면 목록에 들어감. libwayland는 리소스를 지울 때 이 목록에서 빼 주지 않으므로 destroy
+   처리기가 뺌. 빼지 않으면 목록에 해제된 콜백이 남아 다음 박자에 해제된 메모리로 보내게 됨(컴포지터가 죽고 클라이언트는
+   소켓이 닫힌 것으로 봄: Xwayland "failed to read Wayland events: Broken pipe") */
+static void frame_cb_destroy(struct wl_resource *cb)
+{
+    wl_list_remove(wl_resource_get_link(cb));
+}
+
 static void surf_frame(struct wl_client *c, struct wl_resource *r, uint32_t id)
 {
     struct surface *s = wl_resource_get_user_data(r);
@@ -233,8 +245,10 @@ static void surf_frame(struct wl_client *c, struct wl_resource *r, uint32_t id)
         wl_client_post_no_memory(c);
         return;
     }
-    wl_resource_set_implementation(cb, NULL, NULL, NULL);
+    /* Linked right away, so the destroy handler always finds a valid link
+       바로 목록에 넣으므로 destroy 처리기는 항상 유효한 link를 만남 */
     wl_list_insert(s->pending_frames.prev, wl_resource_get_link(cb));
+    wl_resource_set_implementation(cb, NULL, NULL, frame_cb_destroy);
 }
 
 static void surf_region(struct wl_client *c, struct wl_resource *r, struct wl_resource *reg)
@@ -312,6 +326,8 @@ static void surface_res_destroy(struct wl_resource *r)
 {
     struct surface *s = wl_resource_get_user_data(r);
     struct wl_resource *cb, *tmp;
+    /* Each destroy unlinks itself (frame_cb_destroy); the safe walk keeps the next entry first
+       지울 때마다 스스로 목록에서 빠짐(frame_cb_destroy). safe 순회가 다음 항목을 먼저 잡아 둠 */
     wl_resource_for_each_safe(cb, tmp, &s->frames) wl_resource_destroy(cb);
     wl_resource_for_each_safe(cb, tmp, &s->pending_frames) wl_resource_destroy(cb);
     wl_list_remove(&s->pending_gone.link);
@@ -776,6 +792,8 @@ static int on_tick(void *data)
         struct surface *s = surfaces[i];
         if (!s) continue;
         struct wl_resource *cb, *tmp;
+        /* done, then destroy: the destroy handler takes the callback out of s->frames
+           done을 보낸 뒤 지움: destroy 처리기가 콜백을 s->frames에서 뺌 */
         wl_resource_for_each_safe(cb, tmp, &s->frames)
         {
             wl_callback_send_done(cb, t);

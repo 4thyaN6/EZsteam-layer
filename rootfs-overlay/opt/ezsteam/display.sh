@@ -198,7 +198,13 @@ if [ $XSERVER = xvfb ] && [ ! -S /tmp/.X11-unix/X$D ] && [ -n "$XFP" ]; then
 fi
 [ -n "$XFP" ] && echo "INFO font : X 코어 글꼴 한글 연결 ${KFONT##*/} (misc-fixed iso10646 별칭)"
 if [ ! -S /tmp/.X11-unix/X$D ]; then
-    echo "FAIL xvfb : 시작 안 됨"; head -n 40 /tmp/ezs-xvfb-display.log; kill $XPID 2>/dev/null; exit 0
+    # Xwayland gone after it started: say whether the compositor ended too (rc above 128 = signal rc-128)
+    # Xwayland이 뜬 뒤 사라짐: 컴포지터도 끝났는지 알림(rc가 128보다 크면 신호 번호 = rc-128)
+    if [ $XSERVER = xwayland ] && [ -n "$WPID" ] && ! kill -0 "$WPID" 2>/dev/null; then
+        wait "$WPID"; WRC=$?
+        echo "WARN wayland : ezs-wl 끝남 rc=$WRC$([ $WRC -gt 128 ] && echo " (신호 $((WRC - 128)))")"
+    fi
+    echo "FAIL xvfb : 시작 안 됨"; head -n 40 /tmp/ezs-xvfb-display.log; kill $XPID $WPID 2>/dev/null; exit 0
 fi
 echo "INFO id : $(id -u):$(id -g) mode=$MODE"
 echo "OK   xvfb : :$D ${W}x${H}x24, $(ls -l "$FB/Xvfb_screen0" | awk '{print $5}') B, 서버 $XSERVER"
