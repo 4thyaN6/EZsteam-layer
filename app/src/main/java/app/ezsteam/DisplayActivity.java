@@ -3965,13 +3965,58 @@ public class DisplayActivity extends Activity {
                 File xShot = new File(out, "shot-" + tag + "-x.png");
                 if (guestPng.isFile()) java.nio.file.Files.copy(guestPng.toPath(), xShot.toPath(),
                         java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                String frames = burstMs > 0 ? "파일 화면 " + fr.size() + "장(" + burstMs + "ms), " : "";
+                String frames = burstMs > 0 ? "파일 화면 " + fr.size() + "장(" + burstMs + "ms), " + bandNoise(fr) + ", " : "";
                 log("SHOT " + tag + " 끝: " + frames + (withX ? shotDiff(xShot, fileShot) : "X 서버 화면 안 찍음")
                         + " (xwd exit " + rc + ", " + out.getName() + ")");
             } catch (IOException | InterruptedException | RuntimeException e) {
                 log("SHOT " + tag + " 끝: 실패 " + e);
             }
         }, "ezs-shot").start();
+    }
+
+    /**
+     * Noise in the two bands where the Steam menu fault shows: left panel column (x 0-240 of 1280),
+     * top 40 and bottom 40 rows (menushot 2026-10-30 23:58: random colour blocks there in the X
+     * server's own picture with ANGLE Vulkan, clean black with SW compositing). Score = mean
+     * absolute difference of horizontal neighbours (0 = flat colour; the fault scored 55-63, normal
+     * screens under 6). Noisy frame = score over 20.
+     * Steam 메뉴 깨짐이 보이는 두 띠의 잡음: 왼쪽 패널 열(1280 중 x 0~240), 위 40줄과 아래 40줄(menushot
+     * 2026-10-30 23:58: ANGLE Vulkan에서 X 서버 자체 그림의 그 자리에 무작위 색 블록, 합성 SW에서는 깨끗한 검정).
+     * 점수 = 가로 이웃 픽셀 차이의 평균(0 = 단색. 깨짐은 55~63, 정상 화면은 6 미만). 잡음 프레임 = 점수 20 초과
+     */
+    private static String bandNoise(java.util.List<byte[]> pngs) {
+        double max = 0;
+        int noisy = 0, at = 0;
+        for (int k = 0; k < pngs.size(); k++) {
+            android.graphics.Bitmap b = android.graphics.BitmapFactory.decodeByteArray(pngs.get(k), 0, pngs.get(k).length);
+            if (b == null) continue;
+            try {
+                int w = b.getWidth(), h = b.getHeight();
+                int bw = Math.max(2, w * 240 / 1280), bh = Math.max(1, h * 40 / 800);
+                int[] px = new int[bw * bh];
+                long sum = 0, n = 0;
+                for (int y0 : new int[]{0, h - bh}) {
+                    b.getPixels(px, 0, bw, 0, y0, bw, bh);
+                    for (int y = 0; y < bh; y++) {
+                        for (int x = 1; x < bw; x++) {
+                            int a = px[y * bw + x], c = px[y * bw + x - 1];
+                            sum += Math.abs(((a >> 16) & 255) - ((c >> 16) & 255)) + Math.abs(((a >> 8) & 255) - ((c >> 8) & 255))
+                                    + Math.abs((a & 255) - (c & 255));
+                            n += 3;
+                        }
+                    }
+                }
+                double score = n == 0 ? 0 : (double) sum / n;
+                if (score > 20) noisy++;
+                if (score > max) {
+                    max = score;
+                    at = k + 1;
+                }
+            } finally {
+                b.recycle();
+            }
+        }
+        return String.format(Locale.ROOT, "띠 잡음 최대 %.1f(%d번째), 잡음 프레임 %d/%d", max, at, noisy, pngs.size());
     }
 
     /** RGB difference of two same-size pictures: share of differing pixels and their bounding box

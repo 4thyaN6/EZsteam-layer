@@ -16,11 +16,15 @@ param(
     # 안드로이드 화면(screencap). 잘못된 그림이 어디서 생기는지 가림
     # shot = the same three-step pictures once, now (run it while the fault is on the tablet)
     # shot = 같은 세 단계 캡처를 지금 한 번(태블릿에 깨짐이 보이는 동안 실행)
+    # whtest = ANGLE Vulkan Steam UI with web helper variants (driver/Chromium settings), menu band
+    # noise and CPU per variant; the variant file is removed afterwards
+    # whtest = ANGLE Vulkan Steam 화면을 웹 도우미 변형(드라이버·Chromium 설정)별로 실행, 변형마다 메뉴 띠 잡음과 CPU.
+    # 끝나면 변형 파일을 지움
     # release = tag the pushed commit with "v" + versionName of app/build.gradle (test release:
     # rootfs, driver and APK go to GitHub Releases, where the app downloads them)
     # release = 올린 커밋에 "v" + app/build.gradle의 versionName 태그를 붙임(테스트 릴리스:
     # rootfs, 드라이버, APK가 GitHub Releases에 올라가고 앱은 거기서 받음)
-    [Parameter(Mandatory = $true)][ValidateSet('push', 'install', 'check', 'report', 'steam', 'compare', 'menushot', 'shot', 'release')][string]$Cmd,
+    [Parameter(Mandatory = $true)][ValidateSet('push', 'install', 'check', 'report', 'steam', 'compare', 'menushot', 'shot', 'whtest', 'release')][string]$Cmd,
     # steam: seconds to wait after the start before the report / steam: 시작 뒤 제보까지 기다리는 초
     [int]$Wait = 90,
     # Display path for steam: '' = as set in the app, xvfb = Zink GL on Xvfb, xwayland = Zink GL +
@@ -297,6 +301,85 @@ if ($Cmd -eq 'menushot') {
         Write-Host "Steam 화면 GPU 방식 되돌림 ($orig)"
     }
     # Leftover burst files of the open/close spans / 열기·닫기 구간의 남은 프레임 파일
+    foreach ($n in @(Invoke-Adb shell "ls $Reports" | Where-Object { $_ -like 'shot-*.png' })) {
+        Invoke-Adb pull "$Reports/$n" (Join-Path $dir $n) | Out-Null
+        Invoke-Adb shell rm -f "$Reports/$n" | Out-Null
+    }
+    Write-Host ''
+    Write-Host "== 결과 (그림: $dir)"
+    $results | ForEach-Object { Write-Host $_ }
+    $results | Set-Content -Encoding UTF8 (Join-Path $dir 'result.txt')
+    try { Start-Process explorer.exe "`"$dir`"" } catch { }
+    return
+}
+
+if ($Cmd -eq 'whtest') {
+    # Variants, one per run (KEY=VALUE written to the web helper's variant file; '' = none)
+    # 변형, 실행마다 하나(웹 도우미 변형 파일에 쓰는 KEY=VALUE, '' = 없음)
+    $variants = @(
+        @{ Tag = 'base'; Line = '' },
+        @{ Tag = 'sysmem'; Line = 'TU_DEBUG=sysmem' },
+        @{ Tag = 'noubwc'; Line = 'TU_DEBUG=noubwc' },
+        @{ Tag = 'nopartial'; Line = 'EZS_WH_FLAGS_ADD=--ui-disable-partial-swap' }
+    )
+    $WhFile = "$SwDir/wh-test.env"
+    $saved = @(Get-Switches)
+    $prefs = (Invoke-Adb shell run-as $Pkg cat shared_prefs/ezsteam.xml) -join "`n"
+    $orig = -1
+    if ($prefs -match 'name="steam_gpu" value="(\d+)"') { $orig = [int]$Matches[1] }
+    Set-Switches $PathSwitches['xwayland']
+    $dir = Join-Path $Repo "reports\whtest_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss')"
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $results = @()
+    try {
+        foreach ($v in $variants) {
+            $t = "vk-$($v.Tag)"
+            if ($v.Line) {
+                Invoke-Adb shell "run-as $Pkg sh -c `"printf '%s\n' '$($v.Line)' > $WhFile`"" | Out-Null
+            } else {
+                Invoke-Adb shell run-as $Pkg rm -f $WhFile | Out-Null
+            }
+            Write-Host "== ${t}: Steam 새로 시작(ANGLE Vulkan), 60초 안정"
+            Invoke-Adb shell am force-stop $Pkg | Out-Null
+            $o = Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run steam --ei ezs.gpumode 2
+            if (($o -join ' ') -match 'Error') { Write-Host ($o -join "`n"); throw '앱 시작 실패 (태블릿 연결·USB 디버깅 확인)' }
+            Start-Sleep -Seconds 60
+            # Three guide presses, frames over each change (the first press after a start was not
+            # always taken, 2026-10-30 23:58, so open and close are not assumed)
+            # 가이드 세 번, 바뀔 때마다 프레임 기록(시작 뒤 첫 누름이 늘 먹히지는 않았음, 2026-10-30 23:58.
+            # 그래서 열림·닫힘을 가정하지 않음)
+            for ($r = 1; $r -le 3; $r++) {
+                Write-Host "   가이드 $r"
+                Invoke-Adb shell am broadcast -a app.ezsteam.SHOT --es label "$t-g$r" --ei burst 3000 --ez x false | Out-Null
+                Invoke-Adb shell am broadcast -a app.ezsteam.GUIDE | Out-Null
+                # One picture only here: two frame bursts at once would hold about 128 MB in the app
+                # 여기서는 한 장만: 프레임 묶음 두 개가 동시에 돌면 앱 메모리를 약 128MB 잡음
+                $results += Get-Shot "$t-g$r-after" $dir 0 $false 1
+                Start-Sleep -Seconds 5
+            }
+            # Cost of the variant: 30 s of arrow-key moves / 변형의 비용: 화살표 키 이동 30초
+            Write-Host '   화살표 키 이동 30초 측정'
+            Invoke-Adb shell am broadcast -a app.ezsteam.MEASURE --es phase start --es label "$t-move" | Out-Null
+            Invoke-Adb shell 'e=$(( $(date +%s) + 30 )); while [ $(date +%s) -lt $e ]; do input keyevent 22; sleep 0.3; input keyevent 21; sleep 0.3; done' | Out-Null
+            Invoke-Adb shell am broadcast -a app.ezsteam.MEASURE --es phase end --es label "$t-move" | Out-Null
+            Start-Sleep -Seconds 3
+            $results += @(Invoke-Adb shell run-as $Pkg grep -a "MEASURE $t-move:" $SessionLog | Select-Object -Last 1)
+            # Burst lines of the guide spans / 가이드 구간의 프레임 묶음 줄
+            $results += @(Invoke-Adb shell "run-as $Pkg grep -a -E 'SHOT $t-g[0-9] [^ :]+: ' $SessionLog")
+            # The helper took the variant? / 도우미가 변형을 받았는지
+            $results += @(Invoke-Adb shell "run-as $Pkg grep -a 'ezs-webhelper: ' $SessionLog" | Select-Object -Last 1)
+        }
+        Get-Report | Out-Null
+    } finally {
+        # Never leave a variant behind / 변형을 남기지 않음
+        Invoke-Adb shell run-as $Pkg rm -f $WhFile | Out-Null
+        Invoke-Adb shell am force-stop $Pkg | Out-Null
+        Set-Switches $saved
+        if ($orig -ge 0) {
+            Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run setgpu --ei ezs.gpumode $orig | Out-Null
+            Write-Host "Steam 화면 GPU 방식 되돌림 ($orig)"
+        }
+    }
     foreach ($n in @(Invoke-Adb shell "ls $Reports" | Where-Object { $_ -like 'shot-*.png' })) {
         Invoke-Adb pull "$Reports/$n" (Join-Path $dir $n) | Out-Null
         Invoke-Adb shell rm -f "$Reports/$n" | Out-Null

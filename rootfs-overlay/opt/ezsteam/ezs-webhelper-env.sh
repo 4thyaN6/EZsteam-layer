@@ -53,3 +53,22 @@ if [ "${EZS_ZINK:-0}" = 1 ]; then
     export MESA_DEBUG=1
     echo "ezs-webhelper: Zink kopper=${EZS_WH_KOPPER:-1} present=$MESA_VK_WSI_PRESENT_MODE wsi=${MESA_VK_WSI_DEBUG:-} LIBGL_KOPPER_DISABLE=${LIBGL_KOPPER_DISABLE:-(없음)} LIBGL_DRI3_DISABLE=${LIBGL_DRI3_DISABLE:-(없음)}"
 fi
+
+# Test variant for the web helper, written by the PC helper (ezs-whtest.bat) and removed by it
+# afterwards; absent = no change. KEY=VALUE lines, exported (e.g. TU_DEBUG=sysmem). The line
+# EZS_WH_FLAGS_ADD=... is appended to the Chromium flags (EZS_CEF_FLAGS, expanded on the launch
+# line after this file). Why: the Steam menu bands broke with ANGLE Vulkan in the X server's own
+# picture (menushot 2026-10-30 23:58), so the fix is looked for on the helper side, one variant at
+# a time
+# 웹 도우미 시험 변형. PC 도우미(ezs-whtest.bat)가 쓰고 끝나면 지움. 없으면 바뀌는 것 없음. KEY=VALUE 줄을
+# export함(예: TU_DEBUG=sysmem). EZS_WH_FLAGS_ADD=... 줄은 Chromium 플래그(EZS_CEF_FLAGS, 이 파일 다음 실행 줄에서
+# 펼쳐짐)에 덧붙임. 이유: ANGLE Vulkan에서 Steam 메뉴 띠가 X 서버 자체 그림에서 깨졌으므로(menushot
+# 2026-10-30 23:58) 도우미 쪽에서 해결책을 하나씩 찾음
+EZS_WH_TEST="$HOME/.local/share/ezsteam/wh-test.env"
+if [ -f "$EZS_WH_TEST" ]; then
+    set -a
+    . "$EZS_WH_TEST"
+    set +a
+    [ -n "${EZS_WH_FLAGS_ADD:-}" ] && EZS_CEF_FLAGS="${EZS_CEF_FLAGS:+$EZS_CEF_FLAGS }$EZS_WH_FLAGS_ADD"
+    echo "ezs-webhelper: 시험 변형 $(tr '\n' ' ' < "$EZS_WH_TEST")"
+fi
