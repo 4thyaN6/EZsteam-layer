@@ -3876,6 +3876,121 @@ public class DisplayActivity extends Activity {
     /** Measurement span from the PC (ezs-compare.bat): extras phase=start|end, label
      *  PC가 보내는 측정 구간(ezs-compare.bat): extra phase=start|end, label */
     static final String ACTION_PC_MEASURE = "app.ezsteam.MEASURE";
+    /** One Steam guide press from the PC (ezs-menushot.bat) / PC가 보내는 Steam 가이드 한 번 누름(ezs-menushot.bat) */
+    static final String ACTION_PC_GUIDE = "app.ezsteam.GUIDE";
+    /** Layer screenshots from the PC (ezs-menushot.bat): extra label
+     *  PC가 보내는 단계별 화면 캡처(ezs-menushot.bat): extra label */
+    static final String ACTION_PC_SHOT = "app.ezsteam.SHOT";
+
+    /**
+     * Two pictures of the same moment, to tell where a wrong picture is made: (1) the X server's own
+     * screen, read with xwd through the X protocol (what Chromium/ANGLE/Zink/Xwayland produced), and
+     * (2) the screen file the app draws from (after the ezs-wl copy). The PC adds (3) the Android
+     * screen (adb screencap, after the app's upload and scaling). The app draws the screen file's RGB
+     * as it is, alpha ignored (FramebufferView: gl_FragColor = vec4(rgb, 1.0)), so a fault visible in
+     * (3) but not in (2) is the app's; in (2) but not in (1) is the ezs-wl copy; in (1) is made before
+     * the display path. Logs "SHOT label 끝" with the share of pixels that differ between (1) and (2).
+     * Files go to Download/.EZlator/Reports (else ~/ezs-logs) as shot-label-x.png / shot-label-file.png.
+     * 같은 순간의 그림 두 장으로 잘못된 그림이 어디서 생기는지 가림: (1) X 서버 자체 화면, X 프로토콜로 xwd가 읽음
+     * (Chromium/ANGLE/Zink/Xwayland가 만든 것), (2) 앱이 그리는 화면 파일(ezs-wl 복사 뒤). PC가 (3) 안드로이드 화면(adb
+     * screencap, 앱 업로드·확대 뒤)을 더함. 앱은 화면 파일 RGB를 그대로 그리고 알파는 무시함(FramebufferView:
+     * gl_FragColor = vec4(rgb, 1.0)). 그래서 (3)에만 있으면 앱, (2)에 있고 (1)에 없으면 ezs-wl 복사, (1)에 있으면 화면 경로
+     * 이전에서 생긴 것임. (1)과 (2) 사이 다른 픽셀 비율과 함께 "SHOT label 끝"을 기록함. 파일은 Download/.EZlator/Reports
+     * (없으면 ~/ezs-logs)에 shot-label-x.png / shot-label-file.png로 남김
+     */
+    private void layerShot(String label) {
+        final String tag = (label == null || label.isEmpty() ? "shot" : label).replaceAll("[^A-Za-z0-9_-]", "_");
+        final GlibcLauncher.Config session = sessionConfig;
+        new Thread(() -> {
+            try {
+                File rootfs = RootfsInstaller.rootfsDir(this);
+                File logs = new File(rootfs, "home/steam/ezs-logs");
+                File out = app.ezsteam.runtime.SharedStorage.granted(this) ? app.ezsteam.runtime.SharedStorage.reports() : logs;
+                // (2) Screen file first (it is the app's own memory, no process needed)
+                // (2) 화면 파일 먼저(앱 자체 메모리라 프로세스가 필요 없음)
+                java.util.List<byte[]> fr = screenFrames(1, 100);
+                File fileShot = new File(out, "shot-" + tag + "-file.png");
+                if (!fr.isEmpty()) java.nio.file.Files.write(fileShot.toPath(), fr.get(0));
+                // (1) X server screen through xwd in a second PRoot with the session's settings
+                // (1) 세션 설정의 두 번째 PRoot에서 xwd로 X 서버 화면을 읽음
+                int rc = -1;
+                File guestPng = new File(logs, "shot-x.png");
+                guestPng.delete();
+                if (session != null) {
+                    GlibcLauncher.Config c = new GlibcLauncher.Config();
+                    c.rootfs = session.rootfs;
+                    c.nativeLibDir = session.nativeLibDir;
+                    c.dataDir = session.dataDir;
+                    c.guestHome = session.guestHome;
+                    c.display = session.display;
+                    c.binds.addAll(session.binds);
+                    c.link2symlink = session.link2symlink;
+                    c.sysvipc = session.sysvipc;
+                    c.changeId = session.changeId;
+                    c.env.putAll(session.env);
+                    Process p = GlibcLauncher.start(c, "/bin/sh", java.util.Arrays.asList("-c",
+                            "command -v xwd >/dev/null || { echo 'xwd 없음 (도구 설치 필요)'; exit 3; }; "
+                                    + "xwd -root -silent -out /tmp/ezs-shot.xwd && "
+                                    + "python3 /opt/ezsteam/xwd2png.py /home/steam/ezs-logs/shot-x.png /tmp/ezs-shot.xwd >/dev/null; "
+                                    + "r=$?; rm -f /tmp/ezs-shot.xwd; exit $r"), null, null);
+                    try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+                        String l;
+                        while ((l = r.readLine()) != null) log("SHOT " + tag + ": " + l);
+                    }
+                    rc = p.waitFor();
+                }
+                File xShot = new File(out, "shot-" + tag + "-x.png");
+                if (guestPng.isFile()) java.nio.file.Files.copy(guestPng.toPath(), xShot.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                log("SHOT " + tag + " 끝: " + shotDiff(xShot, fileShot) + " (xwd exit " + rc + ", " + out.getName() + ")");
+            } catch (IOException | InterruptedException | RuntimeException e) {
+                log("SHOT " + tag + " 끝: 실패 " + e);
+            }
+        }, "ezs-shot").start();
+    }
+
+    /** RGB difference of two same-size pictures: share of differing pixels and their bounding box
+     *  같은 크기 그림 두 장의 RGB 차이: 다른 픽셀 비율과 그 둘레 상자 */
+    private static String shotDiff(File a, File b) {
+        if (!a.isFile() || !b.isFile()) return "비교 못함 (X 서버 화면 " + a.isFile() + ", 파일 화면 " + b.isFile() + ")";
+        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+        o.inPremultiplied = false;
+        android.graphics.Bitmap x = android.graphics.BitmapFactory.decodeFile(a.getPath(), o);
+        android.graphics.Bitmap f = android.graphics.BitmapFactory.decodeFile(b.getPath(), o);
+        if (x == null || f == null) return "비교 못함 (그림 읽기 실패)";
+        try {
+            int w = x.getWidth(), h = x.getHeight();
+            if (w != f.getWidth() || h != f.getHeight())
+                return "크기 다름 X 서버 " + w + "x" + h + ", 파일 " + f.getWidth() + "x" + f.getHeight();
+            int[] px = new int[w * h], pf = new int[w * h];
+            x.getPixels(px, 0, w, 0, 0, w, h);
+            f.getPixels(pf, 0, w, 0, 0, w, h);
+            long n = 0;
+            int x0 = w, y0 = h, x1 = -1, y1 = -1;
+            for (int y = 0; y < h; y++) {
+                for (int i = 0; i < w; i++) {
+                    // RGB only: the fourth byte is not drawn / RGB만: 넷째 바이트는 그려지지 않음
+                    if (((px[y * w + i] ^ pf[y * w + i]) & 0xFFFFFF) != 0) {
+                        n++;
+                        if (i < x0) x0 = i;
+                        if (i > x1) x1 = i;
+                        if (y < y0) y0 = y;
+                        if (y > y1) y1 = y;
+                    }
+                }
+            }
+            // Alpha of the screen file: transparent pixels hint at undrawn areas of a 32-bit window
+            // 화면 파일의 알파: 투명 픽셀은 32비트 창의 그려지지 않은 부분을 암시함
+            long clear = 0;
+            for (int v : pf) if ((v >>> 24) != 0xFF) clear++;
+            String box = n == 0 ? "" : String.format(Locale.ROOT, ", 영역 %d,%d-%d,%d", x0, y0, x1, y1);
+            return String.format(Locale.ROOT, "X 서버 화면과 파일 화면 다른 픽셀 %.2f%%%s, 파일 화면 알파 255 아닌 픽셀 %.2f%%",
+                    100.0 * n / ((double) w * h), box, 100.0 * clear / ((double) w * h));
+        } finally {
+            x.recycle();
+            f.recycle();
+        }
+    }
 
     // ---- Measurement span (unattended comparison runs) / 측정 구간(사람 없이 하는 비교 실행) ----
     private final Object measLock = new Object();
@@ -3957,6 +4072,18 @@ public class DisplayActivity extends Activity {
                     measure(i.getStringExtra("phase"), i.getStringExtra("label"));
                     return;
                 }
+                // Steam guide press and layer screenshots for ezs-menushot.bat
+                // ezs-menushot.bat용 Steam 가이드 누름과 단계별 화면 캡처
+                if (ACTION_PC_GUIDE.equals(i.getAction())) {
+                    log("PC 요청: Steam 가이드");
+                    sendSteamGuide();
+                    return;
+                }
+                if (ACTION_PC_SHOT.equals(i.getAction())) {
+                    log("PC 요청: 화면 캡처 " + i.getStringExtra("label"));
+                    layerShot(i.getStringExtra("label"));
+                    return;
+                }
                 log("PC 요청: 제보 저장");
                 saveLogs();
             }
@@ -3964,6 +4091,8 @@ public class DisplayActivity extends Activity {
         try {
             android.content.IntentFilter f = new android.content.IntentFilter(ACTION_PC_REPORT);
             f.addAction(ACTION_PC_MEASURE);
+            f.addAction(ACTION_PC_GUIDE);
+            f.addAction(ACTION_PC_SHOT);
             registerReceiver(pcReceiver, f, "android.permission.DUMP", null);
         } catch (RuntimeException e) {
             pcReceiver = null;

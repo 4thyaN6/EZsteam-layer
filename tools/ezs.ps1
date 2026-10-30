@@ -10,11 +10,15 @@ param(
     # steam = Steam 새로 시작(스위치는 앱에서 정한 그대로), 기다린 뒤 제보
     # compare = Steam UI GPU modes on Xwayland, same measured spans each, tablet untouched
     # compare = Xwayland에서 Steam 화면 GPU 방식들을 같은 측정 구간으로 비교, 태블릿 손대지 않음
+    # menushot = Steam menu (guide) in each Steam UI GPU mode, pictured at three steps: X server
+    # (xwd), screen file (app input), Android screen (screencap), to tell where a wrong picture is made
+    # menushot = Steam 화면 GPU 방식마다 Steam 메뉴(가이드)를 열고 세 단계에서 찍음: X 서버(xwd), 화면 파일(앱 입력),
+    # 안드로이드 화면(screencap). 잘못된 그림이 어디서 생기는지 가림
     # release = tag the pushed commit with "v" + versionName of app/build.gradle (test release:
     # rootfs, driver and APK go to GitHub Releases, where the app downloads them)
     # release = 올린 커밋에 "v" + app/build.gradle의 versionName 태그를 붙임(테스트 릴리스:
     # rootfs, 드라이버, APK가 GitHub Releases에 올라가고 앱은 거기서 받음)
-    [Parameter(Mandatory = $true)][ValidateSet('push', 'install', 'check', 'report', 'steam', 'compare', 'release')][string]$Cmd,
+    [Parameter(Mandatory = $true)][ValidateSet('push', 'install', 'check', 'report', 'steam', 'compare', 'menushot', 'release')][string]$Cmd,
     # steam: seconds to wait after the start before the report / steam: 시작 뒤 제보까지 기다리는 초
     [int]$Wait = 90,
     # Display path for steam: '' = as set in the app, xvfb = Zink GL on Xvfb, xwayland = Zink GL +
@@ -197,6 +201,71 @@ if ($Cmd -eq 'compare') {
     Write-Host ''
     Write-Host '== 결과'
     $results | ForEach-Object { Write-Host $_ }
+    return
+}
+
+if ($Cmd -eq 'menushot') {
+    # Per Steam UI GPU mode: fresh Steam start, 60 s, pictures of the home screen, one guide press,
+    # pictures of the open menu. Switches and the GPU mode are put back. About 5 minutes
+    # Steam 화면 GPU 방식마다: Steam 새로 시작, 60초, 홈 화면 캡처, 가이드 한 번, 열린 메뉴 캡처.
+    # 스위치와 GPU 방식은 되돌림. 모두 약 5분
+    $saved = @(Get-Switches)
+    $prefs = (Invoke-Adb shell run-as $Pkg cat shared_prefs/ezsteam.xml) -join "`n"
+    $orig = -1
+    if ($prefs -match 'name="steam_gpu" value="(\d+)"') { $orig = [int]$Matches[1] }
+    Set-Switches $PathSwitches['xwayland']
+    $SessionLog = 'files/ezs/home/steam/ezs-logs/app-session.log'
+    $stamp = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
+    $dir = Join-Path $Repo "reports\menushot_$stamp"
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    # One picture set: X server + screen file (app), Android screen (adb), then pull all three
+    # 그림 한 벌: X 서버 + 화면 파일(앱), 안드로이드 화면(adb), 그 뒤 셋 다 가져옴
+    function Get-Shot([string]$Label) {
+        Invoke-Adb shell am broadcast -a app.ezsteam.SHOT --es label $Label | Out-Null
+        Invoke-Adb shell screencap -p "$Reports/shot-$Label-android.png" | Out-Null
+        $line = $null
+        for ($i = 0; $i -lt 45 -and -not $line; $i++) {
+            Start-Sleep -Seconds 2
+            # ASCII pattern only (Korean in adb arguments is not safe on Windows): "SHOT label 끝: ..."
+            # adb 인자에는 ASCII 패턴만(Windows에서 adb 인자의 한국어는 안전하지 않음): "SHOT label 끝: ..."
+            $line = Invoke-Adb shell "run-as $Pkg grep -a -E 'SHOT $Label [^ :]+: ' $SessionLog" | Select-Object -Last 1
+        }
+        if (-not $line) { $line = "SHOT $Label 끝: 90초 안에 끝나지 않음" }
+        foreach ($k in @('x', 'file', 'android')) {
+            Invoke-Adb pull "$Reports/shot-$Label-$k.png" (Join-Path $dir "shot-$Label-$k.png") | Out-Null
+            Invoke-Adb shell rm -f "$Reports/shot-$Label-$k.png" | Out-Null
+        }
+        Write-Host "   $line"
+        return $line
+    }
+    $modes = @(@{ Id = 1; Tag = 'chromium-gpu' }, @{ Id = 2; Tag = 'angle-vulkan' }, @{ Id = 3; Tag = 'sw-compositing' })
+    $results = @()
+    foreach ($m in $modes) {
+        Write-Host "== $($m.Tag): Steam 새로 시작, 60초 안정"
+        Invoke-Adb shell am force-stop $Pkg | Out-Null
+        $o = Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run steam --ei ezs.gpumode $m.Id
+        if (($o -join ' ') -match 'Error') { Write-Host ($o -join "`n"); throw '앱 시작 실패 (태블릿 연결·USB 디버깅 확인)' }
+        Start-Sleep -Seconds 60
+        Write-Host '   홈 화면 캡처'
+        $results += Get-Shot "$($m.Tag)-home"
+        Write-Host '   Steam 메뉴 열고 캡처'
+        Invoke-Adb shell am broadcast -a app.ezsteam.GUIDE | Out-Null
+        Start-Sleep -Seconds 4
+        $results += Get-Shot "$($m.Tag)-menu"
+        Invoke-Adb shell am broadcast -a app.ezsteam.GUIDE | Out-Null
+    }
+    Get-Report | Out-Null
+    Invoke-Adb shell am force-stop $Pkg | Out-Null
+    Set-Switches $saved
+    if ($orig -ge 0) {
+        Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run setgpu --ei ezs.gpumode $orig | Out-Null
+        Write-Host "Steam 화면 GPU 방식 되돌림 ($orig)"
+    }
+    Write-Host ''
+    Write-Host "== 결과 (그림: $dir)"
+    $results | ForEach-Object { Write-Host $_ }
+    $results | Set-Content -Encoding UTF8 (Join-Path $dir 'result.txt')
+    try { Start-Process explorer.exe "`"$dir`"" } catch { }
     return
 }
 
