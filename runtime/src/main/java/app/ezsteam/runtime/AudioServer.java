@@ -78,6 +78,9 @@ public final class AudioServer implements Closeable {
     private volatile boolean closed;
     /** Connections now playing / 지금 재생 중인 연결 수 */
     private final java.util.concurrent.atomic.AtomicInteger active = new java.util.concurrent.atomic.AtomicInteger();
+    /** A read counts as sound from this peak (about -40 dBFS) / 이 최대값부터 소리로 셈(약 -40 dBFS) */
+    private static final int PEAK_LOUD = 330;
+
     /** Streams being mixed / 섞는 중인 스트림 */
     private final CopyOnWriteArrayList<Source> sources = new CopyOnWriteArrayList<>();
     private AudioTrack out;
@@ -258,6 +261,14 @@ public final class AudioServer implements Closeable {
      *  연결 하나: 머리를 읽고 믹서(48kHz) 또는 자체 트랙에 넣음 */
     private void play(LocalSocket c) {
         long bytes = 0;
+        // Sound bursts in this stream (a silent run, then samples above PEAK_LOUD): tells whether
+        // later UI sounds still arrive in an open stream or never reach the app (Big Picture played
+        // its start sound and then nothing, user report 2026-10-30)
+        // 이 스트림의 소리 구간(조용하다가 PEAK_LOUD를 넘는 샘플): 열린 스트림에 나중 UI 소리가 계속 오는지,
+        // 아예 앱에 오지 않는지 가림(빅픽처가 시작음만 내고 그 뒤 소리 없음, 사용자 제보 2026-10-30)
+        int bursts = 0, peakMax = 0;
+        long firstBurst = -1, lastBurst = -1;
+        boolean loud = false;
         int rate = RATE, channels = CH;
         Source src = null;
         AudioTrack own = null;
@@ -300,6 +311,19 @@ public final class AudioServer implements Closeable {
                 bytes += n;
                 int whole = have - have % frameBytes;
                 int frames = whole / frameBytes;
+                // Peak of this read (16-bit little-endian samples) / 이번 읽기의 최대값(16비트 리틀 엔디언 샘플)
+                int peak = 0;
+                for (int i = 0; i + 1 < whole; i += 2) {
+                    int v = Math.abs((short) ((b[i] & 0xff) | (b[i + 1] << 8)));
+                    if (v > peak) peak = v;
+                }
+                peakMax = Math.max(peakMax, peak);
+                if (peak >= PEAK_LOUD && !loud) {
+                    bursts++;
+                    lastBurst = (bytes - n) / frameBytes;
+                    if (firstBurst < 0) firstBurst = lastBurst;
+                }
+                loud = peak >= PEAK_LOUD;
                 if (src != null) {
                     // To stereo shorts (mono spread to both sides) / 스테레오 short로(모노는 양쪽으로)
                     ByteBuffer bb = ByteBuffer.wrap(b, 0, whole).order(ByteOrder.LITTLE_ENDIAN);
@@ -328,7 +352,10 @@ public final class AudioServer implements Closeable {
         } finally {
             if (src != null || own != null) {
                 active.decrementAndGet();
-                log.log(String.format(Locale.ROOT, "AUDIO 재생 끝 (%.1f초 분량)", bytes / (double) (rate * 2 * channels)));
+                log.log(String.format(Locale.ROOT, "AUDIO 재생 끝 (%.1f초 분량, 소리 구간 %d번%s, 최대 크기 %d)",
+                        bytes / (double) (rate * 2 * channels), bursts,
+                        bursts > 0 ? String.format(Locale.ROOT, ": 처음 %.1f초 마지막 %.1f초", firstBurst / (double) rate,
+                                lastBurst / (double) rate) : "", peakMax));
             }
             // The mixer drops the stream once it has played the rest / 믹서가 남은 것을 재생한 뒤 스트림을 뺌
             if (src != null) src.end();

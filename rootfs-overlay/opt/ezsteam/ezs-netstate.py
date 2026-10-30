@@ -258,7 +258,29 @@ def managed():
     return GLib.Variant("(a{oa{sa{sv}}})", (out,))
 
 
+# What the client asks, each distinct request once (path, interface, method or property). Why: Big
+# Picture kept its "no network" icon with the stand-in running (2026-10-30) and nothing showed
+# whether the client asks it anything at all
+# 클라이언트가 묻는 것, 서로 다른 요청마다 한 번(경로, 인터페이스, 메서드 또는 속성). 이유: 대역이 떠 있어도
+# 빅픽처가 "네트워크 없음" 아이콘을 유지했고(2026-10-30), 클라이언트가 무엇이든 묻기는 하는지 보이지 않았음
+seen = set()
+asked = {"n": 0}
+
+
+def note(kind, path, iface, name, answered):
+    asked["n"] += 1
+    key = (kind, path, iface, name)
+    if key in seen or len(seen) >= 80:
+        return
+    seen.add(key)
+    print("ezs-netstate: 요청 %s %s %s.%s%s" % (kind, path, iface.rsplit(".", 1)[-1], name,
+                                              "" if answered else " (답 없음)"), flush=True)
+
+
 def on_call(conn, sender, path, iface, method, params, inv):
+    note("호출", path, iface, method, method in (
+        "GetDevices", "GetAllDevices", "GetPermissions", "CheckConnectivity", "state", "ListConnections",
+        "GetSettings", "GetManagedObjects"))
     if method in ("GetDevices", "GetAllDevices"):
         inv.return_value(GLib.Variant("(ao)", ([DEV],)))
     elif method == "GetPermissions":
@@ -279,6 +301,7 @@ def on_call(conn, sender, path, iface, method, params, inv):
 
 def on_get(conn, sender, path, iface, name):
     v = props(path, iface).get(name)
+    note("속성", path, iface, name, v is not None)
     return v
 
 
@@ -313,6 +336,15 @@ def main():
     cur.update(read_state())
     print("ezs-netstate: NetworkManager 대역 시작 (이름 요청 결과 %d, 연결 %s %s)"
           % (r.unpack()[0], "있음" if cur["up"] else "없음", cur["kind"]), flush=True)
+
+    # Requests per minute, only when there were any / 1분 요청 수, 있었을 때만
+    def minute():
+        if asked["n"]:
+            print("ezs-netstate: 1분 요청 %d건" % asked["n"], flush=True)
+            asked["n"] = 0
+        return True
+
+    GLib.timeout_add_seconds(60, minute)
 
     def poll():
         s = read_state()
