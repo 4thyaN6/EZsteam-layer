@@ -3899,6 +3899,21 @@ public class DisplayActivity extends Activity {
      * (없으면 ~/ezs-logs)에 shot-label-x.png / shot-label-file.png로 남김
      */
     private void layerShot(String label) {
+        layerShot(label, 0, true);
+    }
+
+    /**
+     * burstMs > 0: the screen file is recorded for that long instead (every changed frame, at most
+     * 16, saved as shot-label-file-NN.png) and xwd runs only when withX. Why: the Steam menu margins
+     * were broken on the tablet (screenshot 2026-10-30 22:30) while single pictures 4 s after the
+     * opening showed clean black there in all three steps; the fault comes and goes (opening,
+     * closing, while open), so frames over time are needed.
+     * burstMs > 0: 그 시간 동안 화면 파일을 기록함(바뀐 프레임마다, 최대 16장, shot-label-file-NN.png). xwd는 withX일
+     * 때만 실행함. 이유: 태블릿에서는 Steam 메뉴 여백이 깨졌는데(스크린숏 2026-10-30 22:30) 메뉴를 연 지 4초 뒤 한 장씩 찍은
+     * 그림은 세 단계 모두 그 자리가 깨끗한 검정이었음. 깨짐이 나타났다 사라지므로(열 때, 닫을 때, 열린 동안) 시간에 따른
+     * 프레임이 필요함
+     */
+    private void layerShot(String label, int burstMs, boolean withX) {
         final String tag = (label == null || label.isEmpty() ? "shot" : label).replaceAll("[^A-Za-z0-9_-]", "_");
         final GlibcLauncher.Config session = sessionConfig;
         new Thread(() -> {
@@ -3908,15 +3923,23 @@ public class DisplayActivity extends Activity {
                 File out = app.ezsteam.runtime.SharedStorage.granted(this) ? app.ezsteam.runtime.SharedStorage.reports() : logs;
                 // (2) Screen file first (it is the app's own memory, no process needed)
                 // (2) 화면 파일 먼저(앱 자체 메모리라 프로세스가 필요 없음)
-                java.util.List<byte[]> fr = screenFrames(1, 100);
+                java.util.List<byte[]> fr = screenFrames(burstMs > 0 ? 16 : 1, burstMs > 0 ? burstMs : 100);
                 File fileShot = new File(out, "shot-" + tag + "-file.png");
-                if (!fr.isEmpty()) java.nio.file.Files.write(fileShot.toPath(), fr.get(0));
+                if (burstMs > 0) {
+                    // Numbered frames, in time order / 시간 순서의 번호 붙은 프레임
+                    for (int k = 0; k < fr.size(); k++) {
+                        java.nio.file.Files.write(new File(out, String.format(Locale.ROOT, "shot-%s-file-%02d.png", tag, k + 1)).toPath(), fr.get(k));
+                    }
+                    if (!fr.isEmpty()) java.nio.file.Files.write(fileShot.toPath(), fr.get(fr.size() - 1));
+                } else if (!fr.isEmpty()) {
+                    java.nio.file.Files.write(fileShot.toPath(), fr.get(0));
+                }
                 // (1) X server screen through xwd in a second PRoot with the session's settings
                 // (1) 세션 설정의 두 번째 PRoot에서 xwd로 X 서버 화면을 읽음
                 int rc = -1;
                 File guestPng = new File(logs, "shot-x.png");
                 guestPng.delete();
-                if (session != null) {
+                if (session != null && withX) {
                     GlibcLauncher.Config c = new GlibcLauncher.Config();
                     c.rootfs = session.rootfs;
                     c.nativeLibDir = session.nativeLibDir;
@@ -3942,7 +3965,9 @@ public class DisplayActivity extends Activity {
                 File xShot = new File(out, "shot-" + tag + "-x.png");
                 if (guestPng.isFile()) java.nio.file.Files.copy(guestPng.toPath(), xShot.toPath(),
                         java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                log("SHOT " + tag + " 끝: " + shotDiff(xShot, fileShot) + " (xwd exit " + rc + ", " + out.getName() + ")");
+                String frames = burstMs > 0 ? "파일 화면 " + fr.size() + "장(" + burstMs + "ms), " : "";
+                log("SHOT " + tag + " 끝: " + frames + (withX ? shotDiff(xShot, fileShot) : "X 서버 화면 안 찍음")
+                        + " (xwd exit " + rc + ", " + out.getName() + ")");
             } catch (IOException | InterruptedException | RuntimeException e) {
                 log("SHOT " + tag + " 끝: 실패 " + e);
             }
@@ -4081,7 +4106,9 @@ public class DisplayActivity extends Activity {
                 }
                 if (ACTION_PC_SHOT.equals(i.getAction())) {
                     log("PC 요청: 화면 캡처 " + i.getStringExtra("label"));
-                    layerShot(i.getStringExtra("label"));
+                    // Extras: label, burst (ms, 0 = one picture), x (false = no xwd)
+                    // extra: label, burst(ms, 0 = 한 장), x(false = xwd 안 함)
+                    layerShot(i.getStringExtra("label"), i.getIntExtra("burst", 0), i.getBooleanExtra("x", true));
                     return;
                 }
                 log("PC 요청: 제보 저장");
