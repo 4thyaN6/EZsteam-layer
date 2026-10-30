@@ -454,7 +454,13 @@ public class MainActivity extends Activity {
                     .putExtra(DisplayActivity.EXTRA_W, 1280).putExtra(DisplayActivity.EXTRA_H, 800)
                     .putExtra(DisplayActivity.EXTRA_MODE, "gpucheck"));
         } else if ("steam".equals(run)) {
+            // Steam UI GPU mode chosen by the PC for this and later starts (ezs-compare.bat)
+            // PC가 정한 Steam 화면 GPU 방식(이번과 이후 시작, ezs-compare.bat)
+            setGpuModeFromPc(i);
             openSteam(steamSize()[0], steamSize()[1]);
+        } else if ("setgpu".equals(run)) {
+            // Only put the mode back (end of a comparison run) / 방식만 되돌림(비교 실행 끝)
+            setGpuModeFromPc(i);
         } else if ("driver".equals(run)) {
             // Driver package from the Release after an APK install (ezs-install.bat): installs only
             // when the published version differs from the installed one
@@ -462,6 +468,16 @@ public class MainActivity extends Activity {
             runTask("driver", this::doDriverInstall);
         }
         return true;
+    }
+
+    /** Extra with the Steam UI GPU mode index (STEAM_GPU_MODES) / Steam 화면 GPU 방식 번호 extra(STEAM_GPU_MODES) */
+    static final String EXTRA_PC_GPU = "ezs.gpumode";
+
+    private void setGpuModeFromPc(android.content.Intent i) {
+        int m = i.getIntExtra(EXTRA_PC_GPU, -1);
+        if (m < 0 || m >= STEAM_GPU_MODES.length) return;
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(KEY_STEAM_GPU, m).apply();
+        log("PC 요청: Steam 화면 GPU " + STEAM_GPU_MODES[m][0]);
     }
 
     @Override

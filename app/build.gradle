@@ -25,7 +25,9 @@ android {
         //noinspection ExpiredTargetSdkVersion
         targetSdk 28
         versionCode 1
-        versionName '0.1.0'
+        // Version of the next tagged release (major.minor.patch); ezs-release.bat tags "v" + this
+        // 다음 태그 릴리스 버전(메이저.마이너.패치). ezs-release.bat가 "v" + 이 값으로 태그를 붙임
+        versionName '0.2.1'
 
         // Base URL of the GitHub Release that holds rootfs.tar.xz (set in gradle.properties)
         // rootfs.tar.xz가 있는 GitHub Release 주소(gradle.properties에서 설정)

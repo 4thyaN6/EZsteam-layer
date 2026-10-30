@@ -412,6 +412,12 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          # Marked as a test build in the title and notes (not as prerelease: releases/latest
+          # must still find it)
+          # 제목과 설명에 테스트 버전임을 적음(사전 출시로 두면 releases/latest가 못 찾으므로 그렇게 하지 않음)
+          name: ${{ github.ref_name }} (테스트 버전 / test build)
+          body_path: .github/release-notes.md
+          make_latest: true
           files: |
             app/build/outputs/apk/debug/*.apk
             out/rootfs.tar.xz

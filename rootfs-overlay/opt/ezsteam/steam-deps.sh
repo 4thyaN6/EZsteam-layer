@@ -32,7 +32,26 @@ scan() {
     python3 /opt/ezsteam/ezs-libscan.py scan 3 "$STEAM_DIR/steamrtarm64" "$STEAM_DIR/linuxarm64" 2>/dev/null
 }
 
-missing=$(scan)
+# Skip the scan when the client files and the system packages are the same as at the last clean
+# check ("없는 라이브러리 없음"): it ran the loader about 100 times at every Steam start (2026-10-30).
+# Any client update (its binaries change) or package install (dpkg status changes) brings the full
+# scan back. Rollback: EZS_DEPS_FULL=1 forces the scan, or delete ~/.steam/.ezs-deps-ok
+# 클라이언트 파일과 시스템 패키지가 지난 정상 검사("없는 라이브러리 없음") 때와 같으면 검사를 건너뜀: Steam 시작마다
+# 로더를 약 100번 실행했음(2026-10-30). 클라이언트 갱신(실행 파일이 바뀜)이나 패키지 설치(dpkg status가 바뀜)가 있으면
+# 다시 전체 검사함. 되돌리기: EZS_DEPS_FULL=1이면 항상 검사, 또는 ~/.steam/.ezs-deps-ok 삭제
+DEPS_OK=/home/steam/.steam/.ezs-deps-ok
+deps_sig=$(stat -c '%n %s %Y' "$STEAM_DIR/steamrtarm64/steam" "$STEAM_DIR/steamrtarm64/steamui.so" \
+    "$STEAM_DIR/steamrtarm64/steamwebhelper" "$STEAM_DIR/linuxarm64/steamclient.so" /var/lib/dpkg/status 2>/dev/null \
+    | tr '\n' ' ')
+if [ "$MODE" = check ] && [ "${EZS_DEPS_FULL:-0}" != 1 ] && [ -n "$deps_sig" ] \
+        && [ "$deps_sig" = "$(cat "$DEPS_OK" 2>/dev/null)" ]; then
+    echo "INFO deps : 지난 검사와 같은 클라이언트·패키지, 라이브러리 검사 건너뜀 (전체 검사: EZS_DEPS_FULL=1)"
+    missing=""
+    deps_cached=1
+else
+    missing=$(scan)
+    deps_cached=0
+fi
 
 # Packages for the session's system bus and NetworkManager stand-in (Steam's connection header and
 # Settings > Internet need NetworkManager; ezs-netstate.py, steam-run.sh): dbus-daemon, python3-gi.
@@ -156,6 +175,12 @@ if [ -n "$own" ]; then
 fi
 if [ -z "$missing" ]; then
     echo "OK   deps : 없는 라이브러리 없음"
+    # Remember this clean result for the next start (check mode, as the steam user)
+    # 다음 시작을 위해 이 정상 결과를 기억함(check 모드, steam 사용자)
+    if [ "$MODE" = check ] && [ "$deps_cached" = 0 ] && [ -n "$deps_sig" ]; then
+        mkdir -p "$(dirname "$DEPS_OK")" 2>/dev/null
+        printf '%s' "$deps_sig" > "$DEPS_OK" 2>/dev/null
+    fi
     exit 0
 fi
 echo "INFO deps : 없는 라이브러리 $(echo "$missing" | wc -l)개: $(echo "$missing" | tr '\n' ' ')"

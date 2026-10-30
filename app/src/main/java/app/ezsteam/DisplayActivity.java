@@ -108,7 +108,7 @@ public class DisplayActivity extends Activity {
     /** Vulkan device and X server as the session reported them / 세션이 알린 Vulkan 장치와 X 서버 */
     private volatile String hudRenderer = "N/A", hudXserver = "N/A";
     /** All children's CPU and the busiest one (updateCpu) / 자식 전체 CPU와 가장 바쁜 것(updateCpu) */
-    private volatile float cpuAll = -1f;
+    private volatile float cpuAll = -1f, cpuUi, cpuProot, cpuX;
     private volatile String cpuTop = "";
     private long pssKb = -1, pssAtMs, pssCostNs;
     private final java.util.Map<String, Integer> hudGroupMax = new java.util.HashMap<>();
@@ -915,7 +915,9 @@ public class DisplayActivity extends Activity {
 
     private void log(String s) {
         // HUD facts from the session's own lines (cheap prefix checks) / 세션 자체 줄에서 HUD 정보(가벼운 앞부분 비교)
-        if (s.startsWith("INFO present : 장치 ")) hudRenderer = s.substring("INFO present : 장치 ".length());
+        // "장치 <name>, API <ver>" only; the next line "장치 확장 ..." (extension list) took its place (2026-10-30)
+        // "장치 <이름>, API <버전>"만. 다음 줄 "장치 확장 ..."(확장 목록)이 그 자리를 차지했음(2026-10-30)
+        if (s.startsWith("INFO present : 장치 ") && s.contains(", API ")) hudRenderer = s.substring("INFO present : 장치 ".length());
         else if (s.startsWith("OK   xvfb : ")) hudXserver = s.contains("서버 xwayland") ? "Xwayland" : "Xvfb";
         // First Steam window after a (re)start: the centre progress card is no longer needed
         // (re)시작 뒤 첫 Steam 창: 가운데 진행 카드가 더는 필요 없음
@@ -2439,6 +2441,7 @@ public class DisplayActivity extends Activity {
                 // HUD card only while it is shown (PSS and grouping cost nothing when hidden)
                 // HUD 카드는 보일 때만(숨기면 PSS·묶음 비용 없음)
                 if (hudMode == 2) updateHud(ps, scanNs);
+                measureTick();
                 if (procNow >= PROC_WARN && !procListLogged) {
                     procListLogged = true;
                     StringBuilder sb = new StringBuilder("PROC 자식 프로세스 " + procNow + "개 (한도 32):");
@@ -2510,6 +2513,10 @@ public class DisplayActivity extends Activity {
         if (pssAtMs == 0 || ms - pssAtMs >= 30_000) {
             long p0 = System.nanoTime();
             pssKb = readPssKb(ps);
+            // smaps_rollup was not readable on the device (PSS N/A, 2026-10-30): ask the system,
+            // which reports processes of the caller's own uid / 기기에서 smaps_rollup을 못 읽었음(PSS N/A,
+            // 2026-10-30): 호출한 앱과 같은 uid의 프로세스를 알려 주는 시스템에 물음
+            if (pssKb < 0) pssKb = systemPssKb(ps);
             pssCostNs = System.nanoTime() - p0;
             pssAtMs = ms;
         }
@@ -2569,6 +2576,27 @@ public class DisplayActivity extends Activity {
         if (comm.equals("Xwayland") || comm.equals("Xvfb") || comm.equals("ezs-wl")) return 4;
         return 5;
     }
+
+    /** PSS through ActivityManager (same-uid processes), -1 when it gives nothing; the reason is logged once
+     *  ActivityManager로 얻은 PSS(같은 uid 프로세스). 아무것도 없으면 -1. 이유는 한 번 기록함 */
+    private long systemPssKb(java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps) {
+        try {
+            int[] pids = new int[ps.size()];
+            for (int i = 0; i < pids.length; i++) pids[i] = ps.get(i).pid;
+            android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            android.os.Debug.MemoryInfo[] mi = am.getProcessMemoryInfo(pids);
+            long sum = 0;
+            for (android.os.Debug.MemoryInfo m : mi) if (m != null) sum += m.getTotalPss();
+            if (sum > 0) return sum;
+            if (!pssWhyLogged) log("HUD: PSS 없음 (smaps_rollup 읽기 불가, 시스템 답 0)");
+        } catch (RuntimeException e) {
+            if (!pssWhyLogged) log("HUD: PSS 없음 (smaps_rollup 읽기 불가, 시스템 " + e + ")");
+        }
+        pssWhyLogged = true;
+        return -1;
+    }
+
+    private boolean pssWhyLogged;
 
     /** Sum of PSS over the processes in kB, -1 when none was readable / 프로세스들의 PSS 합(kB). 하나도 못 읽으면 -1 */
     private static long readPssKb(java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps) {
@@ -2636,6 +2664,9 @@ public class DisplayActivity extends Activity {
         cpuPct = pct;
         if (sec <= 0) return;
         cpuAll = all;
+        cpuUi = ui;
+        cpuProot = proot;
+        cpuX = xvfb;
         cpuTop = top < 0 ? "" : String.format(Locale.ROOT, "%s %.0f%%", topName, top);
         Float g = game == null ? null : pct.get(game.pid);
         cpuText = String.format(Locale.ROOT, "CPU 전체 %.0f%%  게임 %s  Steam 화면 %.0f%%  X 서버 %.0f%%  PRoot %.0f%%",
@@ -3842,6 +3873,73 @@ public class DisplayActivity extends Activity {
 
     /** Broadcast the PC helper sends (ezs-report.bat, through adb) / PC 도우미가 보내는 방송(ezs-report.bat, adb 경유) */
     static final String ACTION_PC_REPORT = "app.ezsteam.SAVE_REPORT";
+    /** Measurement span from the PC (ezs-compare.bat): extras phase=start|end, label
+     *  PC가 보내는 측정 구간(ezs-compare.bat): extra phase=start|end, label */
+    static final String ACTION_PC_MEASURE = "app.ezsteam.MEASURE";
+
+    // ---- Measurement span (unattended comparison runs) / 측정 구간(사람 없이 하는 비교 실행) ----
+    private final Object measLock = new Object();
+    private String measLabel;
+    private long measStartMs;
+    private int measN, measProcMax;
+    private double measAll, measAllMax, measUi, measProot, measX, measFps;
+    private final java.util.List<Float> measP95 = new java.util.ArrayList<>();
+
+    /**
+     * Start or end a measurement span. While it runs, every 2 s monitor pass adds the CPU split and
+     * the shown frame rate; the end prints one "MEASURE" line, so runs of different display modes can
+     * be compared over the same span without anyone timing it on the tablet (user 2026-10-30).
+     * 측정 구간을 시작하거나 끝냄. 도는 동안 2초 모니터 회차마다 CPU 몫과 보인 프레임 수를 더하고, 끝에서 "MEASURE" 한 줄을
+     * 씀. 화면 방식이 다른 실행을 태블릿에서 시간을 재지 않고 같은 구간으로 비교하게 함(사용자 2026-10-30)
+     */
+    private void measure(String phase, String label) {
+        synchronized (measLock) {
+            if ("start".equals(phase)) {
+                measLabel = label == null ? "?" : label;
+                measStartMs = SystemClock.elapsedRealtime();
+                measN = measProcMax = 0;
+                measAll = measAllMax = measUi = measProot = measX = measFps = 0;
+                measP95.clear();
+                log("MEASURE 시작: " + measLabel);
+                return;
+            }
+            if (measLabel == null) return;
+            String l = measLabel;
+            measLabel = null;
+            long sec = (SystemClock.elapsedRealtime() - measStartMs) / 1000;
+            if (measN == 0) {
+                log("MEASURE " + l + ": 표본 없음 (" + sec + "초)");
+                return;
+            }
+            java.util.List<Float> p = new java.util.ArrayList<>(measP95);
+            java.util.Collections.sort(p);
+            String p95 = p.isEmpty() ? "N/A" : String.format(Locale.ROOT, "중앙 %.1fms 최대 %.1fms",
+                    p.get(p.size() / 2), p.get(p.size() - 1));
+            log(String.format(Locale.ROOT, "MEASURE %s: %d초 표본 %d, CPU 전체 평균 %.0f%% 최대 %.0f%%, Steam 화면 %.0f%%, "
+                            + "PRoot %.0f%%, X 서버 %.0f%%, 새 프레임 %.1f/s, 프레임 시간 P95 %s, 프로세스 최대 %d",
+                    l, sec, measN, measAll / measN, measAllMax, measUi / measN, measProot / measN, measX / measN,
+                    measFps / measN, p95, measProcMax));
+        }
+    }
+
+    /** One monitor pass into the running span / 모니터 회차 하나를 진행 중인 구간에 더함 */
+    private void measureTick() {
+        synchronized (measLock) {
+            if (measLabel == null || cpuAll < 0) return;
+            measN++;
+            measAll += cpuAll;
+            measAllMax = Math.max(measAllMax, cpuAll);
+            measUi += cpuUi;
+            measProot += cpuProot;
+            measX += cpuX;
+            measProcMax = Math.max(measProcMax, procNow);
+            float[] fs = view.frameStats(2_000);
+            if (fs != null) {
+                measFps += fs[0];
+                measP95.add(fs[2]);
+            }
+        }
+    }
     private android.content.BroadcastReceiver pcReceiver;
 
     /**
@@ -3855,13 +3953,18 @@ public class DisplayActivity extends Activity {
         pcReceiver = new android.content.BroadcastReceiver() {
             @Override
             public void onReceive(Context c, android.content.Intent i) {
+                if (ACTION_PC_MEASURE.equals(i.getAction())) {
+                    measure(i.getStringExtra("phase"), i.getStringExtra("label"));
+                    return;
+                }
                 log("PC 요청: 제보 저장");
                 saveLogs();
             }
         };
         try {
-            registerReceiver(pcReceiver, new android.content.IntentFilter(ACTION_PC_REPORT),
-                    "android.permission.DUMP", null);
+            android.content.IntentFilter f = new android.content.IntentFilter(ACTION_PC_REPORT);
+            f.addAction(ACTION_PC_MEASURE);
+            registerReceiver(pcReceiver, f, "android.permission.DUMP", null);
         } catch (RuntimeException e) {
             pcReceiver = null;
             log("PC 요청 받기 실패: " + e);

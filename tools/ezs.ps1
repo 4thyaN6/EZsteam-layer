@@ -8,7 +8,13 @@ param(
     # steam = fresh Steam start (switches as set in the app), wait, then report
     # check = 태블릿에서 GPU 경로 점검 + 제보, report = 제보 저장 후 가져오기(adb, MTP 안 씀),
     # steam = Steam 새로 시작(스위치는 앱에서 정한 그대로), 기다린 뒤 제보
-    [Parameter(Mandatory = $true)][ValidateSet('push', 'install', 'check', 'report', 'steam')][string]$Cmd,
+    # compare = Steam UI GPU modes on Xwayland, same measured spans each, tablet untouched
+    # compare = Xwayland에서 Steam 화면 GPU 방식들을 같은 측정 구간으로 비교, 태블릿 손대지 않음
+    # release = tag the pushed commit with "v" + versionName of app/build.gradle (test release:
+    # rootfs, driver and APK go to GitHub Releases, where the app downloads them)
+    # release = 올린 커밋에 "v" + app/build.gradle의 versionName 태그를 붙임(테스트 릴리스:
+    # rootfs, 드라이버, APK가 GitHub Releases에 올라가고 앱은 거기서 받음)
+    [Parameter(Mandatory = $true)][ValidateSet('push', 'install', 'check', 'report', 'steam', 'compare', 'release')][string]$Cmd,
     # steam: seconds to wait after the start before the report / steam: 시작 뒤 제보까지 기다리는 초
     [int]$Wait = 90,
     # Display path for steam: '' = as set in the app, xvfb = Zink GL on Xvfb, xwayland = Zink GL +
@@ -148,6 +154,52 @@ if ($Cmd -eq 'steam') {
     return
 }
 
+if ($Cmd -eq 'compare') {
+    # For each mode: fresh Steam start, 60 s to settle, 2 min idle span, 1 min span with arrow keys
+    # (left/right through the Big Picture home row), then a report. The app adds up each span and
+    # prints one "MEASURE" line (CPU split, frames, frame time P95, process peak). Afterwards the
+    # display switches and the Steam UI GPU mode are put back. About 9 minutes in all.
+    # 방식마다: Steam 새로 시작, 60초 안정, 대기 2분 구간, 화살표 키 1분 구간(빅픽처 홈 줄을 좌우로), 그다음 제보.
+    # 앱이 구간마다 더해 "MEASURE" 한 줄(CPU 몫, 프레임, 프레임 시간 P95, 프로세스 최대)을 씀. 끝나면 화면 스위치와
+    # Steam 화면 GPU 방식을 되돌림. 모두 약 9분
+    $saved = @(Get-Switches)
+    $prefs = (Invoke-Adb shell run-as $Pkg cat shared_prefs/ezsteam.xml) -join "`n"
+    $orig = -1
+    if ($prefs -match 'name="steam_gpu" value="(\d+)"') { $orig = [int]$Matches[1] }
+    Set-Switches $PathSwitches['xwayland']
+    $SessionLog = 'files/ezs/home/steam/ezs-logs/app-session.log'
+    $modes = @(@{ Id = 2; Tag = 'angle-vulkan' }, @{ Id = 3; Tag = 'sw-compositing' })
+    $results = @()
+    foreach ($m in $modes) {
+        Write-Host "== $($m.Tag): Steam 새로 시작, 60초 안정"
+        Invoke-Adb shell am force-stop $Pkg | Out-Null
+        $o = Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run steam --ei ezs.gpumode $m.Id
+        if (($o -join ' ') -match 'Error') { Write-Host ($o -join "`n"); throw '앱 시작 실패 (태블릿 연결·USB 디버깅 확인)' }
+        Start-Sleep -Seconds 60
+        Write-Host "   대기 2분 측정"
+        Invoke-Adb shell am broadcast -a app.ezsteam.MEASURE --es phase start --es label "$($m.Tag)-idle" | Out-Null
+        Start-Sleep -Seconds 120
+        Invoke-Adb shell am broadcast -a app.ezsteam.MEASURE --es phase end --es label "$($m.Tag)-idle" | Out-Null
+        Write-Host "   화살표 키 이동 1분 측정"
+        Invoke-Adb shell am broadcast -a app.ezsteam.MEASURE --es phase start --es label "$($m.Tag)-move" | Out-Null
+        Invoke-Adb shell 'e=$(( $(date +%s) + 60 )); while [ $(date +%s) -lt $e ]; do input keyevent 22; sleep 0.3; input keyevent 21; sleep 0.3; done' | Out-Null
+        Invoke-Adb shell am broadcast -a app.ezsteam.MEASURE --es phase end --es label "$($m.Tag)-move" | Out-Null
+        Start-Sleep -Seconds 3
+        $results += @(Invoke-Adb shell run-as $Pkg grep MEASURE $SessionLog | Where-Object { $_ -match 'MEASURE \S+:' })
+        Get-Report | Out-Null
+    }
+    Invoke-Adb shell am force-stop $Pkg | Out-Null
+    Set-Switches $saved
+    if ($orig -ge 0) {
+        Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run setgpu --ei ezs.gpumode $orig | Out-Null
+        Write-Host "Steam 화면 GPU 방식 되돌림 ($orig)"
+    }
+    Write-Host ''
+    Write-Host '== 결과'
+    $results | ForEach-Object { Write-Host $_ }
+    return
+}
+
 if ($Cmd -eq 'check') {
     # Both display paths in one go, the app's own switches put back afterwards; the report holds
     # both runs (gpu-check-prev.log = Xvfb, gpu-check.log = Xwayland + GPU device)
@@ -162,6 +214,32 @@ if ($Cmd -eq 'check') {
     Invoke-Check
     Get-Report | Out-Null
     Set-Switches $saved
+    return
+}
+
+if ($Cmd -eq 'release') {
+    # Only a clean folder whose commit is already on GitHub gets a tag
+    # 바뀐 파일이 없고 커밋이 이미 GitHub에 올라간 상태에서만 태그를 붙임
+    if (git status --porcelain) { throw '올리지 않은 변경이 있음: 먼저 ezs-push.bat 실행' }
+    git fetch origin
+    $head = (git rev-parse HEAD).Trim()
+    $remote = (git rev-parse '@{u}').Trim()
+    if ($head -ne $remote) { throw '이 커밋이 아직 GitHub에 없음: 먼저 ezs-push.bat 실행' }
+    # Version from app/build.gradle (major.minor.patch) / app/build.gradle의 버전(메이저.마이너.패치)
+    $gradle = Get-Content (Join-Path $Repo 'app\build.gradle') -Raw
+    if ($gradle -notmatch "versionName '(\d+\.\d+\.\d+)'") { throw 'app/build.gradle에서 versionName을 찾지 못함' }
+    $tag = "v$($Matches[1])"
+    # A tag that already exists on GitHub is never moved / GitHub에 이미 있는 태그는 옮기지 않음
+    if (git ls-remote --tags origin "refs/tags/$tag") { throw "$tag 태그가 이미 있음: versionName을 올린 뒤 다시 실행" }
+    $short = (git rev-parse --short=7 HEAD).Trim()
+    $ok = Read-Host "$short 커밋에 $tag 태그(테스트 버전)를 붙여 올림. 진행하려면 y"
+    if ($ok -ne 'y') { Write-Host '취소함'; return }
+    git tag -a $tag -m "$tag (test build)"
+    git push origin $tag
+    if ($LASTEXITCODE -ne 0) { throw 'git push 실패 (태그)' }
+    Write-Host ''
+    Write-Host "태그 올림: $tag ($short)"
+    Write-Host 'GitHub Actions(태그 빌드)가 모두 초록이 되면 ezs-install.bat 실행 (드라이버도 함께 받음)'
     return
 }
 
