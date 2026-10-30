@@ -509,6 +509,16 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
                 }
                 inputNs = 0;
             }
+            // Interval to the previous new content, for the HUD frame time (gaps of 1 s or more are
+            // idle screens, not frames) / 이전 새 내용까지의 간격. HUD 프레임 시간용(1초 이상 틈은 멈춘 화면이지 프레임이 아님)
+            long prevChange = lastChangeNs;
+            if (prevChange != 0 && now - prevChange < 1_000_000_000L) {
+                synchronized (latLock) {
+                    frameAt[frameHead] = now;
+                    frameGap[frameHead] = now - prevChange;
+                    frameHead = (frameHead + 1) % FRAME_RING;
+                }
+            }
             lastChangeNs = now;
         } else if (in != 0 && now - in > 1_000_000_000L) {
             inputNs = 0;
@@ -601,6 +611,34 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
             return;
         }
         inputNs = now;
+    }
+
+    /** New-content frames of the last seconds (time, gap) for the HUD / HUD용 최근 새 내용 프레임(시각, 간격) */
+    private static final int FRAME_RING = 1200;
+    private final long[] frameAt = new long[FRAME_RING], frameGap = new long[FRAME_RING];
+    private int frameHead;
+
+    /**
+     * Frames with new content over the last windowMs, as the app showed them (game frames from the
+     * present layer or a changed X screen; quantised to the display refresh): {frames per second,
+     * average frame time ms, p95 frame time ms}, or null with fewer than 2 frames.
+     * 최근 windowMs 동안 앱이 보여 준 새 내용 프레임(present 레이어의 게임 프레임 또는 바뀐 X 화면, 화면 갱신 단위로
+     * 끊김): {초당 프레임, 평균 프레임 시간 ms, p95 프레임 시간 ms}. 2개 미만이면 null
+     */
+    public float[] frameStats(long windowMs) {
+        long now = System.nanoTime(), from = now - windowMs * 1_000_000L;
+        long[] gaps = new long[FRAME_RING];
+        int n = 0;
+        synchronized (latLock) {
+            for (int i = 0; i < FRAME_RING; i++)
+                if (frameAt[i] >= from && frameGap[i] > 0) gaps[n++] = frameGap[i];
+        }
+        if (n < 2) return null;
+        java.util.Arrays.sort(gaps, 0, n);
+        double sum = 0;
+        for (int i = 0; i < n; i++) sum += gaps[i];
+        int k = Math.min(n - 1, (int) Math.ceil(n * 0.95) - 1);
+        return new float[]{n / (windowMs / 1000f), (float) (sum / n / 1e6), gaps[Math.max(0, k)] / 1e6f};
     }
 
     /**

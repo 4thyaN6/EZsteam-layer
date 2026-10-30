@@ -249,10 +249,17 @@ def settings():
     },))
 
 
-def managed():
+def managed(base):
+    """Objects below base (D-Bus ObjectManager rule: the children, not base itself). Asked at
+    /org/freedesktop, the NetworkManager object itself (State, Connectivity, PrimaryConnection) is a
+    child and must be in the answer: the client asked only this and read no property on its own, and
+    the answer left it out while the connection icon stayed "none" (2026-10-30)
+    base 아래 객체들(D-Bus ObjectManager 규칙: 자식만, base 자신은 아님). /org/freedesktop에서 물으면
+    NetworkManager 객체 자체(State, Connectivity, PrimaryConnection)가 자식이라 답에 있어야 함: 클라이언트는 이것만
+    묻고 속성은 따로 읽지 않았는데, 답에서 그것이 빠져 연결 아이콘이 "없음"으로 남았음(2026-10-30)"""
     out = {}
     for path, ifaces in OBJECTS.items():
-        if path == NM:
+        if path == base or not path.startswith(base.rstrip("/") + "/"):
             continue
         out[path] = {i: props(path, i) for i in ifaces}
     return GLib.Variant("(a{oa{sa{sv}}})", (out,))
@@ -294,7 +301,7 @@ def on_call(conn, sender, path, iface, method, params, inv):
     elif method == "GetSettings":
         inv.return_value(settings())
     elif method == "GetManagedObjects":
-        inv.return_value(managed())
+        inv.return_value(managed(path))
     else:
         inv.return_dbus_error("org.freedesktop.NetworkManager.NotSupported", method + " not supported")
 

@@ -89,8 +89,11 @@ static void draw_loop(void)
         _exit(4);
     }
     if (drawn == 0) {
-        printf("GL renderer: %s\nGL version: %s\n", (const char *)glGetString(GL_RENDERER),
-               (const char *)glGetString(GL_VERSION));
+        /* Direct rendering = the client draws with the GPU itself (DRI3 path on Xwayland), indirect =
+           GLX protocol through the X server / 직접 렌더링 = 클라이언트가 GPU로 직접 그림(Xwayland에서 DRI3 경로),
+           간접 = X 서버를 거치는 GLX 프로토콜 */
+        printf("GL renderer: %s\nGL version: %s\nGL direct: %s\n", (const char *)glGetString(GL_RENDERER),
+               (const char *)glGetString(GL_VERSION), glXIsDirect(dpy, ctx) ? "yes" : "no");
         fflush(stdout);
     }
     /* Texture-from-pixmap set-up / texture-from-pixmap 준비 */
@@ -198,6 +201,37 @@ static void *thread_main(void *arg)
     return NULL;
 }
 
+/* --xinfo: which X extensions the server offers and what GLX says, then exit. Why: GLAMOR working
+   (dma-buf frames in ezs-wl) does not prove that DRI3 / Present are offered to clients; they were
+   never listed (review 2026-10-30)
+   --xinfo: X 서버가 내놓는 확장과 GLX 정보를 출력하고 끝냄. 이유: GLAMOR 동작(ezs-wl의 dma-buf 프레임)이 클라이언트에게
+   DRI3·Present가 제공된다는 증거는 아님. 목록을 확인한 적이 없었음(검토 2026-10-30) */
+static int xinfo;
+
+static int print_xinfo(int scr)
+{
+    static const char *const want[] = {"DRI3", "Present", "GLX", "Composite", "MIT-SHM", "XTEST", "RANDR",
+                                       "XFIXES", "DAMAGE", "SYNC", "RENDER", "XInputExtension"};
+    for (unsigned i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+        int op, ev, er;
+        printf("X extension %s: %s\n", want[i], XQueryExtension(dpy, want[i], &op, &ev, &er) ? "yes" : "no");
+    }
+    int maj = 0, min = 0;
+    if (glXQueryVersion(dpy, &maj, &min)) printf("GLX version: %d.%d\n", maj, min);
+    const char *sv = glXQueryServerString(dpy, scr, GLX_VENDOR);
+    const char *cv = glXGetClientString(dpy, GLX_VENDOR);
+    printf("GLX server vendor: %s\nGLX client vendor: %s\n", sv ? sv : "?", cv ? cv : "?");
+    const char *ext = glXQueryExtensionsString(dpy, scr);
+    static const char *const glx_want[] = {"GLX_EXT_texture_from_pixmap", "GLX_ARB_create_context",
+                                           "GLX_EXT_buffer_age", "GLX_EXT_swap_control", "GLX_MESA_swap_control",
+                                           "GLX_OML_sync_control"};
+    for (unsigned i = 0; i < sizeof(glx_want) / sizeof(glx_want[0]); i++)
+        printf("GLX %s: %s\n", glx_want[i], ext && strstr(ext, glx_want[i]) ? "yes" : "no");
+    printf("RESULT PASS\n");
+    XCloseDisplay(dpy);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     for (int i = 1; i < argc; i++) {
@@ -209,6 +243,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--tfp")) use_tfp = 1;
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--size") && i + 1 < argc) sscanf(argv[++i], "%dx%d", &W, &H);
+        else if (!strcmp(argv[i], "--xinfo")) xinfo = 1;
     }
     setvbuf(stdout, NULL, _IOLBF, 0);
     /* Like SDL: threads on for Xlib / SDL처럼 Xlib 스레드 사용을 켬 */
@@ -221,6 +256,7 @@ int main(int argc, char **argv)
     XSetErrorHandler(on_xerror);
     XSetIOErrorHandler(on_xio);
     int scr = DefaultScreen(dpy);
+    if (xinfo) return print_xinfo(scr);
 
     /* Frame buffer config: RGBA8 double-buffered; with --argb the one whose visual has depth 32
        프레임 버퍼 구성: RGBA8 이중 버퍼. --argb면 비주얼 깊이가 32인 것 */

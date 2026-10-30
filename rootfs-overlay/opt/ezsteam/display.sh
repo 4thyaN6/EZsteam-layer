@@ -147,7 +147,7 @@ start_xwayland() {
             __EGL_VENDOR_LIBRARY_FILENAMES="$MX/egl.json" GBM_BACKENDS_PATH="$MX/lib/gbm" \
             LIBGL_DRIVERS_PATH="$MX/lib/dri" MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink \
             VK_DRIVER_FILES="$MX/icd.json" VK_ICD_FILENAMES="$MX/icd.json" EZS_TU_DRM=1 \
-            Xwayland :$D -geometry ${W}x${H} -nolisten tcp -ac -noreset ${1:+-fp "$1"} >/tmp/ezs-xvfb-display.log 2>&1 &
+            Xwayland :$D -geometry ${W}x${H} -nolisten tcp -ac -noreset -verbose 3 ${1:+-fp "$1"} >/tmp/ezs-xvfb-display.log 2>&1 &
     else
         # Shared memory buffers only (no GPU node) / 공유 메모리 버퍼만(GPU 노드 없음)
         XDG_RUNTIME_DIR="$XR" WAYLAND_DISPLAY="$WSOCK" Xwayland :$D -geometry ${W}x${H} -shm -nolisten tcp -ac -noreset ${1:+-fp "$1"} \
@@ -166,7 +166,9 @@ start_xwayland() {
     fi
     # What glamor did (GPU drawing of the X server) / glamor 결과(X 서버의 GPU 그리기)
     sleep 0.5
-    grep -i -E 'glamor|gbm|egl|dri3|zink|drm' /tmp/ezs-xvfb-display.log | head -n 8 | sed 's/^/INFO xwayland : /'
+    # "-verbose 3" (GPU branch) also lists the extensions the server starts (DRI3, Present, GLX) and
+    # what glamor chose / "-verbose 3"(GPU 쪽)은 서버가 켠 확장(DRI3, Present, GLX)과 glamor가 고른 것도 출력함
+    grep -i -E 'glamor|gbm|egl|dri3|present|glx|zink|drm' /tmp/ezs-xvfb-display.log | head -n 20 | sed 's/^/INFO xwayland : /'
     echo "INFO wayland : Xwayland :$D ${W}x${H}, $([ $GPUOK = 1 ] && echo "GPU 노드 $RDEV (glamor 시도)" || echo "공유 메모리")"
     return 0
 }

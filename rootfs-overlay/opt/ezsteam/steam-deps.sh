@@ -24,17 +24,12 @@ APT="apt-get -o APT::Sandbox::User=root -o Dpkg::Use-Pty=0 -q"
 # 없는 soname 목록. 클라이언트 안 라이브러리 폴더를 검색 경로에 넣어 클라이언트가 함께 주는
 # 라이브러리는 없는 것으로 세지 않음
 scan() {
-    # (no empty entry: an empty LD_LIBRARY_PATH entry means the current folder)
-    # (빈 항목 없음: LD_LIBRARY_PATH의 빈 항목은 현재 폴더를 뜻함)
-    libdirs=$(find "$STEAM_DIR/steamrtarm64" "$STEAM_DIR/linuxarm64" -maxdepth 3 -name '*.so*' -type f \
-        2>/dev/null | xargs -r -n1 dirname | sort -u | paste -sd: -)
-    find "$STEAM_DIR/steamrtarm64" "$STEAM_DIR/linuxarm64" -maxdepth 3 -type f \
-        \( -name '*.so*' -o -name steam -o -name steamwebhelper -o -name '*query' -o -name steamsysinfo \) \
-        2>/dev/null | while IFS= read -r f; do
-        # ELF files only (magic 7f 45 4c 46) / ELF 파일만(매직 7f 45 4c 46)
-        [ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] || continue
-        LD_LIBRARY_PATH="$libdirs" ldd "$f" 2>/dev/null | awk '/not found/ {print $1}'
-    done | sort -u
+    # One python3 process (ezs-libscan.py) in place of find | xargs -n1 dirname | sort | paste and, per
+    # ELF file, od | tr and the ldd script: the same list with at most one loader run at a time
+    # (hundreds of short processes before every Steam start, 2026-10-30)
+    # python3 하나(ezs-libscan.py)가 find | xargs -n1 dirname | sort | paste와 ELF 파일마다 od | tr·ldd 스크립트를
+    # 대신함: 같은 목록, 로더 실행은 한 번에 하나(Steam 시작마다 짧은 프로세스 수백 개였음, 2026-10-30)
+    python3 /opt/ezsteam/ezs-libscan.py scan 3 "$STEAM_DIR/steamrtarm64" "$STEAM_DIR/linuxarm64" 2>/dev/null
 }
 
 missing=$(scan)

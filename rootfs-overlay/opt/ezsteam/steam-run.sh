@@ -293,9 +293,11 @@ while :; do
     UI_OK=$HOME/.steam/.ezs-steamui-ok
     ui_id=$(stat -c '%s %Y' "$UI" 2>/dev/null)
     if [ -f "$UI" ] && [ "$ui_id" != "$(cat "$UI_OK" 2>/dev/null)" ]; then
-        libdirs=$(find "$STEAM_DIR/steamrtarm64" "$STEAM_DIR/linuxarm64" -maxdepth 4 -name '*.so*' -type f 2>/dev/null \
-            | xargs -r -n1 dirname | sort -u | paste -sd: -)
-        ui_missing=$(LD_LIBRARY_PATH="$libdirs" ldd "$UI" 2>/dev/null | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ')
+        # One python3 process instead of find | xargs -n1 dirname | sort | paste and ldd | awk | sort
+        # (many short processes before every start, 2026-10-30) / find | xargs -n1 dirname | sort | paste와
+        # ldd | awk | sort 대신 python3 하나(시작마다 짧은 프로세스가 많았음, 2026-10-30)
+        libdirs=$(python3 /opt/ezsteam/ezs-libscan.py libdirs 4 "$STEAM_DIR/steamrtarm64" "$STEAM_DIR/linuxarm64" 2>/dev/null)
+        ui_missing=$(python3 /opt/ezsteam/ezs-libscan.py missing "$libdirs" "$UI" 2>/dev/null | tr '\n' ' ')
         # The file check is only for the client's own libraries (FFmpeg, CEF), and at most once
         # per start of this script: with system libraries missing (libva.so.2) it ran at every
         # restart, and each check "repaired" steamrt64 (a link to steamrtarm64, sizes differ from

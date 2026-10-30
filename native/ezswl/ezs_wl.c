@@ -192,6 +192,28 @@ struct surface {
 };
 
 static long commits, shm_frames, dma_frames, failed_frames;
+/* Diagnostics for the 1-minute line: dma-buf buffers created (a new one per frame would mean an fd
+   export + close and an mmap per frame on the X side) and the time of the copy into the screen file
+   1분 줄용 진단: 새로 만든 dma-buf 버퍼 수(프레임마다 새로 만들면 X 쪽에서 프레임마다 fd 내보내기 + close와
+   mmap이 생김)와 화면 파일로 복사하는 시간 */
+static long new_buffers, copy_count;
+static uint64_t copy_sum_ns, copy_max_ns;
+
+static uint64_t mono_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+/* One copy into the screen file timed / 화면 파일 복사 한 번의 시간을 셈 */
+static void copy_timed(uint64_t t0)
+{
+    uint64_t d = mono_ns() - t0;
+    copy_sum_ns += d;
+    if (d > copy_max_ns) copy_max_ns = d;
+    copy_count++;
+}
 
 static void pending_gone(struct wl_listener *l, void *data)
 {
@@ -268,13 +290,17 @@ static void surf_commit(struct wl_client *c, struct wl_resource *r)
         if (shm) {
             uint32_t f = wl_shm_buffer_get_format(shm);
             uint32_t fmt = f == WL_SHM_FORMAT_ARGB8888 ? FMT_ARGB8888 : f == WL_SHM_FORMAT_XRGB8888 ? FMT_XRGB8888 : f;
+            uint64_t t0 = mono_ns();
             wl_shm_buffer_begin_access(shm);
             fb_copy(wl_shm_buffer_get_data(shm), wl_shm_buffer_get_width(shm), wl_shm_buffer_get_height(shm),
                     (size_t)wl_shm_buffer_get_stride(shm), fmt);
             wl_shm_buffer_end_access(shm);
+            copy_timed(t0);
             shm_frames++;
         } else if ((db = dmabuf_from(buf)) != NULL) {
+            uint64_t t0 = mono_ns();
             if (dmabuf_copy(db) == 0) {
+                copy_timed(t0);
                 dma_frames++;
             } else {
                 if (failed_frames++ == 0)
@@ -640,6 +666,7 @@ static struct wl_resource *params_make(struct wl_client *c, struct wl_resource *
         return NULL;
     }
     wl_resource_set_implementation(b->res, &buffer_impl, b, dmabuf_res_destroy);
+    new_buffers++;
     return b->res;
 }
 
@@ -807,10 +834,13 @@ static int on_tick(void *data)
     }
     if (t - last_report >= 60000) {
         if (last_report)
-            printf("ezs-wl: 1분 커밋 %ld, 공유 메모리 프레임 %ld, dma-buf 프레임 %ld, 실패 %ld\n", commits, shm_frames,
-                   dma_frames, failed_frames);
+            printf("ezs-wl: 1분 커밋 %ld, 공유 메모리 프레임 %ld, dma-buf 프레임 %ld, 실패 %ld, 새 버퍼 %ld, 복사 평균 %.2fms 최대 %.2fms\n",
+                   commits, shm_frames, dma_frames, failed_frames, new_buffers,
+                   copy_count ? copy_sum_ns / 1e6 / copy_count : 0.0, copy_max_ns / 1e6);
         fflush(stdout);
         commits = shm_frames = dma_frames = failed_frames = 0;
+        new_buffers = copy_count = 0;
+        copy_sum_ns = copy_max_ns = 0;
         last_report = t;
     }
     wl_event_source_timer_update(tick, 1000 / HZ);

@@ -96,6 +96,22 @@ public class DisplayActivity extends Activity {
     private volatile String shaderLogged;
     /** Child processes now / most seen, free memory (monitor thread) / 현재·최대 자식 프로세스 수, 여유 메모리(감시 스레드) */
     private volatile int procNow, procMax;
+
+    // ---- Performance HUD (detail mode) / 성능 HUD(자세히 모드) ----
+    /** Performance display: 0 off, 1 strip, 2 HUD card / 성능 표시: 0 끔, 1 띠, 2 HUD 카드 */
+    private volatile int hudMode;
+    private app.ezsteam.runtime.PerfHud hud;
+    private static final String PREF_HUD = "view.hud";
+    /** Process target of this layer (user 2026-10-30: about 25, conservative while EZlator's own
+     *  share is not known) / 이 레이어의 프로세스 목표(사용자 2026-10-30: 25 정도, EZlator 몫을 모르니 보수적으로) */
+    private static final int PROC_TARGET = 25;
+    /** Vulkan device and X server as the session reported them / 세션이 알린 Vulkan 장치와 X 서버 */
+    private volatile String hudRenderer = "N/A", hudXserver = "N/A";
+    /** All children's CPU and the busiest one (updateCpu) / 자식 전체 CPU와 가장 바쁜 것(updateCpu) */
+    private volatile float cpuAll = -1f;
+    private volatile String cpuTop = "";
+    private long pssKb = -1, pssAtMs, pssCostNs;
+    private final java.util.Map<String, Integer> hudGroupMax = new java.util.HashMap<>();
     private volatile long memFreeMb;
     private volatile boolean procListLogged;
     /** Process lists for the [프로세스] window: now, and at the highest count so far
@@ -216,8 +232,8 @@ public class DisplayActivity extends Activity {
         // LSFG: 다음 게임 시작 때 EZ Proton이 읽는 선택 파일(레이어는 게임마다 설정됨)
         display.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_lsfg), this::lsfgName,
                 () -> stepLsfg(-1), () -> stepLsfg(1), null));
-        display.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_stats), () -> onOff(statsShown),
-                this::toggleStats, this::toggleStats, null));
+        display.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_stats), this::hudModeName,
+                () -> stepHudMode(-1), () -> stepHudMode(1), null));
 
         java.util.List<app.ezsteam.runtime.CompositorMenu.Item> input = new java.util.ArrayList<>();
         input.add(new app.ezsteam.runtime.CompositorMenu.Item(s(R.string.menu_touch_pad),
@@ -328,11 +344,19 @@ public class DisplayActivity extends Activity {
         notice(s(R.string.notice_next_game));
     }
 
-    /** Status strip on/off, kept for next time / 상태 띠 켬/끔, 다음에도 유지 */
-    private void toggleStats() {
-        statsShown = !statsShown;
-        getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit().putBoolean(PREF_STATS, statsShown).apply();
+    /** Performance display off / strip / HUD card, kept for next time / 성능 표시 끔·띠·HUD 카드, 다음에도 유지 */
+    private void stepHudMode(int dir) {
+        hudMode = (hudMode + dir + 3) % 3;
+        statsShown = hudMode == 1;
+        getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).edit().putInt(PREF_HUD, hudMode)
+                .putBoolean(PREF_STATS, statsShown).apply();
         statsView.setVisibility(statsShown ? View.VISIBLE : View.GONE);
+        hud.setVisibility(hudMode == 2 ? View.VISIBLE : View.GONE);
+        log("성능 표시: " + hudModeName() + " (메뉴)");
+    }
+
+    private String hudModeName() {
+        return s(hudMode == 0 ? R.string.v_off : hudMode == 1 ? R.string.v_hud_strip : R.string.v_hud_card);
     }
 
     /** App log over the screen on/off / 화면 위 앱 로그 켬/끔 */
@@ -657,6 +681,9 @@ public class DisplayActivity extends Activity {
         view.setFsrSharpness(getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getFloat(PREF_FSR_SHARP, 0.2f));
         applyFsrTarget(getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getInt(PREF_FSR_TARGET, 0));
         statsShown = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getBoolean(PREF_STATS, true);
+        // Three-way display mode; the old on/off value maps to strip/off / 세 단계 표시 방식. 예전 켬/끔 값은 띠/끔으로
+        hudMode = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE).getInt(PREF_HUD, statsShown ? 1 : 0);
+        statsShown = hudMode == 1;
 
         logScroll = new ScrollView(this);
         logView = new TextView(this);
@@ -678,6 +705,14 @@ public class DisplayActivity extends Activity {
         statsView.setText(w + "x" + h + " " + s(R.string.stats_starting));
         statsView.setVisibility(statsShown ? View.VISIBLE : View.GONE);
         root.addView(statsView, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START));
+        // HUD card, top left; it only shows values the monitor thread hands in (no own work)
+        // HUD 카드, 왼쪽 위. 모니터 스레드가 넘긴 값만 보여 줌(스스로 하는 일 없음)
+        hud = new app.ezsteam.runtime.PerfHud(this);
+        float dens = getResources().getDisplayMetrics().density;
+        FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams((int) (340 * dens), -2, Gravity.TOP | Gravity.START);
+        hlp.leftMargin = hlp.topMargin = (int) (8 * dens);
+        hud.setVisibility(hudMode == 2 ? View.VISIBLE : View.GONE);
+        root.addView(hud, hlp);
 
         // First-run preparation banner, top centre, shown only while an installer runs; it takes
         // no touches (they reach the screen below)
@@ -879,6 +914,9 @@ public class DisplayActivity extends Activity {
     }
 
     private void log(String s) {
+        // HUD facts from the session's own lines (cheap prefix checks) / 세션 자체 줄에서 HUD 정보(가벼운 앞부분 비교)
+        if (s.startsWith("INFO present : 장치 ")) hudRenderer = s.substring("INFO present : 장치 ".length());
+        else if (s.startsWith("OK   xvfb : ")) hudXserver = s.contains("서버 xwayland") ? "Xwayland" : "Xvfb";
         // First Steam window after a (re)start: the centre progress card is no longer needed
         // (re)시작 뒤 첫 Steam 창: 가운데 진행 카드가 더는 필요 없음
         if (!steamWindowSeen && s.startsWith("X 포커스") && s.contains("(새 창)")) {
@@ -2373,8 +2411,10 @@ public class DisplayActivity extends Activity {
             long lastRx = android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid());
             long lastRxNs = System.nanoTime();
             while (!finishing) {
+                long scan0 = System.nanoTime();
                 java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps =
                         app.ezsteam.runtime.ChildProcessCounter.descendants(android.os.Process.myPid());
+                long scanNs = System.nanoTime() - scan0;
                 procNow = ps.size();
                 updateCpu(ps, lastTicks, lastNs);
                 logCefHelpers(ps);
@@ -2396,6 +2436,9 @@ public class DisplayActivity extends Activity {
                 }
                 am.getMemoryInfo(mi);
                 memFreeMb = mi.availMem >> 20;
+                // HUD card only while it is shown (PSS and grouping cost nothing when hidden)
+                // HUD 카드는 보일 때만(숨기면 PSS·묶음 비용 없음)
+                if (hudMode == 2) updateHud(ps, scanNs);
                 if (procNow >= PROC_WARN && !procListLogged) {
                     procListLogged = true;
                     StringBuilder sb = new StringBuilder("PROC 자식 프로세스 " + procNow + "개 (한도 32):");
@@ -2437,6 +2480,119 @@ public class DisplayActivity extends Activity {
     }
 
     /**
+     * Build one HUD snapshot from what the monitor pass already has, plus PSS every 30 s, and hand it
+     * to the card. Measures nothing in the frame path; values not available are "N/A". The cost line
+     * shows this pass's own time (process list, PSS, grouping), so the HUD's overhead is visible.
+     * 모니터 회차가 이미 가진 값과 30초마다의 PSS로 HUD 스냅숏을 만들어 카드에 넘김. 프레임 경로에서 재는 것은 없고,
+     * 없는 값은 "N/A". 비용 줄은 이 회차 자체 시간(프로세스 목록, PSS, 묶음)을 보여 줘 HUD 오버헤드가 보이게 함
+     */
+    private void updateHud(java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps, long scanNs) {
+        long t0 = System.nanoTime();
+        app.ezsteam.runtime.PerfHud.Snapshot s = new app.ezsteam.runtime.PerfHud.Snapshot();
+        app.ezsteam.runtime.ChildProcessCounter.Proc game = gameOf(ps);
+        int inProot = 0;
+        long rssKb = 0;
+        // Groups in a fixed order / 고정 순서의 묶음
+        String[] names = {"Steam", "CEF", "Proton/Wine", "Game", "Display", "기타"};
+        int[] now = new int[names.length];
+        for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
+            String comm = exeName(pr);
+            if (!comm.contains("libproot")) inProot++;
+            rssKb += pr.rssKb;
+            now[hudGroup(comm, game != null && pr.pid == game.pid)]++;
+        }
+        s.procValue = String.valueOf(procNow);
+        s.procSub = String.format(Locale.ROOT, "Peak %d · 목표 %d · 한도 32 · PRoot 안 %d", procMax, PROC_TARGET, inProot);
+
+        // PSS every 30 s from /proc/<pid>/smaps_rollup (same uid, readable); N/A when none could be read
+        // PSS는 30초마다 /proc/<pid>/smaps_rollup에서(같은 uid라 읽힘). 하나도 못 읽으면 N/A
+        long ms = SystemClock.elapsedRealtime();
+        if (pssAtMs == 0 || ms - pssAtMs >= 30_000) {
+            long p0 = System.nanoTime();
+            pssKb = readPssKb(ps);
+            pssCostNs = System.nanoTime() - p0;
+            pssAtMs = ms;
+        }
+        s.memValue = String.format(Locale.ROOT, "%.2f GB", rssKb / 1048576f);
+        s.memSub = "RSS 합 · PSS " + (pssKb < 0 ? "N/A" : String.format(Locale.ROOT, "%.2f GB", pssKb / 1048576f))
+                + String.format(Locale.ROOT, " · 기기 여유 %.1f GB", memFreeMb / 1024f);
+
+        float all = cpuAll;
+        s.cpuValue = all < 0 ? "N/A" : String.format(Locale.ROOT, "%.0f%%", all);
+        s.cpuSub = "100% = 코어 1개" + (cpuTop.isEmpty() ? "" : " · 최고 " + cpuTop);
+
+        float[] fs = view.frameStats(10_000);
+        boolean gameShown = view.showingGame;
+        s.fpsValue = fs == null ? "N/A" : String.format(Locale.ROOT, "%.0f FPS", fs[0]);
+        s.fpsSub = fs == null ? "10초 동안 새 프레임 없음"
+                : String.format(Locale.ROOT, "평균 %.1fms · P95 %.1fms (%s, 10초)", fs[1], fs[2], gameShown ? "게임" : "X 화면");
+
+        s.renderer = hudRenderer;
+        s.display = hudXserver + (gameShown ? " + 게임 직접 전달" : "");
+        s.buffer = gameShown ? "AHardwareBuffer " + (MainActivity.ahbCompress(this) ? "(압축 시험 켬)" : "(linear)")
+                : "X 화면 파일 (mmap)";
+        // Copies per frame from the code of the active path, not measured (marked so)
+        // 프레임당 복사 횟수는 지금 경로의 코드 기준, 측정값 아님(그렇게 표시)
+        boolean alone = gameShown && view.gameCover >= 0.95f;
+        String xCopies = "Xwayland".equals(hudXserver) ? "2 / 2" : "1 / 1";
+        s.copies = (alone ? "1 / 0" : gameShown ? "게임 1 / 0, X " + xCopies : xCopies) + " (코드 기준)";
+
+        String[][] rows = new String[names.length][];
+        synchronized (hudGroupMax) {
+            for (int i = 0; i < names.length; i++) {
+                Integer m = hudGroupMax.get(names[i]);
+                int max = Math.max(m == null ? 0 : m, now[i]);
+                hudGroupMax.put(names[i], max);
+                rows[i] = new String[]{names[i], String.valueOf(now[i]), String.valueOf(max)};
+            }
+        }
+        s.groups = rows;
+        s.badge = gameShown ? "GAME" : "RUNNING";
+        long sec = (SystemClock.elapsedRealtime() - startMs) / 1000;
+        long buildNs = System.nanoTime() - t0;
+        s.footer = String.format(Locale.ROOT, "실행 %d:%02d:%02d · 수집 비용: 목록 %.1fms + 정리 %.1fms / 2초, PSS %.0fms / 30초",
+                sec / 3600, sec / 60 % 60, sec % 60, scanNs / 1e6, buildNs / 1e6, pssCostNs / 1e6);
+        boolean over = procNow > PROC_TARGET;
+        runOnUiThread(() -> {
+            hud.update(s);
+            hud.setProcessWarning(over);
+        });
+    }
+
+    /** HUD group of a process (index into the fixed name list) / 프로세스의 HUD 묶음(고정 이름 목록 번호) */
+    private static int hudGroup(String comm, boolean isGame) {
+        if (isGame) return 3;
+        if (comm.equals("steam")) return 0;
+        if (comm.startsWith("steamwebhelper")) return 1;
+        if (comm.startsWith("wine") || comm.endsWith(".exe") || comm.equals("reaper") || comm.startsWith("pw-audio")
+                || comm.startsWith("UnityCrash")) return 2;
+        if (comm.equals("Xwayland") || comm.equals("Xvfb") || comm.equals("ezs-wl")) return 4;
+        return 5;
+    }
+
+    /** Sum of PSS over the processes in kB, -1 when none was readable / 프로세스들의 PSS 합(kB). 하나도 못 읽으면 -1 */
+    private static long readPssKb(java.util.List<app.ezsteam.runtime.ChildProcessCounter.Proc> ps) {
+        long sum = 0;
+        int read = 0;
+        for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
+            try (java.io.BufferedReader r = new java.io.BufferedReader(
+                    new java.io.FileReader("/proc/" + pr.pid + "/smaps_rollup"))) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    if (line.startsWith("Pss:")) {
+                        sum += Long.parseLong(line.replaceAll("[^0-9]", ""));
+                        read++;
+                        break;
+                    }
+                }
+            } catch (IOException | RuntimeException ignored) {
+                // gone or not readable / 끝났거나 읽을 수 없음
+            }
+        }
+        return read == 0 ? -1 : sum;
+    }
+
+    /**
      * CPU use of each child process since the previous pass (tick difference / elapsed time;
      * 100 = one core fully busy), and the top-bar summary: all children, the game, X server, PRoot.
      * First pass only records the ticks. Processes gone since then are dropped.
@@ -2449,7 +2605,8 @@ public class DisplayActivity extends Activity {
         float sec = lastNs == 0 ? 0f : (now - lastNs) / 1e9f;
         java.util.Map<Integer, Float> pct = new java.util.HashMap<>();
         java.util.Map<Integer, Long> ticks = new java.util.HashMap<>();
-        float all = 0, xvfb = 0, proot = 0, ui = 0;
+        float all = 0, xvfb = 0, proot = 0, ui = 0, top = -1f;
+        String topName = "";
         app.ezsteam.runtime.ChildProcessCounter.Proc game = gameOf(ps);
         lastProcs = ps;
         for (app.ezsteam.runtime.ChildProcessCounter.Proc pr : ps) {
@@ -2461,6 +2618,10 @@ public class DisplayActivity extends Activity {
             pct.put(pr.pid, p);
             all += p;
             String comm = exeName(pr);
+            if (p > top) {
+                top = p;
+                topName = comm;
+            }
             // X server column: Xvfb, or Xwayland plus its compositor ezs-wl (the column counted only
             // Xvfb and showed 0% in Xwayland sessions, 2026-10-29)
             // X 서버 칸: Xvfb, 또는 Xwayland와 그 컴포지터 ezs-wl(Xvfb만 세어 Xwayland 세션에서 0%로 보였음, 2026-10-29)
@@ -2474,6 +2635,8 @@ public class DisplayActivity extends Activity {
         lastTicks.putAll(ticks);
         cpuPct = pct;
         if (sec <= 0) return;
+        cpuAll = all;
+        cpuTop = top < 0 ? "" : String.format(Locale.ROOT, "%s %.0f%%", topName, top);
         Float g = game == null ? null : pct.get(game.pid);
         cpuText = String.format(Locale.ROOT, "CPU 전체 %.0f%%  게임 %s  Steam 화면 %.0f%%  X 서버 %.0f%%  PRoot %.0f%%",
                 all, g == null ? "-" : String.format(Locale.ROOT, "%.0f%%", g), ui, xvfb, proot);

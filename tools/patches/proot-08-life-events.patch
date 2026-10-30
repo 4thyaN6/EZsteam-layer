@@ -1,0 +1,103 @@
+diff --git a/src/syscall/syscall.c b/src/syscall/syscall.c
+index c6be435..165155e 100644
+--- a/src/syscall/syscall.c
++++ b/src/syscall/syscall.c
+@@ -232,15 +232,87 @@ static uint32_t sysstat_ev[SSE_KINDS];
+ static uint32_t sysstat_sig[SYSSTAT_EXES][65];
+ static int sysstat_slot(const char *exe);
+ 
++/*
++ * Process life events, also only with PROOT_SYSSTAT: an exec is remembered (pid, time) and its exit
++ * prints one "PROOT_EV" line (program, pid, start offset, life time). Why: the app sees the process
++ * list only every 2 s, so short helpers (shell pipes, installers, Wine start-up) and the exact
++ * moment the Steam web helpers come and go were missing from the measurements (2026-10-30).
++ * Threads never exec, so they are not reported; a fork without exec is not either.
++ * 프로세스 생애 사건, 이것도 PROOT_SYSSTAT일 때만: exec를 기억하고(pid, 시각) 그 끝에서 "PROOT_EV" 한 줄을 씀
++ * (프로그램, pid, 시작 시점, 산 시간). 이유: 앱은 프로세스 목록을 2초마다만 봐서 짧은 도우미(셸 파이프, 설치
++ * 프로그램, Wine 시작)와 Steam 웹 도우미가 생기고 없어지는 정확한 시점이 측정에서 빠졌음(2026-10-30).
++ * 스레드는 exec하지 않으므로 나오지 않음. exec 없는 fork도 나오지 않음
++ */
++#define SYSSTAT_LIVE 4096
++static struct { pid_t pid; uint64_t start_ns; } sysstat_live[SYSSTAT_LIVE];
++static uint64_t sysstat_t0_ns;
++static uint32_t sysstat_exec_n, sysstat_exit_n;
++
++static void sysstat_life_exec(pid_t pid)
++{
++	uint64_t now = sysstat_now();
++	if (sysstat_t0_ns == 0)
++		sysstat_t0_ns = now;
++	sysstat_exec_n++;
++	for (int probe = 0; probe < SYSSTAT_LIVE; probe++) {
++		int i = (int) (((uint32_t) pid + (uint32_t) probe) & (SYSSTAT_LIVE - 1));
++		/* Same pid again (exec after exec): keep the first start / 같은 pid가 또 exec: 처음 시작을 유지 */
++		if (sysstat_live[i].pid == pid)
++			return;
++		if (sysstat_live[i].pid == 0) {
++			sysstat_live[i].pid = pid;
++			sysstat_live[i].start_ns = now;
++			return;
++		}
++	}
++}
++
++static void sysstat_life_exit(const Tracee *tracee)
++{
++	for (int probe = 0; probe < SYSSTAT_LIVE; probe++) {
++		int i = (int) (((uint32_t) tracee->pid + (uint32_t) probe) & (SYSSTAT_LIVE - 1));
++		if (sysstat_live[i].pid == 0)
++			return;
++		if (sysstat_live[i].pid != tracee->pid)
++			continue;
++		uint64_t now = sysstat_now();
++		const char *exe = tracee->exe != NULL ? strrchr(tracee->exe, '/') : NULL;
++		exe = exe != NULL ? exe + 1 : (tracee->exe != NULL ? tracee->exe : "?");
++		sysstat_exit_n++;
++		fprintf(stderr, "PROOT_EV 끝 %s pid %d 시작 +%.1fs 생존 %.2fs\n", exe, (int) tracee->pid,
++			(sysstat_live[i].start_ns - sysstat_t0_ns) / 1e9, (now - sysstat_live[i].start_ns) / 1e9);
++		/* Remove keeping the probe chain intact: re-insert the rest of the run
++		 * 지움. 탐색 사슬이 끊기지 않게 뒤따르는 항목을 다시 넣음 */
++		sysstat_live[i].pid = 0;
++		for (int j = (i + 1) & (SYSSTAT_LIVE - 1); sysstat_live[j].pid != 0; j = (j + 1) & (SYSSTAT_LIVE - 1)) {
++			pid_t p = sysstat_live[j].pid;
++			uint64_t t = sysstat_live[j].start_ns;
++			sysstat_live[j].pid = 0;
++			for (int q = 0; q < SYSSTAT_LIVE; q++) {
++				int k = (int) (((uint32_t) p + (uint32_t) q) & (SYSSTAT_LIVE - 1));
++				if (sysstat_live[k].pid == 0) {
++					sysstat_live[k].pid = p;
++					sysstat_live[k].start_ns = t;
++					break;
++				}
++			}
++		}
++		return;
++	}
++}
++
+ void sysstat_event(const Tracee *tracee, int code, int exited)
+ {
+ 	if (sysstat_sec <= 0)
+ 		return;
+ 	if (exited) {
+ 		sysstat_ev[SSE_EXIT]++;
++		sysstat_life_exit(tracee);
+ 		return;
+ 	}
+ 	int sig = code & 0xff;
++	if (sig == SIGTRAP && (code >> 8) == PTRACE_EVENT_EXEC)
++		sysstat_life_exec(tracee->pid);
+ 	if (code == (SIGTRAP | 0x80))
+ 		sysstat_ev[SSE_SYSCALL]++;
+ 	else if (sig == SIGTRAP && (code >> 8) == PTRACE_EVENT_SECCOMP)
+@@ -286,6 +358,10 @@ static void sysstat_report_events(uint64_t span_ns)
+ 		len += snprintf(line + len, sizeof(line) - (size_t) len, " 신호%d(%s) %u,", bs, sysstat_exe[be], best);
+ 		sysstat_sig[be][bs] = 0;
+ 	}
++	/* Programs started (exec) and ended in this span / 이 구간에 시작(exec)·끝난 프로그램 수 */
++	if (len < (int) sizeof(line) - 60)
++		len += snprintf(line + len, sizeof(line) - (size_t) len, " 프로그램 시작 %u 끝 %u,", sysstat_exec_n, sysstat_exit_n);
++	sysstat_exec_n = sysstat_exit_n = 0;
+ 	if (len > 0 && line[len - 1] == ',')
+ 		line[len - 1] = '\0';
+ 	fprintf(stderr, "%s\n", line);

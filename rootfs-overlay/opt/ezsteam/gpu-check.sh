@@ -38,6 +38,11 @@ EZG_P=check
 . /opt/ezsteam/ezs-gpupath.sh >> "$OUT" 2>&1
 say "INFO check : GL 라이브러리 $(LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" ldd "$T" 2>/dev/null | awk '/libGL/ {print $1"="$3}' | tr '\n' ' ')"
 
+# X server extensions and GLX facts first (DRI3 / Present offered or not, direct rendering)
+# X 서버 확장과 GLX 정보 먼저(DRI3·Present 제공 여부, 직접 렌더링)
+timeout 10 "$T" --xinfo 2>&1 | grep -v '^RESULT' > /tmp/ezs-check-xinfo.log
+while IFS= read -r l; do say "INFO xinfo : $l"; done < /tmp/ezs-check-xinfo.log
+
 # run <case> <env...> -- <command...>: time limit 25 s, crash reporter on, result line kept
 # run <경우> <환경...> -- <명령...>: 시간 제한 25초, 크래시 보고기 켬, 결과 줄 보관
 run() {

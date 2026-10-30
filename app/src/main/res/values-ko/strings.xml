@@ -173,6 +173,8 @@
     <string name="v_normal">일반</string>
     <string name="v_notify">알림</string>
     <string name="v_off">끔</string>
+    <string name="v_hud_strip">간단(띠)</string>
+    <string name="v_hud_card">자세히(HUD)</string>
     <string name="v_on">켬</string>
     <string name="v_reduced">줄임</string>
     <string name="v_shown">보임</string>
