@@ -1,24 +1,25 @@
 # Web helper variants for ezs-whtest.bat (ANGLE Vulkan Steam UI), one per line: tag|KEY=VALUE
 # An empty value after "|" = no variant (comparison run). EZS_WH_FLAGS_ADD=... adds Chromium flags.
 # The line is written to ~/.local/share/ezsteam/wh-test.env and read by ezs-webhelper-env.sh.
+# Earlier variants (TU_DEBUG sysmem/noubwc/nolrz, --ui-disable-partial-swap, ANGLE features
+# supportsIncrementalPresent/preferDrawClearOverVkCmdClearAttachments) cost nothing extra but could
+# not be judged: the fault did not show in the comparison run either (2026-10-31 16:13-16:33)
 # ezs-whtest.bat용 웹 도우미 변형(ANGLE Vulkan Steam 화면), 줄마다 하나: tag|KEY=VALUE
 # "|" 뒤가 비면 변형 없음(비교용 실행). EZS_WH_FLAGS_ADD=...는 Chromium 플래그를 더함.
-# 줄은 ~/.local/share/ezsteam/wh-test.env에 쓰이고 ezs-webhelper-env.sh가 읽음
+# 줄은 ~/.local/share/ezsteam/wh-test.env에 쓰이고 ezs-webhelper-env.sh가 읽음.
+# 앞의 변형(TU_DEBUG sysmem/noubwc/nolrz, --ui-disable-partial-swap, ANGLE 기능 supportsIncrementalPresent/
+# preferDrawClearOverVkCmdClearAttachments)은 추가 비용이 없었지만 판정 못 함: 비교용 실행에서도 깨짐이 나오지 않았음
+# (2026-10-31 16:13~16:33)
 base|
-# Turnip renders straight to memory instead of tile memory (GMEM) / Turnip이 타일 메모리(GMEM) 대신 메모리에 바로 그림
-sysmem|TU_DEBUG=sysmem
-# Turnip without UBWC compression / Turnip UBWC 압축 끔
-noubwc|TU_DEBUG=noubwc
-# Turnip without LRZ (low-resolution depth) / Turnip LRZ(저해상도 깊이) 끔
-nolrz|TU_DEBUG=nolrz
-# Chromium redraws the whole frame each time / Chromium이 매번 화면 전체를 다시 그림
-nopartial|EZS_WH_FLAGS_ADD=--ui-disable-partial-swap
-# ANGLE Vulkan feature switches (names from ANGLE FeaturesVk_autogen.h; Chromium takes a comma list)
-# ANGLE Vulkan 기능 스위치(이름은 ANGLE FeaturesVk_autogen.h, Chromium은 쉼표 목록을 받음)
-# New allocations filled with non-zero values: if the noise pattern changes, the bands are unwritten memory
-# 새 할당을 0이 아닌 값으로 채움: 잡음 모양이 바뀌면 띠는 쓰이지 않은 메모리임
+# Blur behind the header/footer reads its edges clamped instead of mirrored (Chromium feature,
+# on by default since M129). The broken bands are exactly the 40-row header/footer over the panel
+# 머리줄·안내줄 뒤 흐림이 가장자리를 거울 대신 늘여서 읽음(Chromium 기능, M129부터 기본 켬).
+# 깨지는 띠가 정확히 패널 위 40줄 머리줄·안내줄 자리임
+mirroroff|EZS_WH_FLAGS_ADD=--disable-features=BackdropFilterMirrorEdgeMode
+# Page drawing (raster) on the CPU, compositing still on the GPU / 페이지 그리기(래스터)는 CPU, 합성은 그대로 GPU
+nogpuraster|EZS_WH_FLAGS_ADD=--disable-gpu-rasterization
+# New allocations filled with non-zero values: if the noise pattern changes, the bands are unwritten
+# memory (its first run was not measured: the app screen came up late, 2026-10-31 16:28)
+# 새 할당을 0이 아닌 값으로 채움: 잡음 모양이 바뀌면 띠는 쓰이지 않은 메모리임(첫 실행은 앱 화면이 늦게 떠 측정 못 함,
+# 2026-10-31 16:28)
 anglenonzero|EZS_WH_FLAGS_ADD=--enable-angle-features=allocateNonZeroMemory
-# No VK_KHR_incremental_present (present of changed rectangles only) / VK_KHR_incremental_present(바뀐 사각형만 내보내기) 끔
-anglenoincr|EZS_WH_FLAGS_ADD=--disable-angle-features=supportsIncrementalPresent
-# Clears inside a render pass done with a draw call / 렌더 패스 안의 지우기를 그리기 호출로 함
-angledrawclear|EZS_WH_FLAGS_ADD=--enable-angle-features=preferDrawClearOverVkCmdClearAttachments

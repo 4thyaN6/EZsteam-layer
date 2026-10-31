@@ -221,12 +221,16 @@ function Measure-Span([string]$Label, [int]$Sec, [bool]$Keys) {
     # 셸 문자열 하나로 넘김: 라벨과 콜론이 grep 패턴 하나로 남음
     return @(Invoke-Adb shell "run-as $Pkg grep -a 'MEASURE ${Label}:' $SessionLog" | Select-Object -Last 1)
 }
-# Menu check: two guide presses with frames after each (the menu state is not assumed); the
-# lines carry the band noise score of the menu fault
-# 메뉴 확인: 가이드 두 번, 누를 때마다 프레임 기록(메뉴 상태는 가정하지 않음). 줄에 메뉴 깨짐 띠 잡음 점수가 있음
+# Menu check: four guide presses with frames after each (the menu state is not assumed); the
+# lines carry the band noise score of the menu fault. Run right after the start: the fault showed
+# when the menu was opened 60 s after the start (2026-10-31 13:46, 14:16) and not after a minute of
+# arrow-key moves (nine runs, 2026-10-31 16:02-16:33)
+# 메뉴 확인: 가이드 네 번, 누를 때마다 프레임 기록(메뉴 상태는 가정하지 않음). 줄에 메뉴 깨짐 띠 잡음 점수가 있음.
+# 시작 직후에 실행함: 시작 60초 뒤 메뉴를 열었을 때 깨짐이 나왔고(2026-10-31 13:46, 14:16), 화살표 이동 1분 뒤에는
+# 나오지 않았음(9회, 2026-10-31 16:02~16:33)
 function Test-Menu([string]$Tag, [string]$Dir) {
     $out = @()
-    for ($r = 1; $r -le 2; $r++) {
+    for ($r = 1; $r -le 4; $r++) {
         Invoke-Adb shell am broadcast -a app.ezsteam.GUIDE | Out-Null
         Start-Sleep -Seconds 4
         $out += Get-Shot "$Tag-g$r" $Dir 1500 $false 1
@@ -402,10 +406,10 @@ if ($Cmd -eq 'whtest') {
             $took = @(Invoke-Adb shell "run-as $Pkg grep -a 'ezs-webhelper: ' $SessionLog" | Select-Object -Last 1)
             $ok = if (-not $v.Line) { '해당 없음' } elseif (($took -join ' ') -match '시험 변형') { '적용됨' } else { '적용 안 됨' }
             $results += "${t}: 변형 '$($v.Line)' → $ok"
-            Write-Host '   화살표 키 이동 60초 측정'
-            $results += Measure-Span "$t-move" 60 $true
-            Write-Host '   메뉴 확인'
+            Write-Host '   메뉴 확인 (시작 직후)'
             $results += Test-Menu $t $dir
+            Write-Host '   화살표 키 이동 60초 측정 (메뉴가 열린 채면 프레임이 0으로 나옴)'
+            $results += Measure-Span "$t-move" 60 $true
         }
         Get-Report | Out-Null
     } finally {
