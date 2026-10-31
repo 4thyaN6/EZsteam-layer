@@ -40,7 +40,8 @@ apt-get update -q
 # g++: SDL2 CMakeLists가 "project(SDL2 C CXX)"로 선언해서, 여기서 C++을 빌드하지 않아도 C++ 컴파일러가
 # 없으면 CMake가 멈춤
 apt-get install -y -q --no-install-recommends gcc g++ libc6-dev libasound2-dev libvulkan-dev binutils git cmake make \
-    ca-certificates pkgconf libwayland-dev libwayland-bin wayland-protocols libgl-dev libx11-dev
+    ca-certificates pkgconf libwayland-dev libwayland-bin wayland-protocols libgl-dev libx11-dev \
+    libxcomposite-dev libxdamage-dev libxfixes-dev libxrender-dev libxext-dev
 
 mkdir -p "$OUT"
 # -DPIC: alsa-lib's plugin macros need it for a shared object (else snd_dlsym_start is undefined)
@@ -141,6 +142,16 @@ gcc -O2 -Wall -Wextra -I"$G" -o "$OUT/bin/ezs-wl" native/ezswl/ezs_wl.c "$G/xdg-
     "$G/linux-dmabuf-v1-protocol.c" $(pkg-config --cflags --libs wayland-server)
 strip --strip-unneeded "$OUT/bin/ezs-wl"
 objdump -p "$OUT/bin/ezs-wl" | grep NEEDED
+
+# Minimal X compositing manager for the rootful Xwayland screen (native/ezsxcm, test switch "xcm"):
+# blends ARGB windows such as Steam's Big Picture window. Its libraries come with the Steam client
+# packages in the rootfs (libxcomposite1, libxdamage1, libxfixes3; libxrender1 through libcairo2)
+# rootful Xwayland 화면용 최소 X 합성 관리자(native/ezsxcm, 시험 스위치 "xcm"): Steam 빅픽처 창 같은 ARGB 창을
+# 섞음. 라이브러리는 rootfs의 Steam 클라이언트 패키지에 들어 있음(libxcomposite1, libxdamage1, libxfixes3,
+# libxrender1은 libcairo2를 통해)
+gcc -O2 -Wall -Wextra -o "$OUT/bin/ezs-xcm" native/ezsxcm/ezs_xcm.c -lXcomposite -lXdamage -lXfixes -lXrender -lX11
+strip --strip-unneeded "$OUT/bin/ezs-xcm"
+objdump -p "$OUT/bin/ezs-xcm" | grep NEEDED
 
 # libdrm checks for the Android GPU device (native/ezsdrm), preloaded only with the "GPU device"
 # test switch; no libdrm link (the real one is reached through RTLD_NEXT)

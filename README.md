@@ -49,6 +49,7 @@
 | `rootfs-overlay/opt/ezsteam/drawtest.sh`, `xwd2png.py` | [그리기 시험]: Xvfb `:99` + Turnip `vkcube` 600프레임, fps, `xwd` 캡처를 `~/ezs-logs/drawtest.png`로 저장해 앱에 표시 |
 | `rootfs-overlay/opt/ezsteam/display.sh` | [화면 WxH]: Xvfb `:98` `-fbdir` + 시험 창(vkcube, xclock, xeyes, xcalc, keyview), 앱이 stdin을 닫으면 종료 |
 | `native/ezswl/ezs_wl.c` | rootfs 안 최소 Wayland 컴포지터 `ezs-wl`(자체 작성, MIT): rootful Xwayland 하나의 toplevel 프레임을 Xvfb와 같은 XWD 화면 파일로 복사(앱 쪽 변경 없음). wl_compositor, wl_shm, wl_output, xdg_wm_base, `--rdev`일 때 linux-dmabuf v4(주 장치 = GPU 노드, LINEAR만, mmap 읽기). seat 없음(입력은 XTEST) |
+| `native/ezsxcm/ezs_xcm.c` | 최소 X 합성 관리자 `ezs-xcm`(자체 작성, MIT, 시험 스위치 `~/.local/share/ezsteam/xcm`): rootful Xwayland의 최상위 창을 Composite로 리디렉트하고, 바뀔 때마다 검정 위에 아래→위로 그림(ARGB 창은 알파 반영, Render Over). 결과는 Composite 오버레이 창(입력 통과). 투명한 32비트 창(Steam 빅픽처)의 투명 부분이 렌더러가 남긴 값으로 보이던 문제 확인용 |
 | `native/ezsdrm/ezs_drm.c` | libdrm 심 `libezs_drm.so`(LD_PRELOAD, 자체 작성): kgsl fd/장치 번호에 대해 render 노드 형식, `/dev/dri/renderD128` platform 장치, GEM 핸들 대신 dma-buf 번호표. 나머지는 실제 libdrm |
 | `rootfs-overlay/opt/ezsteam/ezs-gpupath.sh` | GPU 화면 경로 시험 스위치 환경(steam-run.sh·EZ Proton이 불러옴): `EZS_ZINK=1` Zink 앞단, `EZS_GPU_NODE=1` 심 + mesax Turnip, Xwayland와 함께면 DRI3(소프트웨어 출력 끔). 스위치가 모두 꺼지면 아무것도 바꾸지 않음 |
 | `rootfs-overlay/opt/ezsteam/keyview.py` | 키 확인 창(libX11 ctypes): 키보드 포커스를 갖고 받은 X 키코드·키 이름을 창과 앱 로그(`KEY`)에 표시 |

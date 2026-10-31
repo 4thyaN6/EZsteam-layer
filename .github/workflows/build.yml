@@ -260,6 +260,8 @@ jobs:
           # Guest Wayland compositor (Xwayland screen mode) and libdrm shim (GPU device switch)
           # rootfs 안 Wayland 컴포지터(Xwayland 화면 방식)와 libdrm 심(GPU 장치 스위치)
           cp alsa-artifact/bin/ezs-wl rootfs-overlay/opt/ezsteam/bin/
+          # X compositing manager test (switch "xcm") / X 합성 관리자 시험(스위치 "xcm")
+          cp alsa-artifact/bin/ezs-xcm rootfs-overlay/opt/ezsteam/bin/
           cp alsa-artifact/libezs_drm.so rootfs-overlay/opt/ezsteam/lib/
           # GPU path check: crash reporter and GLX check program
           # GPU 경로 점검: 크래시 보고기와 GLX 확인 프로그램

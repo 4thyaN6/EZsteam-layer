@@ -20,11 +20,15 @@ param(
     # noise and CPU per variant; the variant file is removed afterwards
     # whtest = ANGLE Vulkan Steam 화면을 웹 도우미 변형(드라이버·Chromium 설정)별로 실행, 변형마다 메뉴 띠 잡음과 CPU.
     # 끝나면 변형 파일을 지움
+    # xcmtest = ANGLE Vulkan Steam UI without and with the X compositing manager test (ezs-xcm),
+    # menu pictures and CPU each; the switch is removed afterwards
+    # xcmtest = ANGLE Vulkan Steam 화면을 X 합성 관리자 시험(ezs-xcm) 없이 한 번, 켜고 한 번. 각각 메뉴 캡처와 CPU.
+    # 끝나면 스위치를 지움
     # release = tag the pushed commit with "v" + versionName of app/build.gradle (test release:
     # rootfs, driver and APK go to GitHub Releases, where the app downloads them)
     # release = 올린 커밋에 "v" + app/build.gradle의 versionName 태그를 붙임(테스트 릴리스:
     # rootfs, 드라이버, APK가 GitHub Releases에 올라가고 앱은 거기서 받음)
-    [Parameter(Mandatory = $true)][ValidateSet('push', 'install', 'check', 'report', 'steam', 'compare', 'menushot', 'shot', 'whtest', 'release')][string]$Cmd,
+    [Parameter(Mandatory = $true)][ValidateSet('push', 'install', 'check', 'report', 'steam', 'compare', 'menushot', 'shot', 'whtest', 'xcmtest', 'release')][string]$Cmd,
     # steam: seconds to wait after the start before the report / steam: 시작 뒤 제보까지 기다리는 초
     [int]$Wait = 90,
     # Display path for steam: '' = as set in the app, xvfb = Zink GL on Xvfb, xwayland = Zink GL +
@@ -383,6 +387,70 @@ if ($Cmd -eq 'whtest') {
     foreach ($n in @(Invoke-Adb shell "ls $Reports" | Where-Object { $_ -like 'shot-*.png' })) {
         Invoke-Adb pull "$Reports/$n" (Join-Path $dir $n) | Out-Null
         Invoke-Adb shell rm -f "$Reports/$n" | Out-Null
+    }
+    Write-Host ''
+    Write-Host "== 결과 (그림: $dir)"
+    $results | ForEach-Object { Write-Host $_ }
+    $results | Set-Content -Encoding UTF8 (Join-Path $dir 'result.txt')
+    try { Start-Process explorer.exe "`"$dir`"" } catch { }
+    return
+}
+
+if ($Cmd -eq 'xcmtest') {
+    # Same steps twice, ANGLE Vulkan: without, then with the compositing manager (switch file "xcm",
+    # created with touch like the other switches). Watch the tablet while it runs
+    # ANGLE Vulkan으로 같은 단계를 두 번: 합성 관리자 없이, 그다음 켜고(스위치 파일 "xcm", 다른 스위치처럼 touch로 만듦).
+    # 도는 동안 태블릿 화면을 보면 됨
+    $XcmFile = "$SwDir/xcm"
+    $saved = @(Get-Switches)
+    $prefs = (Invoke-Adb shell run-as $Pkg cat shared_prefs/ezsteam.xml) -join "`n"
+    $orig = -1
+    if ($prefs -match 'name="steam_gpu" value="(\d+)"') { $orig = [int]$Matches[1] }
+    Set-Switches $PathSwitches['xwayland']
+    $dir = Join-Path $Repo "reports\xcmtest_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss')"
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $results = @()
+    try {
+        foreach ($on in @($false, $true)) {
+            $t = if ($on) { 'vk-xcm' } else { 'vk-plain' }
+            if ($on) { Invoke-Adb shell run-as $Pkg touch $XcmFile | Out-Null }
+            else { Invoke-Adb shell run-as $Pkg rm -f $XcmFile | Out-Null }
+            Write-Host "== ${t}: Steam 새로 시작(ANGLE Vulkan, 합성 관리자 $(if ($on) { '켬' } else { '끔' })), 60초 안정"
+            Invoke-Adb shell am force-stop $Pkg | Out-Null
+            $o = Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run steam --ei ezs.gpumode 2
+            if (($o -join ' ') -match 'Error') { Write-Host ($o -join "`n"); throw '앱 시작 실패 (태블릿 연결·USB 디버깅 확인)' }
+            Start-Sleep -Seconds 60
+            Write-Host '   홈 화면'
+            $results += Get-Shot "$t-home" $dir 0 $true 1
+            # Four guide presses with pictures after each (the menu state is not assumed: the first
+            # press after a start was not always taken)
+            # 가이드 네 번, 누를 때마다 캡처(메뉴 상태는 가정하지 않음: 시작 뒤 첫 누름이 늘 먹히지는 않았음)
+            for ($r = 1; $r -le 4; $r++) {
+                Write-Host "   가이드 $r"
+                Invoke-Adb shell am broadcast -a app.ezsteam.GUIDE | Out-Null
+                Start-Sleep -Seconds 4
+                $results += Get-Shot "$t-g$r" $dir 1500 $true 2
+            }
+            # Cost: 30 s of arrow-key moves / 비용: 화살표 키 이동 30초
+            Write-Host '   화살표 키 이동 30초 측정'
+            Invoke-Adb shell am broadcast -a app.ezsteam.MEASURE --es phase start --es label "$t-move" | Out-Null
+            Invoke-Adb shell 'e=$(( $(date +%s) + 30 )); while [ $(date +%s) -lt $e ]; do input keyevent 22; sleep 0.3; input keyevent 21; sleep 0.3; done' | Out-Null
+            Invoke-Adb shell am broadcast -a app.ezsteam.MEASURE --es phase end --es label "$t-move" | Out-Null
+            Start-Sleep -Seconds 3
+            $results += @(Invoke-Adb shell run-as $Pkg grep -a "MEASURE $t-move:" $SessionLog | Select-Object -Last 1)
+            # What the compositing manager reported / 합성 관리자가 남긴 줄
+            $results += @(Invoke-Adb shell "run-as $Pkg grep -a -E 'xcm :|ezs-xcm:' $SessionLog" | Select-Object -Last 6)
+        }
+        Get-Report | Out-Null
+    } finally {
+        # Never leave the switch behind / 스위치를 남기지 않음
+        Invoke-Adb shell run-as $Pkg rm -f $XcmFile | Out-Null
+        Invoke-Adb shell am force-stop $Pkg | Out-Null
+        Set-Switches $saved
+        if ($orig -ge 0) {
+            Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run setgpu --ei ezs.gpumode $orig | Out-Null
+            Write-Host "Steam 화면 GPU 방식 되돌림 ($orig)"
+        }
     }
     Write-Host ''
     Write-Host "== 결과 (그림: $dir)"
