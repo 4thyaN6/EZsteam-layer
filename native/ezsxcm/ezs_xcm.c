@@ -169,7 +169,7 @@ static void paint(void)
     paint_dirty = 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
     dpy = XOpenDisplay(NULL);
@@ -194,8 +194,15 @@ int main(void)
     scr_h = DisplayHeight(dpy, scr);
 
     /* Announce a compositing manager (_NET_WM_CM_S0), as gamescope and other compositors do;
-       a second one is refused / 합성 관리자임을 알림(_NET_WM_CM_S0). gamescope 등 합성기가 하는 것과 같음.
-       두 번째 것은 거부함 */
+       a second one is refused. "--no-cm-selection" skips it: with the announcement the Steam UI's
+       GPU window surface failed ("eglCreateWindowSurface failed with error EGL_BAD_CONFIG", xcmtest
+       2026-10-31 13:48) and the UI ran like software compositing (Steam UI 190%, 21 frames/s), so the
+       blending is tested once without it (Chromium reads only this selection, not the redirection)
+       합성 관리자임을 알림(_NET_WM_CM_S0). gamescope 등 합성기가 하는 것과 같음. 두 번째 것은 거부함.
+       "--no-cm-selection"이면 알리지 않음: 알렸을 때 Steam 화면의 GPU 창 표면 만들기가 실패했고("eglCreateWindowSurface
+       failed with error EGL_BAD_CONFIG", xcmtest 2026-10-31 13:48) 화면이 소프트웨어 합성처럼 돌았음(Steam 화면
+       190%, 초당 21프레임). 그래서 알리지 않고 섞기만 한 번 시험함(Chromium은 리디렉트가 아니라 이 선택만 읽음) */
+    int announce = !(argc > 1 && strcmp(argv[1], "--no-cm-selection") == 0);
     char name[32];
     snprintf(name, sizeof name, "_NET_WM_CM_S%d", scr);
     Atom cm = XInternAtom(dpy, name, False);
@@ -203,8 +210,10 @@ int main(void)
         printf("FAIL xcm : 이미 다른 합성 관리자가 있음\n");
         return 1;
     }
-    Window owner = XCreateSimpleWindow(dpy, root, -1, -1, 1, 1, 0, 0, 0);
-    XSetSelectionOwner(dpy, cm, owner, CurrentTime);
+    if (announce) {
+        Window owner = XCreateSimpleWindow(dpy, root, -1, -1, 1, 1, 0, 0, 0);
+        XSetSelectionOwner(dpy, cm, owner, CurrentTime);
+    }
 
     XGrabServer(dpy);
     XCompositeRedirectSubwindows(dpy, root, CompositeRedirectManual);
@@ -226,7 +235,8 @@ int main(void)
     /* Back buffer, so a frame never shows half drawn / 반쯤 그린 프레임이 보이지 않게 뒤 버퍼를 둠 */
     back_pix = XCreatePixmap(dpy, root, (unsigned)scr_w, (unsigned)scr_h, (unsigned)ra.depth);
     back_pic = XRenderCreatePicture(dpy, back_pix, rf, 0, NULL);
-    printf("INFO xcm : 합성 관리자 시작 %dx%d, Composite %d.%d, 루트 깊이 %d\n", scr_w, scr_h, maj, min, ra.depth);
+    printf("INFO xcm : 합성 관리자 시작 %dx%d, Composite %d.%d, 루트 깊이 %d, %s\n", scr_w, scr_h, maj, min, ra.depth,
+           announce ? "_NET_WM_CM 알림" : "_NET_WM_CM 알리지 않음");
 
     double last_stat = now_ms();
     struct pollfd pfd = {ConnectionNumber(dpy), POLLIN, 0};

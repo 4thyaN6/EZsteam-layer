@@ -402,6 +402,12 @@ if ($Cmd -eq 'xcmtest') {
     # ANGLE Vulkan으로 같은 단계를 두 번: 합성 관리자 없이, 그다음 켜고(스위치 파일 "xcm", 다른 스위치처럼 touch로 만듦).
     # 도는 동안 태블릿 화면을 보면 됨
     $XcmFile = "$SwDir/xcm"
+    $XcmNoSel = "$SwDir/xcm-nosel"
+    # Chromium's own error log, to count GPU surface failures per run
+    # Chromium 자체 오류 로그. 실행마다 GPU 표면 실패를 셈
+    $CefLog = 'files/ezs/home/steam/.local/share/Steam/logs/cef_log.txt'
+    # First number in adb output, 0 when none (missing file) / adb 출력의 첫 숫자, 없으면 0(파일 없음)
+    function Get-Count($o) { if (($o -join ' ') -match '(\d+)') { return [int]$Matches[1] } return 0 }
     $saved = @(Get-Switches)
     $prefs = (Invoke-Adb shell run-as $Pkg cat shared_prefs/ezsteam.xml) -join "`n"
     $orig = -1
@@ -411,11 +417,17 @@ if ($Cmd -eq 'xcmtest') {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $results = @()
     try {
-        foreach ($on in @($false, $true)) {
-            $t = if ($on) { 'vk-xcm' } else { 'vk-plain' }
-            if ($on) { Invoke-Adb shell run-as $Pkg touch $XcmFile | Out-Null }
-            else { Invoke-Adb shell run-as $Pkg rm -f $XcmFile | Out-Null }
-            Write-Host "== ${t}: Steam 새로 시작(ANGLE Vulkan, 합성 관리자 $(if ($on) { '켬' } else { '끔' })), 60초 안정"
+        # plain = none, nosel = blending without announcing a compositing manager, xcm = both
+        # (with the announcement the GPU window surface failed, 2026-10-31 13:48)
+        # plain = 없음, nosel = 합성 관리자임을 알리지 않고 섞기만, xcm = 둘 다
+        # (알렸을 때 GPU 창 표면이 실패했음, 2026-10-31 13:48)
+        foreach ($mode in @('plain', 'nosel', 'xcm')) {
+            $t = "vk-$mode"
+            Invoke-Adb shell run-as $Pkg rm -f $XcmFile $XcmNoSel | Out-Null
+            if ($mode -eq 'xcm') { Invoke-Adb shell run-as $Pkg touch $XcmFile | Out-Null }
+            if ($mode -eq 'nosel') { Invoke-Adb shell run-as $Pkg touch $XcmNoSel | Out-Null }
+            $eglBefore = Get-Count (Invoke-Adb shell "run-as $Pkg grep -c eglCreateWindowSurface $CefLog")
+            Write-Host "== ${t}: Steam 새로 시작(ANGLE Vulkan), 60초 안정"
             Invoke-Adb shell am force-stop $Pkg | Out-Null
             $o = Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run steam --ei ezs.gpumode 2
             if (($o -join ' ') -match 'Error') { Write-Host ($o -join "`n"); throw '앱 시작 실패 (태블릿 연결·USB 디버깅 확인)' }
@@ -437,14 +449,17 @@ if ($Cmd -eq 'xcmtest') {
             Invoke-Adb shell 'e=$(( $(date +%s) + 30 )); while [ $(date +%s) -lt $e ]; do input keyevent 22; sleep 0.3; input keyevent 21; sleep 0.3; done' | Out-Null
             Invoke-Adb shell am broadcast -a app.ezsteam.MEASURE --es phase end --es label "$t-move" | Out-Null
             Start-Sleep -Seconds 3
-            $results += @(Invoke-Adb shell run-as $Pkg grep -a "MEASURE $t-move:" $SessionLog | Select-Object -Last 1)
+            $results += @(Invoke-Adb shell "run-as $Pkg grep -a 'MEASURE $t-move:' $SessionLog" | Select-Object -Last 1)
+            # GPU window surface failures in this run / 이번 실행의 GPU 창 표면 실패
+            $eglAfter = Get-Count (Invoke-Adb shell "run-as $Pkg grep -c eglCreateWindowSurface $CefLog")
+            $results += "${t}: eglCreateWindowSurface 실패 $($eglAfter - $eglBefore)번"
             # What the compositing manager reported / 합성 관리자가 남긴 줄
             $results += @(Invoke-Adb shell "run-as $Pkg grep -a -E 'xcm :|ezs-xcm:' $SessionLog" | Select-Object -Last 6)
         }
         Get-Report | Out-Null
     } finally {
         # Never leave the switch behind / 스위치를 남기지 않음
-        Invoke-Adb shell run-as $Pkg rm -f $XcmFile | Out-Null
+        Invoke-Adb shell run-as $Pkg rm -f $XcmFile $XcmNoSel | Out-Null
         Invoke-Adb shell am force-stop $Pkg | Out-Null
         Set-Switches $saved
         if ($orig -ge 0) {

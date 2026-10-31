@@ -176,10 +176,15 @@ start_xwayland() {
     # Steam menu bands come from alpha that nothing applies (one more process while it is on)
     # X 합성 관리자 시험(스위치 파일 "xcm", ezs-xcmtest.bat가 씀): Steam 빅픽처 창 같은 32비트 창을 알파로 섞음.
     # 깨진 Steam 메뉴 띠가 아무도 적용하지 않은 알파 때문인지 확인함(켜진 동안 프로세스 1개 더)
-    if [ -f /home/steam/.local/share/ezsteam/xcm ] && [ -x /opt/ezsteam/bin/ezs-xcm ]; then
-        DISPLAY=:$D /opt/ezsteam/bin/ezs-xcm &
+    # Switch file "xcm-nosel" instead: the same without announcing a compositing manager
+    # 스위치 파일 "xcm-nosel"이면: 합성 관리자임을 알리지 않고 같은 일을 함
+    XCMSW=/home/steam/.local/share/ezsteam
+    XCMARG=""
+    [ -f "$XCMSW/xcm-nosel" ] && XCMARG="--no-cm-selection"
+    if { [ -f "$XCMSW/xcm" ] || [ -f "$XCMSW/xcm-nosel" ]; } && [ -x /opt/ezsteam/bin/ezs-xcm ]; then
+        DISPLAY=:$D /opt/ezsteam/bin/ezs-xcm $XCMARG &
         CPID=$!
-        echo "INFO xcm : 시험 스위치 켬, ezs-xcm 시작 (pid $CPID)"
+        echo "INFO xcm : 시험 스위치 켬, ezs-xcm 시작 (pid $CPID) $XCMARG"
     fi
     return 0
 }
