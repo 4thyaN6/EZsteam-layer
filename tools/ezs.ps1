@@ -168,52 +168,6 @@ if ($Cmd -eq 'steam') {
     return
 }
 
-if ($Cmd -eq 'compare') {
-    # For each mode: fresh Steam start, 60 s to settle, 2 min idle span, 1 min span with arrow keys
-    # (left/right through the Big Picture home row), then a report. The app adds up each span and
-    # prints one "MEASURE" line (CPU split, frames, frame time P95, process peak). Afterwards the
-    # display switches and the Steam UI GPU mode are put back. About 9 minutes in all.
-    # 방식마다: Steam 새로 시작, 60초 안정, 대기 2분 구간, 화살표 키 1분 구간(빅픽처 홈 줄을 좌우로), 그다음 제보.
-    # 앱이 구간마다 더해 "MEASURE" 한 줄(CPU 몫, 프레임, 프레임 시간 P95, 프로세스 최대)을 씀. 끝나면 화면 스위치와
-    # Steam 화면 GPU 방식을 되돌림. 모두 약 9분
-    $saved = @(Get-Switches)
-    $prefs = (Invoke-Adb shell run-as $Pkg cat shared_prefs/ezsteam.xml) -join "`n"
-    $orig = -1
-    if ($prefs -match 'name="steam_gpu" value="(\d+)"') { $orig = [int]$Matches[1] }
-    Set-Switches $PathSwitches['xwayland']
-    $SessionLog = 'files/ezs/home/steam/ezs-logs/app-session.log'
-    $modes = @(@{ Id = 2; Tag = 'angle-vulkan' }, @{ Id = 3; Tag = 'sw-compositing' })
-    $results = @()
-    foreach ($m in $modes) {
-        Write-Host "== $($m.Tag): Steam 새로 시작, 60초 안정"
-        Invoke-Adb shell am force-stop $Pkg | Out-Null
-        $o = Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run steam --ei ezs.gpumode $m.Id
-        if (($o -join ' ') -match 'Error') { Write-Host ($o -join "`n"); throw '앱 시작 실패 (태블릿 연결·USB 디버깅 확인)' }
-        Start-Sleep -Seconds 60
-        Write-Host "   대기 2분 측정"
-        Invoke-Adb shell am broadcast -a app.ezsteam.MEASURE --es phase start --es label "$($m.Tag)-idle" | Out-Null
-        Start-Sleep -Seconds 120
-        Invoke-Adb shell am broadcast -a app.ezsteam.MEASURE --es phase end --es label "$($m.Tag)-idle" | Out-Null
-        Write-Host "   화살표 키 이동 1분 측정"
-        Invoke-Adb shell am broadcast -a app.ezsteam.MEASURE --es phase start --es label "$($m.Tag)-move" | Out-Null
-        Invoke-Adb shell 'e=$(( $(date +%s) + 60 )); while [ $(date +%s) -lt $e ]; do input keyevent 22; sleep 0.3; input keyevent 21; sleep 0.3; done' | Out-Null
-        Invoke-Adb shell am broadcast -a app.ezsteam.MEASURE --es phase end --es label "$($m.Tag)-move" | Out-Null
-        Start-Sleep -Seconds 3
-        $results += @(Invoke-Adb shell run-as $Pkg grep MEASURE $SessionLog | Where-Object { $_ -match 'MEASURE \S+:' })
-        Get-Report | Out-Null
-    }
-    Invoke-Adb shell am force-stop $Pkg | Out-Null
-    Set-Switches $saved
-    if ($orig -ge 0) {
-        Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run setgpu --ei ezs.gpumode $orig | Out-Null
-        Write-Host "Steam 화면 GPU 방식 되돌림 ($orig)"
-    }
-    Write-Host ''
-    Write-Host '== 결과'
-    $results | ForEach-Object { Write-Host $_ }
-    return
-}
-
 # Pictures for the Steam menu fault, at three steps: X server (xwd), screen file (app input, a
 # burst of frames over time), Android screen (adb screencap, three in a row). Files land in
 # .\reports\<folder>, one result line per picture set
@@ -242,6 +196,85 @@ function Get-Shot([string]$Label, [string]$Dir, [int]$Burst = 1500, [bool]$X = $
     }
     Write-Host "   $line"
     return $line
+}
+
+# Shared steps of the unattended GPU runs / 사람 없이 도는 GPU 실행의 공통 단계
+# Fresh Steam start in a Steam UI GPU mode, then 60 s to settle / Steam 화면 GPU 방식으로 Steam 새로 시작, 60초 안정
+function Start-SteamMode([int]$Mode) {
+    Invoke-Adb shell am force-stop $Pkg | Out-Null
+    $o = Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run steam --ei ezs.gpumode $Mode
+    if (($o -join ' ') -match 'Error') { Write-Host ($o -join "`n"); throw '앱 시작 실패 (태블릿 연결·USB 디버깅 확인)' }
+    Start-Sleep -Seconds 60
+}
+# One measured span; arrow keys (left/right through the home row) when $Keys. Returns its line
+# 측정 구간 하나. $Keys면 화살표 키(홈 줄 좌우). 그 줄을 돌려줌
+function Measure-Span([string]$Label, [int]$Sec, [bool]$Keys) {
+    Invoke-Adb shell am broadcast -a app.ezsteam.MEASURE --es phase start --es label $Label | Out-Null
+    if ($Keys) {
+        Invoke-Adb shell "e=`$(( `$(date +%s) + $Sec )); while [ `$(date +%s) -lt `$e ]; do input keyevent 22; sleep 0.3; input keyevent 21; sleep 0.3; done" | Out-Null
+    } else {
+        Start-Sleep -Seconds $Sec
+    }
+    Invoke-Adb shell am broadcast -a app.ezsteam.MEASURE --es phase end --es label $Label | Out-Null
+    Start-Sleep -Seconds 3
+    # Quoted as one shell string: the label and the colon stay one grep pattern
+    # 셸 문자열 하나로 넘김: 라벨과 콜론이 grep 패턴 하나로 남음
+    return @(Invoke-Adb shell "run-as $Pkg grep -a 'MEASURE ${Label}:' $SessionLog" | Select-Object -Last 1)
+}
+# Menu check: two guide presses with frames after each (the menu state is not assumed); the
+# lines carry the band noise score of the menu fault
+# 메뉴 확인: 가이드 두 번, 누를 때마다 프레임 기록(메뉴 상태는 가정하지 않음). 줄에 메뉴 깨짐 띠 잡음 점수가 있음
+function Test-Menu([string]$Tag, [string]$Dir) {
+    $out = @()
+    for ($r = 1; $r -le 2; $r++) {
+        Invoke-Adb shell am broadcast -a app.ezsteam.GUIDE | Out-Null
+        Start-Sleep -Seconds 4
+        $out += Get-Shot "$Tag-g$r" $Dir 1500 $false 1
+    }
+    return $out
+}
+
+if ($Cmd -eq 'compare') {
+    # For each Steam UI GPU mode (1 Chromium choice = GL through Zink, 2 ANGLE Vulkan, 3 software
+    # compositing): fresh start, 60 s idle span, 60 s arrow-key span on the home screen (before any
+    # menu is opened), then the menu check (band noise). Switches and the GPU mode are put back.
+    # About 10 minutes
+    # Steam 화면 GPU 방식마다(1 Chromium 선택 = Zink 위 GL, 2 ANGLE Vulkan, 3 소프트웨어 합성): 새로 시작, 대기 60초 구간,
+    # 홈 화면에서 화살표 키 60초 구간(메뉴를 열기 전), 그다음 메뉴 확인(띠 잡음). 스위치와 GPU 방식은 되돌림. 약 10분
+    $saved = @(Get-Switches)
+    $prefs = (Invoke-Adb shell run-as $Pkg cat shared_prefs/ezsteam.xml) -join "`n"
+    $orig = -1
+    if ($prefs -match 'name="steam_gpu" value="(\d+)"') { $orig = [int]$Matches[1] }
+    Set-Switches $PathSwitches['xwayland']
+    $dir = Join-Path $Repo "reports\compare_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss')"
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $modes = @(@{ Id = 1; Tag = 'chromium-gl' }, @{ Id = 2; Tag = 'angle-vulkan' }, @{ Id = 3; Tag = 'sw-compositing' })
+    $results = @()
+    try {
+        foreach ($m in $modes) {
+            Write-Host "== $($m.Tag): Steam 새로 시작, 60초 안정"
+            Start-SteamMode $m.Id
+            Write-Host '   대기 60초 측정'
+            $results += Measure-Span "$($m.Tag)-idle" 60 $false
+            Write-Host '   화살표 키 이동 60초 측정'
+            $results += Measure-Span "$($m.Tag)-move" 60 $true
+            Write-Host '   메뉴 확인'
+            $results += Test-Menu $m.Tag $dir
+        }
+        Get-Report | Out-Null
+    } finally {
+        Invoke-Adb shell am force-stop $Pkg | Out-Null
+        Set-Switches $saved
+        if ($orig -ge 0) {
+            Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run setgpu --ei ezs.gpumode $orig | Out-Null
+            Write-Host "Steam 화면 GPU 방식 되돌림 ($orig)"
+        }
+    }
+    Write-Host ''
+    Write-Host "== 결과 (그림: $dir)"
+    $results | ForEach-Object { Write-Host $_ }
+    $results | Set-Content -Encoding UTF8 (Join-Path $dir 'result.txt')
+    return
 }
 
 if ($Cmd -eq 'shot') {
@@ -318,15 +351,28 @@ if ($Cmd -eq 'menushot') {
 }
 
 if ($Cmd -eq 'whtest') {
-    # Variants, one per run (KEY=VALUE written to the web helper's variant file; '' = none)
-    # 변형, 실행마다 하나(웹 도우미 변형 파일에 쓰는 KEY=VALUE, '' = 없음)
-    $variants = @(
-        @{ Tag = 'base'; Line = '' },
-        @{ Tag = 'sysmem'; Line = 'TU_DEBUG=sysmem' },
-        @{ Tag = 'noubwc'; Line = 'TU_DEBUG=noubwc' },
-        @{ Tag = 'nopartial'; Line = 'EZS_WH_FLAGS_ADD=--ui-disable-partial-swap' }
-    )
+    # ANGLE Vulkan (mode 2) once per web helper variant. Variants come from tools\whtest-variants.txt
+    # ("tag|KEY=VALUE" per line, '#' comments; EZS_WH_FLAGS_ADD=... adds Chromium flags), so new
+    # variants need no code change. The variant file reaches the tablet by adb push + copy (quoted
+    # shell text from Windows PowerShell 5.1 lost it before, 2026-10-31 00:34), and every run says
+    # whether the web helper really took it. Per run: 60 s arrow-key span on the home screen, then
+    # the menu check (band noise). About 3 minutes per variant
+    # ANGLE Vulkan(방식 2)을 웹 도우미 변형마다 한 번. 변형은 tools\whtest-variants.txt에서 읽음(줄마다 "tag|KEY=VALUE",
+    # '#'은 주석, EZS_WH_FLAGS_ADD=...는 Chromium 플래그 추가). 그래서 새 변형에 코드 변경이 필요 없음. 변형 파일은
+    # adb push + 복사로 태블릿에 보냄(전에는 Windows PowerShell 5.1의 따옴표 셸 글에서 사라졌음, 2026-10-31 00:34).
+    # 실행마다 웹 도우미가 실제로 받았는지 적음. 실행마다: 홈 화면 화살표 키 60초 구간, 그다음 메뉴 확인(띠 잡음).
+    # 변형마다 약 3분
+    $listFile = Join-Path $PSScriptRoot 'whtest-variants.txt'
+    $variants = @()
+    foreach ($ln in (Get-Content $listFile -Encoding UTF8)) {
+        $t = $ln.Trim()
+        if (-not $t -or $t.StartsWith('#')) { continue }
+        $p = @($t -split '\|', 2)
+        $variants += @{ Tag = $p[0].Trim(); Line = $(if ($p.Count -gt 1) { $p[1].Trim() } else { '' }) }
+    }
     $WhFile = "$SwDir/wh-test.env"
+    $tmpLocal = Join-Path $env:TEMP 'ezs-wh-test.env'
+    $tmpRemote = '/data/local/tmp/ezs-wh-test.env'
     $saved = @(Get-Switches)
     $prefs = (Invoke-Adb shell run-as $Pkg cat shared_prefs/ezsteam.xml) -join "`n"
     $orig = -1
@@ -338,55 +384,40 @@ if ($Cmd -eq 'whtest') {
     try {
         foreach ($v in $variants) {
             $t = "vk-$($v.Tag)"
+            Invoke-Adb shell run-as $Pkg rm -f $WhFile | Out-Null
             if ($v.Line) {
-                Invoke-Adb shell "run-as $Pkg sh -c `"printf '%s\n' '$($v.Line)' > $WhFile`"" | Out-Null
+                # ASCII, LF only, as the guest shell reads it / guest 셸이 읽는 대로 ASCII, LF만
+                [IO.File]::WriteAllText($tmpLocal, "$($v.Line)`n", [Text.Encoding]::ASCII)
+                Invoke-Adb push $tmpLocal $tmpRemote | Out-Null
+                Invoke-Adb shell run-as $Pkg cp $tmpRemote $WhFile | Out-Null
+                Invoke-Adb shell rm -f $tmpRemote | Out-Null
+                $chk = (Invoke-Adb shell run-as $Pkg cat $WhFile) -join ' '
+                Write-Host "== ${t}: 변형 파일 '$chk'"
             } else {
-                Invoke-Adb shell run-as $Pkg rm -f $WhFile | Out-Null
+                Write-Host "== ${t}: 변형 없음"
             }
-            Write-Host "== ${t}: Steam 새로 시작(ANGLE Vulkan), 60초 안정"
-            Invoke-Adb shell am force-stop $Pkg | Out-Null
-            $o = Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run steam --ei ezs.gpumode 2
-            if (($o -join ' ') -match 'Error') { Write-Host ($o -join "`n"); throw '앱 시작 실패 (태블릿 연결·USB 디버깅 확인)' }
-            Start-Sleep -Seconds 60
-            # Three guide presses, frames over each change (the first press after a start was not
-            # always taken, 2026-10-30 23:58, so open and close are not assumed)
-            # 가이드 세 번, 바뀔 때마다 프레임 기록(시작 뒤 첫 누름이 늘 먹히지는 않았음, 2026-10-30 23:58.
-            # 그래서 열림·닫힘을 가정하지 않음)
-            for ($r = 1; $r -le 3; $r++) {
-                Write-Host "   가이드 $r"
-                Invoke-Adb shell am broadcast -a app.ezsteam.SHOT --es label "$t-g$r" --ei burst 3000 --ez x false | Out-Null
-                Invoke-Adb shell am broadcast -a app.ezsteam.GUIDE | Out-Null
-                # One picture only here: two frame bursts at once would hold about 128 MB in the app
-                # 여기서는 한 장만: 프레임 묶음 두 개가 동시에 돌면 앱 메모리를 약 128MB 잡음
-                $results += Get-Shot "$t-g$r-after" $dir 0 $false 1
-                Start-Sleep -Seconds 5
-            }
-            # Cost of the variant: 30 s of arrow-key moves / 변형의 비용: 화살표 키 이동 30초
-            Write-Host '   화살표 키 이동 30초 측정'
-            Invoke-Adb shell am broadcast -a app.ezsteam.MEASURE --es phase start --es label "$t-move" | Out-Null
-            Invoke-Adb shell 'e=$(( $(date +%s) + 30 )); while [ $(date +%s) -lt $e ]; do input keyevent 22; sleep 0.3; input keyevent 21; sleep 0.3; done' | Out-Null
-            Invoke-Adb shell am broadcast -a app.ezsteam.MEASURE --es phase end --es label "$t-move" | Out-Null
-            Start-Sleep -Seconds 3
-            $results += @(Invoke-Adb shell run-as $Pkg grep -a "MEASURE $t-move:" $SessionLog | Select-Object -Last 1)
-            # Burst lines of the guide spans / 가이드 구간의 프레임 묶음 줄
-            $results += @(Invoke-Adb shell "run-as $Pkg grep -a -E 'SHOT $t-g[0-9] [^ :]+: ' $SessionLog")
-            # The helper took the variant? / 도우미가 변형을 받았는지
-            $results += @(Invoke-Adb shell "run-as $Pkg grep -a 'ezs-webhelper: ' $SessionLog" | Select-Object -Last 1)
+            Start-SteamMode 2
+            # Did the web helper take it? Its own line from ezs-webhelper-env.sh
+            # 웹 도우미가 받았는지: ezs-webhelper-env.sh가 남기는 줄
+            $took = @(Invoke-Adb shell "run-as $Pkg grep -a 'ezs-webhelper: ' $SessionLog" | Select-Object -Last 1)
+            $ok = if (-not $v.Line) { '해당 없음' } elseif (($took -join ' ') -match '시험 변형') { '적용됨' } else { '적용 안 됨' }
+            $results += "${t}: 변형 '$($v.Line)' → $ok"
+            Write-Host '   화살표 키 이동 60초 측정'
+            $results += Measure-Span "$t-move" 60 $true
+            Write-Host '   메뉴 확인'
+            $results += Test-Menu $t $dir
         }
         Get-Report | Out-Null
     } finally {
         # Never leave a variant behind / 변형을 남기지 않음
         Invoke-Adb shell run-as $Pkg rm -f $WhFile | Out-Null
+        Remove-Item -ErrorAction SilentlyContinue $tmpLocal
         Invoke-Adb shell am force-stop $Pkg | Out-Null
         Set-Switches $saved
         if ($orig -ge 0) {
             Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run setgpu --ei ezs.gpumode $orig | Out-Null
             Write-Host "Steam 화면 GPU 방식 되돌림 ($orig)"
         }
-    }
-    foreach ($n in @(Invoke-Adb shell "ls $Reports" | Where-Object { $_ -like 'shot-*.png' })) {
-        Invoke-Adb pull "$Reports/$n" (Join-Path $dir $n) | Out-Null
-        Invoke-Adb shell rm -f "$Reports/$n" | Out-Null
     }
     Write-Host ''
     Write-Host "== 결과 (그림: $dir)"
