@@ -1341,14 +1341,14 @@ public class DisplayActivity extends Activity {
         return true;
     }
 
-    // ---- menu gestures: four-finger tap, swipe down from the top / 메뉴 제스처: 네 손가락 탭, 위에서 아래로 밀기
+    // ---- menu gestures: four-finger tap, swipe left from the right side / 메뉴 제스처: 네 손가락 탭, 오른쪽에서 왼쪽으로 밀기
 
     /** Four-finger tap state: first finger time, all-four time, start points, moved too far
      *  네 손가락 탭 상태: 첫 손가락 시각, 네 손가락이 된 시각, 시작점, 너무 움직임 */
     private long tapStart, tapFour;
     private final android.util.SparseArray<float[]> tapPoints = new android.util.SparseArray<>();
     private boolean tapMoved, tapCancelled;
-    /** Top swipe: 0 none, 1 waiting (down held back), 2 swiping / 위쪽 밀기: 0 없음, 1 대기(누름 보류), 2 미는 중 */
+    /** Right-side swipe: 0 none, 1 waiting (down held back), 2 swiping / 오른쪽 밀기: 0 없음, 1 대기(누름 보류), 2 미는 중 */
     private int edge;
     private MotionEvent edgeDown;
     private float edgeX, edgeY;
@@ -1363,20 +1363,20 @@ public class DisplayActivity extends Activity {
      * - Four fingers down within 300 ms and all up within 700 ms of the first, none moving more
      *   than 48 dp. Without the touch pad, the third finger cancels the mouse input (no meaning
      *   there); with the touch pad the game keeps its touches (four-finger play stays possible).
-     * - A swipe down that starts in the top 12 % of the screen and goes 72 dp, mostly downwards
-     *   (user request 2026-10-27: the earlier swipe in from the right edge also pulled out the
-     *   system bars). Start it a little below the very edge: a swipe from the edge itself is the
-     *   system's (it shows the status and navigation bars, which an app cannot stop). The first
-     *   touch is held back until it is clear: a tap or another movement there is passed on as is;
-     *   touches on touch pad controls are left alone.
+     * - A swipe to the left that starts in the right 12 % of the screen and goes 72 dp, mostly
+     *   sideways (user request 2026-11-01: the swipe down from the top, used since 2026-10-27,
+     *   kept running into the navigation bar; back to the right side). A swipe from the very edge
+     *   is the system's back gesture, which opens the same menu through onBackPressed; the double
+     *   path is caught in openMenu(). The first touch is held back until it is clear: a tap or
+     *   another movement there is passed on as is; touches on touch pad controls are left alone.
      * 모든 뷰보다 먼저: HOME 없이 메뉴를 여는 두 방법(사용자 요청 2026-10-26).
      * - 첫 손가락부터 300ms 안에 네 손가락이 닿고 700ms 안에 모두 떼며, 48dp 넘게 움직인 손가락이 없음. 터치 패드가
      *   없으면 세 번째 손가락에서 마우스 입력을 취소함(그때는 쓸모 없음). 터치 패드가 있으면 게임이 터치를 그대로 받음
      *   (네 손가락 조작도 됨)
-     * - 화면 위쪽 12% 안에서 시작해 72dp, 주로 아래로 민 경우(사용자 요청 2026-10-27: 이전의 오른쪽 끝 밀기는 시스템
-     *   막대도 함께 끌어냈음). 가장자리 바로 아래에서 시작해야 함: 가장자리 자체에서 미는 것은 시스템 몫(상태·탐색 막대를
-     *   보이며 앱이 막을 수 없음). 판단될 때까지 첫 터치를 보류하고, 거기서의 탭이나 다른 움직임은 그대로 넘김. 터치 패드
-     *   조작부 위의 터치는 건드리지 않음
+     * - 화면 오른쪽 12% 안에서 시작해 72dp, 주로 옆으로 왼쪽으로 민 경우(사용자 요청 2026-11-01: 2026-10-27부터 쓴
+     *   위에서 아래로 밀기가 탐색 막대와 자꾸 겹쳤음. 오른쪽으로 되돌림). 가장자리 자체에서 미는 것은 시스템 뒤로 가기
+     *   제스처이고, onBackPressed로 같은 메뉴를 엶. 두 경로가 함께 오는 것은 openMenu()에서 막음. 판단될 때까지 첫
+     *   터치를 보류하고, 거기서의 탭이나 다른 움직임은 그대로 넘김. 터치 패드 조작부 위의 터치는 건드리지 않음
      */
     @Override
     public boolean dispatchTouchEvent(MotionEvent e) {
@@ -1390,7 +1390,7 @@ public class DisplayActivity extends Activity {
         }
         if (trackFourFingerTap(e)) return true;
         int a = e.getActionMasked();
-        if (a == MotionEvent.ACTION_DOWN && e.getY() <= getWindow().getDecorView().getHeight() * 0.12f
+        if (a == MotionEvent.ACTION_DOWN && e.getX() >= getWindow().getDecorView().getWidth() * 0.88f
                 && !touchPad.hasControlAt(e.getX(), e.getY())) {
             edge = 1;
             edgeX = e.getX();
@@ -1401,12 +1401,13 @@ public class DisplayActivity extends Activity {
             return true;
         }
         if (edge == 1) {
-            float dy = e.getY() - edgeY, dx = Math.abs(e.getX() - edgeX);
-            if (a == MotionEvent.ACTION_MOVE && dy > dpx(16) && dy > 2 * dx) {
+            // Leftward distance, and the sideways drift / 왼쪽으로 간 거리와 위아래 흔들림
+            float dl = edgeX - e.getX(), dy = Math.abs(e.getY() - edgeY);
+            if (a == MotionEvent.ACTION_MOVE && dl > dpx(16) && dl > 2 * dy) {
                 edge = 2;
                 return true;
             }
-            boolean still = a == MotionEvent.ACTION_MOVE && Math.abs(dy) < dpx(16) && dx < dpx(16)
+            boolean still = a == MotionEvent.ACTION_MOVE && Math.abs(dl) < dpx(16) && dy < dpx(16)
                     && SystemClock.uptimeMillis() - edgeAt < 200;
             if (still) return true;
             // Not a swipe: hand the held-back touch over, then this event / 밀기가 아님: 보류한 터치를 넘긴 뒤 이 이벤트
@@ -1421,8 +1422,8 @@ public class DisplayActivity extends Activity {
         if (edge == 2) {
             if (a == MotionEvent.ACTION_UP) {
                 edge = 0;
-                if (e.getY() - edgeY > dpx(72)) {
-                    log("메뉴: 위에서 아래로 밀기");
+                if (edgeX - e.getX() > dpx(72)) {
+                    log("메뉴: 오른쪽에서 왼쪽으로 밀기");
                     openMenu();
                 }
             } else if (a == MotionEvent.ACTION_CANCEL) {

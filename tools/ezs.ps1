@@ -411,7 +411,10 @@ if ($Cmd -eq 'whtest') {
             Start-SteamMode 2 $v.Size
             # Did the web helper take it? Its own line from ezs-webhelper-env.sh
             # 웹 도우미가 받았는지: ezs-webhelper-env.sh가 남기는 줄
-            $took = @(Invoke-Adb shell "run-as $Pkg grep -a 'ezs-webhelper: ' $SessionLog" | Select-Object -Last 1)
+            # Only the variant line itself (the style injector also writes "ezs-webhelper:" lines,
+            # which made a taken variant read "not taken", 2026-11-01 14:34)
+            # 변형 줄만 봄(스타일 주입기도 "ezs-webhelper:" 줄을 써서, 받은 변형이 "적용 안 됨"으로 읽혔음, 2026-11-01 14:34)
+            $took = @(Invoke-Adb shell "run-as $Pkg grep -a 'ezs-webhelper: ' $SessionLog" | Where-Object { $_ -match '시험 변형' } | Select-Object -Last 1)
             $ok = if (-not $v.Line) { '해당 없음' } elseif (($took -join ' ') -match '시험 변형') { '적용됨' } else { '적용 안 됨' }
             $results += "${t}: 변형 '$($v.Line)' → $ok$(if ($v.Size) { ", X 화면 $($v.Size)" })"
             # Injector lines of the no-blur variant / 흐림 끄기 변형의 주입기 줄
