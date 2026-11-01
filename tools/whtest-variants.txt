@@ -16,5 +16,14 @@
 # the second run without the autoplay rule (a sound may be held back without a user gesture)
 # 빅픽처 소리: 시작 소리만 나고 이동 소리는 안 남(게임은 소리 남). Chromium 자체 오디오 기록(vmodule)으로 이동 소리에
 # 출력을 여는지, 아니면 왜 안 여는지 봄. 둘째 실행은 자동 재생 규칙을 끔(사용자 동작 없이는 소리를 막을 수 있음)
-sndlog|EZS_WH_FLAGS_ADD='--vmodule=*audio*=2,*alsa*=2,*pulse*=2'||2
-sndautoplay|EZS_WH_FLAGS_ADD='--autoplay-policy=no-user-gesture-required --vmodule=*audio*=2,*alsa*=2,*pulse*=2'||2
+# Results (2026-11-01 18:16): no further output opened, Chromium's audio log silent (only "Falling
+# back to ALSA", PulseAudio refused); the autoplay rule made no difference
+# 결과(2026-11-01 18:16): 출력을 더 열지 않았고 Chromium 오디오 기록도 조용함("Falling back to ALSA", PulseAudio
+# 거부뿐). 자동 재생 규칙도 차이 없음
+#
+# Now (ezs-agent): menu background on by default (DevTools pipe), Web Audio context states of the
+# sound page logged by the agent; plain runs in modes 2 and 1
+# 이제(ezs-agent): 메뉴 바탕 기본 켬(DevTools 파이프), 소리 페이지의 Web Audio 컨텍스트 상태를 에이전트가 기록함.
+# 방식 2·1에서 변형 없이 실행
+base|||2
+base|||1

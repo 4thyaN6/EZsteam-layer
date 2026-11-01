@@ -442,6 +442,8 @@ if ($Cmd -eq 'whtest') {
             # 이번 실행의 소리: 앱의 스트림 줄과 Chromium 자체 오디오 줄. 이유: 빅픽처는 시작 소리만 나고 이동 소리는 안
             # 났는데 게임은 소리가 났음(사용자 2026-11-01)
             $results += @(Invoke-Adb shell "run-as $Pkg grep -a 'AUDIO ' $SessionLog" | Select-Object -Last 8)
+            # The agent's menu background and Web Audio lines (DevTools pipe) / 에이전트의 메뉴 바탕·Web Audio 줄(DevTools 파이프)
+            $results += @(Invoke-Adb shell "run-as $Pkg grep -a -E 'ezs-agent: |ezs-webhelper: ' $SessionLog" | Where-Object { $_ -notmatch '버스 연결|요청 ' } | Select-Object -Last 30)
             $results += @(Invoke-Adb shell "run-as $Pkg grep -a -i -E 'audio|alsa|pulse' files/ezs/home/steam/.local/share/Steam/logs/cef_log.txt" | Select-Object -Last 12)
         }
         Get-Report | Out-Null

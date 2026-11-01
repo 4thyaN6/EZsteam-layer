@@ -615,6 +615,173 @@ def start_bus():
     return server
 
 
+# ---------------------------------------------------------------- Steam menu background
+# Steam 메뉴 바탕
+#
+# Steam's main menu and quick access menu are separate Chromium pages with a transparent page
+# background. With GPU compositing the transparent part (above and below the menu panel) is not
+# cleared and shows leftovers from the second or third opening on: colour blocks with ANGLE
+# Vulkan, white with GL (menu opened 6 times each: always from the 2nd/3rd opening; with an
+# opaque black page background never, whtest 2026-11-01 16:20). So those two pages get an opaque
+# black page background (one style rule), nothing else changes. Making it right without the rule
+# is a later optimisation task (user 2026-11-01).
+# Reached through Chromium's DevTools over a pipe (--remote-debugging-pipe, fds 3/4 of the web
+# helper, linked to two FIFOs in /tmp by ezs-webhelper-env.sh): no network port, so other apps on
+# the device cannot reach the Steam UI, and no extra process. Off with the switch file
+# ~/.local/share/ezsteam/no-menubg.
+# Steam 메인 메뉴와 빠른 메뉴는 페이지 바탕이 투명한 별도 Chromium 페이지임. GPU 합성에서는 투명한 부분(메뉴 패널
+# 위·아래)이 지워지지 않아 두 번째·세 번째 열 때부터 남은 내용이 보임: ANGLE Vulkan은 색 블록, GL은 흰색(메뉴를 각각
+# 6번 열었을 때 늘 2·3번째부터. 불투명 검정 페이지 바탕이면 한 번도 없었음, whtest 2026-11-01 16:20). 그래서 이 두
+# 페이지에 불투명 검정 페이지 바탕(스타일 규칙 하나)을 주고 다른 것은 바꾸지 않음. 규칙 없이 바르게 그리게 하는 것은
+# 나중 최적화 과제임(사용자 2026-11-01).
+# Chromium DevTools를 파이프로 씀(--remote-debugging-pipe, 웹 도우미의 fd 3/4를 ezs-webhelper-env.sh가 /tmp의
+# FIFO 두 개에 이음): 네트워크 포트가 없어 기기의 다른 앱이 Steam 화면에 닿을 수 없고, 프로세스도 늘지 않음.
+# 스위치 파일 ~/.local/share/ezsteam/no-menubg로 끔.
+
+DT_IN = "/tmp/ezs-devtools.in"
+DT_OUT = "/tmp/ezs-devtools.out"
+MENU_PAGES = ("MainMenu", "QuickAccess")
+# Sound check on the same pipe: the page that loads the UI sounds (deck_ui_*.wav, web helper log)
+# is SharedJSContext; its Web Audio contexts and their state (running/suspended/closed) are logged.
+# Why: Big Picture played only the start sound; Chromium opened no further output for the move
+# sounds and its own audio log said nothing (whtest 2026-11-01 18:16), so the question is whether
+# the page's audio context stops (suspended/closed) or never asks for output
+# 같은 파이프로 소리 확인: UI 소리(deck_ui_*.wav, 웹 도우미 로그)를 불러오는 페이지는 SharedJSContext임. 그 페이지의
+# Web Audio 컨텍스트와 상태(running/suspended/closed)를 기록함. 이유: 빅픽처는 시작 소리만 났고, Chromium은 이동
+# 소리용 출력을 더 열지 않았으며 자체 오디오 기록에도 아무것도 없었음(whtest 2026-11-01 18:16). 그래서 페이지의 오디오
+# 컨텍스트가 멈추는지(suspended/closed), 아니면 출력을 아예 요청하지 않는지가 문제임
+SOUND_PAGES = ("SharedJSContext",)
+MENU_CSS = "html,body{background:#000!important}"
+MENU_JS = ("(function(){var d=document;if(!d||!d.head)return 'no-head';"
+           "if(d.getElementById('ezs-menubg'))return 'kept';"
+           "var s=d.createElement('style');s.id='ezs-menubg';s.textContent=%s;"
+           "d.head.appendChild(s);return 'added';})()") % repr(MENU_CSS).replace("'", '"')
+
+
+def menubg_on():
+    home = os.environ.get("HOME", "/home/steam")
+    return not os.path.exists(os.path.join(home, ".local/share/ezsteam/no-menubg"))
+
+
+def make_fifos():
+    """The two FIFOs the web helper wrapper links to fds 3 and 4 / 웹 도우미 감쌈이 fd 3·4에 잇는 FIFO 두 개"""
+    for p in (DT_IN, DT_OUT):
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+        os.mkfifo(p, 0o600)
+
+
+def devtools_loop():
+    """Every 3 s: list targets, attach to the menu pages once per target, add the rule
+    (idempotent). Messages are JSON ending in a NUL byte both ways
+    3초마다: 대상 목록, 메뉴 페이지마다 한 번 붙음, 규칙 넣기(여러 번 해도 같음). 메시지는 양쪽 모두 NUL로 끝나는 JSON"""
+    import json
+    import select
+    # Read and write ends opened read-write: never blocks, never sees an end of file while the
+    # web helper restarts / 읽기·쓰기 끝을 읽기쓰기로 엶: 막히지 않고, 웹 도우미가 다시 시작하는 동안 파일 끝을 보지 않음
+    wfd = os.open(DT_IN, os.O_RDWR)
+    rfd = os.open(DT_OUT, os.O_RDWR | os.O_NONBLOCK)
+    buf = b""
+    nid = {"n": 0}
+    sessions = {}   # targetId -> sessionId
+    pending = {}    # message id -> (kind, targetId, title)
+    state = {}      # targetId -> last result
+    answered = {"any": False}
+    audio_lines = {"n": 0}
+
+    def send(obj):
+        nid["n"] += 1
+        obj["id"] = nid["n"]
+        os.write(wfd, json.dumps(obj).encode() + b"\0")
+        return nid["n"]
+
+    started = time.time()
+    while True:
+        send({"method": "Target.getTargets"})
+        end = time.time() + 3
+        while time.time() < end:
+            r, _, _ = select.select([rfd], [], [], max(0.0, end - time.time()))
+            if not r:
+                continue
+            try:
+                chunk = os.read(rfd, 65536)
+            except BlockingIOError:
+                continue
+            buf += chunk
+            while b"\0" in buf:
+                raw, buf = buf.split(b"\0", 1)
+                try:
+                    msg = json.loads(raw)
+                except ValueError:
+                    continue
+                if not answered["any"]:
+                    answered["any"] = True
+                    log("메뉴 바탕: DevTools 파이프 응답 받음")
+                # Web Audio events of the sound page, at most 60 lines a session
+                # 소리 페이지의 Web Audio 이벤트, 세션당 최대 60줄
+                meth = msg.get("method", "")
+                if meth.startswith("WebAudio.") and audio_lines["n"] < 60:
+                    audio_lines["n"] += 1
+                    p = msg.get("params") or {}
+                    c = p.get("context") or {}
+                    log("소리 확인: %s 상태 %s, 콜백 버퍼 %s프레임, 출력 채널 최대 %s" % (
+                        meth.split(".", 1)[1], c.get("contextState", p.get("contextId", "?")),
+                        c.get("callbackBufferSize", "-"), c.get("maxOutputChannelCount", "-")))
+                mid = msg.get("id")
+                res = msg.get("result") or {}
+                if "targetInfos" in res:
+                    live = set()
+                    for t in res["targetInfos"]:
+                        title = t.get("title", "")
+                        if t.get("type") != "page" or not title.startswith(MENU_PAGES + SOUND_PAGES):
+                            continue
+                        tid = t.get("targetId")
+                        live.add(tid)
+                        if tid in sessions and title.startswith(SOUND_PAGES):
+                            continue
+                        if tid in sessions:
+                            i = send({"method": "Runtime.evaluate", "sessionId": sessions[tid],
+                                      "params": {"expression": MENU_JS, "returnByValue": True}})
+                            pending[i] = ("eval", tid, title)
+                        elif not any(k == "attach" and t2 == tid for k, t2, _ in pending.values()):
+                            i = send({"method": "Target.attachToTarget",
+                                      "params": {"targetId": tid, "flatten": True}})
+                            pending[i] = ("attach", tid, title)
+                    # Targets that are gone (web helper restart) / 사라진 대상(웹 도우미 재시작)
+                    for tid in list(sessions):
+                        if tid not in live:
+                            sessions.pop(tid, None)
+                            state.pop(tid, None)
+                elif mid in pending:
+                    kind, tid, title = pending.pop(mid)
+                    if kind == "attach" and "sessionId" in res and title.startswith(SOUND_PAGES):
+                        # Sound page: Web Audio events only, no style rule / 소리 페이지: Web Audio 이벤트만, 스타일 규칙 없음
+                        sessions[tid] = res["sessionId"]
+                        send({"method": "WebAudio.enable", "sessionId": sessions[tid]})
+                        log("소리 확인: '%s'의 Web Audio 기록 시작" % title[:30])
+                    elif kind == "attach" and "sessionId" in res:
+                        sessions[tid] = res["sessionId"]
+                        i = send({"method": "Runtime.evaluate", "sessionId": sessions[tid],
+                                  "params": {"expression": MENU_JS, "returnByValue": True}})
+                        pending[i] = ("eval", tid, title)
+                    elif kind == "eval":
+                        val = ((res.get("result") or {}).get("value")) or str(msg.get("error", ""))[:80]
+                        # One line per page and outcome change / 페이지와 결과가 바뀔 때만 한 줄
+                        if state.get(tid) != val:
+                            state[tid] = val
+                            log("메뉴 바탕: 페이지 '%s' %s" % (title[:30], val))
+                    elif "error" in msg:
+                        log("메뉴 바탕: %s 실패 %s" % (kind, str(msg["error"])[:80]))
+        # Stale bookkeeping of answers that never came / 오지 않은 답의 기록 정리
+        if len(pending) > 50:
+            pending.clear()
+        if not answered["any"] and time.time() - started > 120 and started:
+            log("메뉴 바탕: 2분 동안 DevTools 파이프 응답 없음 (이 Steam 버전이 파이프를 지원하지 않을 수 있음)")
+            started = 0
+
+
 # ---------------------------------------------------------------- Steam start loop
 # Steam 시작 반복
 
@@ -701,6 +868,17 @@ def main():
         # Bus test without Steam (development) / Steam 없이 버스만 시험(개발용)
         loop.run()
         return
+    # Steam menu background through the DevTools pipe (before the first start, so the web helper
+    # wrapper finds the FIFOs) / DevTools 파이프로 Steam 메뉴 바탕(첫 시작 전에: 웹 도우미 감쌈이 FIFO를 찾도록)
+    if menubg_on():
+        try:
+            make_fifos()
+            threading.Thread(target=devtools_loop, daemon=True).start()
+            log("메뉴 바탕: 준비 (DevTools 파이프 %s, %s)" % (DT_IN, DT_OUT))
+        except OSError as e:
+            log("메뉴 바탕: 준비 실패 %s" % e)
+    else:
+        log("메뉴 바탕: 끔 (no-menubg)")
     threading.Thread(target=steam_loop, args=(loop,), daemon=True).start()
     loop.run()
     server.stop()

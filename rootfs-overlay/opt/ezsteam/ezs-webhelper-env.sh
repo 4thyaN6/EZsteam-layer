@@ -83,3 +83,23 @@ if [ -f "$EZS_WH_TEST" ]; then
     fi
     echo "ezs-webhelper: 시험 변형 $(tr '\n' ' ' < "$EZS_WH_TEST")"
 fi
+
+# Steam menu background through ezs-agent (it made the two FIFOs): the web helper's fds 3 and 4
+# become Chromium's DevTools pipe (--remote-debugging-pipe), the agent gives the main menu and
+# quick access pages an opaque black page background (their transparent part is not cleared with
+# GPU compositing, whtest 2026-11-01). No port, no extra process. Skipped when fd 3 or 4 is
+# already open (whatever Steam passes there stays untouched) or with the switch file "no-menubg"
+# ezs-agent를 통한 Steam 메뉴 바탕(에이전트가 FIFO 둘을 만들었음): 웹 도우미의 fd 3·4가 Chromium DevTools 파이프
+# (--remote-debugging-pipe)가 되고, 에이전트가 메인 메뉴·빠른 메뉴 페이지에 불투명 검정 페이지 바탕을 줌(GPU 합성에서
+# 투명한 부분이 지워지지 않음, whtest 2026-11-01). 포트 없음, 프로세스 추가 없음. fd 3이나 4가 이미 열려 있으면(Steam이
+# 거기 넘기는 것은 건드리지 않음) 또는 스위치 파일 "no-menubg"면 건너뜀
+if [ -p /tmp/ezs-devtools.in ] && [ -p /tmp/ezs-devtools.out ] \
+        && [ ! -f "$HOME/.local/share/ezsteam/no-menubg" ]; then
+    if [ -e /proc/$$/fd/3 ] || [ -e /proc/$$/fd/4 ]; then
+        echo "ezs-webhelper: 메뉴 바탕 건너뜀 (fd 3/4 사용 중)"
+    else
+        exec 3<>/tmp/ezs-devtools.in 4<>/tmp/ezs-devtools.out
+        EZS_CEF_FLAGS="${EZS_CEF_FLAGS:+$EZS_CEF_FLAGS }--remote-debugging-pipe"
+        echo "ezs-webhelper: 메뉴 바탕 DevTools 파이프 연결"
+    fi
+fi
