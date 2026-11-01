@@ -30,8 +30,14 @@ import time
 import urllib.request
 
 PORT = 8080
-# The rule: no blur behind anything / 규칙: 어떤 것 뒤에도 흐림 없음
-CSS = "*{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}"
+# The rule: EZS_WH_CSS when given, else no blur behind anything. With the blur off the menu
+# background was sharp (rule applied) and the bands still broke (whtest 2026-11-01 13:55); the
+# broken bands are the panel column above/below the panel, which no layer seems to cover once the
+# page slides right, so the next rule gives the page an opaque black background
+# 규칙: EZS_WH_CSS가 있으면 그것, 없으면 어떤 것 뒤에도 흐림 없음. 흐림을 끄자 메뉴 배경이 선명해졌는데(규칙 적용됨)
+# 띠는 그대로 깨졌음(whtest 2026-11-01 13:55). 깨진 띠는 페이지가 오른쪽으로 밀린 뒤 패널 위·아래의 패널 열로, 어떤
+# 층도 덮지 않는 자리로 보임. 그래서 다음 규칙은 페이지에 불투명 검정 바탕을 줌
+CSS = os.environ.get("EZS_WH_CSS") or "*{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}"
 # Adds the rule once per document; answers what it did / 문서마다 규칙을 한 번만 넣음. 한 일을 돌려줌
 JS = ("(function(){var d=document;if(!d||!d.head)return 'no-head';"
       "if(d.getElementById('ezs-noblur'))return 'kept';"
@@ -40,7 +46,11 @@ JS = ("(function(){var d=document;if(!d||!d.head)return 'no-head';"
 
 
 def log(msg):
-    print("ezs-cefcss: " + msg, flush=True)
+    # "ezs-webhelper" prefix: the app shows Steam output lines with that word (STEAM_KEY), the
+    # injector's own prefix was filtered out (2026-11-01 13:58)
+    # "ezs-webhelper" 머리말: 앱은 그 낱말이 있는 Steam 출력 줄을 보여 줌(STEAM_KEY). 주입기 자체 머리말은 걸러졌음
+    # (2026-11-01 13:58)
+    print("ezs-webhelper: css " + msg, flush=True)
 
 
 def targets():
@@ -109,7 +119,7 @@ def ws_eval(url, expr):
 def main():
     parent = os.getppid()
     seen = {}
-    log("시작, 포트 %d, 3초마다 확인" % PORT)
+    log("시작, 포트 %d, 3초마다 확인, 규칙 %s" % (PORT, CSS[:80]))
     reached = False
     while os.getppid() == parent:
         try:

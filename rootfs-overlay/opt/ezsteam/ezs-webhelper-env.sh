@@ -75,7 +75,9 @@ if [ -f "$EZS_WH_TEST" ]; then
     # it runs, any program on the device can reach the port
     # EZS_WH_NOBLUR=1: 127.0.0.1:8080 DevTools 포트와 머리줄·안내줄 뒤 흐림을 끄는 스타일 주입기(ezs-cefcss.py, 이
     # 도우미와 함께 끝남). 시험 전용: 도는 동안 기기의 어떤 프로그램이든 포트에 닿을 수 있음
-    if [ "${EZS_WH_NOBLUR:-0}" = 1 ]; then
+    # EZS_WH_CSS=<rule> does the same with that rule instead of the blur rule
+    # EZS_WH_CSS=<규칙>이면 흐림 규칙 대신 그 규칙으로 같은 일을 함
+    if [ "${EZS_WH_NOBLUR:-0}" = 1 ] || [ -n "${EZS_WH_CSS:-}" ]; then
         EZS_CEF_FLAGS="${EZS_CEF_FLAGS:+$EZS_CEF_FLAGS }--remote-debugging-address=127.0.0.1 --remote-debugging-port=8080"
         python3 /opt/ezsteam/ezs-cefcss.py &
     fi

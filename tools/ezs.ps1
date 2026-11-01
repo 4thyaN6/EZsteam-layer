@@ -415,9 +415,9 @@ if ($Cmd -eq 'whtest') {
             $ok = if (-not $v.Line) { '해당 없음' } elseif (($took -join ' ') -match '시험 변형') { '적용됨' } else { '적용 안 됨' }
             $results += "${t}: 변형 '$($v.Line)' → $ok$(if ($v.Size) { ", X 화면 $($v.Size)" })"
             # Injector lines of the no-blur variant / 흐림 끄기 변형의 주입기 줄
-            if ($v.Line -match 'EZS_WH_NOBLUR') {
+            if ($v.Line -match 'EZS_WH_NOBLUR|EZS_WH_CSS') {
                 Start-Sleep -Seconds 5
-                $results += @(Invoke-Adb shell "run-as $Pkg grep -a 'ezs-cefcss: ' $SessionLog" | Select-Object -Last 4)
+                $results += @(Invoke-Adb shell "run-as $Pkg grep -a 'ezs-webhelper: css ' $SessionLog" | Select-Object -Last 4)
             }
             Write-Host '   메뉴 확인 (시작 직후)'
             $results += Test-Menu $t $dir

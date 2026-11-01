@@ -12,10 +12,12 @@
 # 지금까지 결과(2026-10-31): 메뉴 띠 깨짐에 효과 없음 — TU_DEBUG sysmem/noubwc/nolrz, --ui-disable-partial-swap,
 # ANGLE supportsIncrementalPresent/preferDrawClear…, --disable-features=BackdropFilterMirrorEdgeMode,
 # --disable-gpu-rasterization(CPU +54%p). ANGLE allocateNonZeroMemory는 웹 도우미를 계속 죽였음
+# Also no effect (2026-11-01 13:55): blur behind header/footer turned off (EZS_WH_NOBLUR=1, the
+# menu background became sharp, so the rule was applied) and a 1280x720 X screen
+# 이것도 효과 없음(2026-11-01 13:55): 머리줄·안내줄 뒤 흐림 끄기(EZS_WH_NOBLUR=1, 메뉴 배경이 선명해져 규칙은
+# 적용됐음), 1280x720 X 화면
 base|
-# Blur behind the header/footer bars turned off by a style rule (ezs-cefcss.py, DevTools port)
-# 머리줄·안내줄 뒤 흐림을 스타일 규칙으로 끔(ezs-cefcss.py, DevTools 포트)
-noblur|EZS_WH_NOBLUR=1
-# Same Steam UI on a 1280x720 X screen: does the fault follow the screen size?
-# 같은 Steam 화면을 1280x720 X 화면에서: 깨짐이 화면 크기를 따르는지
-base720||1280x720
+# Opaque black page background: if the bands are the panel column that no layer covers after the
+# page slides right, they turn black (style rule through ezs-cefcss.py)
+# 불투명 검정 페이지 바탕: 띠가 페이지가 오른쪽으로 밀린 뒤 어떤 층도 덮지 않는 패널 열이면 검정이 됨(ezs-cefcss.py 스타일 규칙)
+blackbg|EZS_WH_CSS='html,body{background:#000!important}'
