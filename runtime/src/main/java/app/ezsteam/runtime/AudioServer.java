@@ -121,6 +121,19 @@ public final class AudioServer implements Closeable {
         return active.get();
     }
 
+    /** A new stream in the mix (PulseServer playback) / 섞기에 들어가는 새 스트림(PulseServer 재생) */
+    Source attach() {
+        Source s = new Source();
+        sources.add(s);
+        return s;
+    }
+
+    /** Output buffer in frames, part of the latency PulseServer reports / 출력 버퍼(프레임), PulseServer가 알리는 지연의 일부 */
+    int outputFrames() {
+        AudioTrack t = out;
+        return t == null ? 0 : t.getBufferSizeInFrames();
+    }
+
     private static AudioTrack newTrack(int rate, int channels, int sizeBytes) {
         int mask = channels == 1 ? AudioFormat.CHANNEL_OUT_MONO : AudioFormat.CHANNEL_OUT_STEREO;
         return new AudioTrack.Builder()
@@ -150,13 +163,63 @@ public final class AudioServer implements Closeable {
                 RATE, CH, out.getBufferSizeInFrames() * 1000f / RATE));
     }
 
-    /** One stream's samples between its reader and the mixer (stereo frames)
-     *  읽는 쪽과 믹서 사이의 한 스트림 샘플(스테레오 프레임) */
-    private static final class Source {
+    /** One stream's samples between its reader and the mixer (stereo frames, 48 kHz). Also used
+     *  by PulseServer for its playback streams
+     *  읽는 쪽과 믹서 사이의 한 스트림 샘플(스테레오 프레임, 48kHz). PulseServer의 재생 스트림도 씀 */
+    static final class Source {
         final short[] ring = new short[RING * CH];
         int head, tail, count;
         boolean started, ended;
+        /** Corked (PulseAudio): kept, not played / 멈춤(PulseAudio): 남겨 두고 재생하지 않음 */
+        boolean paused;
         long firstAt;
+        /** Frames the mixer has taken in total / 믹서가 지금까지 가져간 프레임 수 */
+        long played;
+
+        /** Capacity in frames / 담을 수 있는 프레임 수 */
+        static int capacity() {
+            return RING;
+        }
+
+        /** Put up to frames without waiting; returns how many fit (the rest is dropped by the caller)
+         *  기다리지 않고 최대 frames를 넣음. 들어간 수를 돌려줌(나머지는 부르는 쪽이 버림) */
+        synchronized int offer(short[] s, int frames) {
+            int k = Math.min(frames, RING - count);
+            for (int i = 0; i < k; i++) {
+                ring[tail * 2] = s[i * 2];
+                ring[tail * 2 + 1] = s[i * 2 + 1];
+                tail = (tail + 1) % RING;
+            }
+            count += k;
+            if (k > 0 && firstAt == 0) firstAt = System.nanoTime();
+            return k;
+        }
+
+        /** Frames waiting to be played / 재생을 기다리는 프레임 수 */
+        synchronized int queued() {
+            return count;
+        }
+
+        /** Drop everything queued (flush); the next data prebuffers again
+         *  쌓인 것을 모두 버림(flush). 다음 데이터는 다시 미리 모음 */
+        synchronized void clear() {
+            head = tail = count = 0;
+            started = false;
+            firstAt = 0;
+            notifyAll();
+        }
+
+        synchronized void setPaused(boolean p) {
+            paused = p;
+        }
+
+        synchronized boolean isStarted() {
+            return started;
+        }
+
+        synchronized long playedFrames() {
+            return played;
+        }
 
         synchronized void put(short[] s, int frames) throws InterruptedException {
             int i = 0;
@@ -175,6 +238,7 @@ public final class AudioServer implements Closeable {
         /** Add up to n frames into acc; false when the stream is finished and empty
          *  acc에 최대 n프레임을 더함. 스트림이 끝나고 비었으면 false */
         synchronized boolean mixInto(int[] acc, int n) {
+            if (paused) return !ended;
             if (!started) {
                 boolean waited = firstAt != 0 && System.nanoTime() - firstAt > 20_000_000L;
                 if (count >= PREBUF || waited || (ended && count > 0)) started = true;
@@ -187,6 +251,7 @@ public final class AudioServer implements Closeable {
                 head = (head + 1) % RING;
             }
             count -= k;
+            played += k;
             if (k > 0) notifyAll();
             return !(ended && count == 0);
         }

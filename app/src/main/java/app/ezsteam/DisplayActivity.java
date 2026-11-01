@@ -125,6 +125,8 @@ public class DisplayActivity extends Activity {
     private volatile String cpuText = "";
     /** Sound output of the rootfs programs (Steam mode) / rootfs 프로그램의 소리 출력(Steam 모드) */
     private volatile app.ezsteam.runtime.AudioServer audio;
+    /** PulseAudio server for the Steam web helper (mixed into audio) / Steam 웹 도우미용 PulseAudio 서버(audio에 섞임) */
+    private volatile app.ezsteam.runtime.PulseServer pulse;
     /** Game frame path check, app side (answers ezs-present-probe) / 게임 프레임 경로 확인의 앱 쪽(ezs-present-probe에 답함) */
     private volatile app.ezsteam.runtime.PresentProbe present;
     /** Game pad input held back: windows cover the game (direct path) / Steam menu raised by HOME
@@ -1008,6 +1010,13 @@ public class DisplayActivity extends Activity {
                 // State of the switch in the log, so a report shows whether it was on
                 // 스위치 상태를 로그에 남겨 제보에서 켜졌는지 보이게 함
                 log("시험 스위치: Steam HID 찾기 " + (MainActivity.steamHidLow(this) ? "줄임" : "기본(끔)"));
+                // Test switch: PRoot stops for close only on netlink descriptors (proot-09); the
+                // state goes into the log so the comparison (ezs-closetest.bat) can check it
+                // 시험 스위치: PRoot가 netlink 디스크립터의 close에서만 멈춤(proot-09). 비교(ezs-closetest.bat)가
+                // 확인할 수 있게 상태를 로그에 남김
+                boolean closeNl = MainActivity.testSwitch(this, MainActivity.SW_CLOSE_NETLINK);
+                if (closeNl) c.env.put("PROOT_CLOSE_NETLINK", "1");
+                log("시험 스위치: PRoot close " + (closeNl ? "netlink만" : "기본(전부)"));
                 // Phone language for the Steam client language (steam-language.py)
                 // Steam 클라이언트 언어용 휴대폰 언어(steam-language.py)
                 c.env.put("EZS_LANG", Locale.getDefault().toLanguageTag());
@@ -1071,6 +1080,20 @@ public class DisplayActivity extends Activity {
                     log("AUDIO 대기 " + app.ezsteam.runtime.AudioServer.GUEST_SOCKET);
                 } catch (IOException | RuntimeException e) {
                     log("AUDIO 시작 실패 (소리 없이 계속): " + e);
+                }
+                // PulseAudio server for the web helper's UI sounds (Chromium sees no ALSA card and
+                // gave WebAudio a fake output); skipped with the switch file "no-pulse"
+                // 웹 도우미 UI 효과음용 PulseAudio 서버(Chromium이 ALSA 카드를 못 보고 WebAudio에 가짜 출력을 줬음).
+                // 스위치 파일 "no-pulse"가 있으면 건너뜀
+                if (audio != null && !MainActivity.testSwitch(this, "no-pulse")) {
+                    try {
+                        pulse = app.ezsteam.runtime.PulseServer.start(c.rootfs, audio, this::log);
+                        log("AUDIO pulse 대기 " + app.ezsteam.runtime.PulseServer.GUEST_SOCKET);
+                    } catch (IOException | RuntimeException e) {
+                        log("AUDIO pulse 시작 실패 (웹 도우미는 ALSA로): " + e);
+                    }
+                } else if (audio != null) {
+                    log("AUDIO pulse 끔 (no-pulse)");
                 }
                 // Zero-copy frame path check: listens before steam-run.sh starts the probe
                 // 0복사 프레임 경로 확인: steam-run.sh가 probe를 시작하기 전에 기다림
@@ -4673,6 +4696,8 @@ public class DisplayActivity extends Activity {
             }
         }
         view.setFramebuffer(null);
+        app.ezsteam.runtime.PulseServer ps = pulse;
+        if (ps != null) ps.close();
         app.ezsteam.runtime.AudioServer a = audio;
         if (a != null) a.close();
         app.ezsteam.runtime.PresentProbe pp = present;

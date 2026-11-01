@@ -24,11 +24,15 @@ param(
     # menu pictures and CPU each; the switch is removed afterwards
     # xcmtest = ANGLE Vulkan Steam 화면을 X 합성 관리자 시험(ezs-xcm) 없이 한 번, 켜고 한 번. 각각 메뉴 캡처와 CPU.
     # 끝나면 스위치를 지움
+    # closetest = Steam UI with PRoot tracing every close, then only netlink closes (proot-09
+    # switch "close-netlink"): CPU, PRoot stops and "Broken pipe" lines each; switch put back
+    # closetest = PRoot가 close를 전부 추적할 때와 netlink만 추적할 때(proot-09 스위치 "close-netlink")의 Steam 화면:
+    # 각각 CPU, PRoot 정지, "Broken pipe" 줄. 끝나면 스위치를 되돌림
     # release = tag the pushed commit with "v" + versionName of app/build.gradle (test release:
     # rootfs, driver and APK go to GitHub Releases, where the app downloads them)
     # release = 올린 커밋에 "v" + app/build.gradle의 versionName 태그를 붙임(테스트 릴리스:
     # rootfs, 드라이버, APK가 GitHub Releases에 올라가고 앱은 거기서 받음)
-    [Parameter(Mandatory = $true)][ValidateSet('push', 'install', 'check', 'report', 'steam', 'compare', 'menushot', 'shot', 'whtest', 'xcmtest', 'release')][string]$Cmd,
+    [Parameter(Mandatory = $true)][ValidateSet('push', 'install', 'check', 'report', 'steam', 'compare', 'menushot', 'shot', 'whtest', 'xcmtest', 'closetest', 'release')][string]$Cmd,
     # steam: seconds to wait after the start before the report / steam: 시작 뒤 제보까지 기다리는 초
     [int]$Wait = 90,
     # Display path for steam: '' = as set in the app, xwayland = Zink GL + GPU device (set through
@@ -537,6 +541,68 @@ if ($Cmd -eq 'xcmtest') {
     }
     Write-Host ''
     Write-Host "== 결과 (그림: $dir)"
+    $results | ForEach-Object { Write-Host $_ }
+    $results | Set-Content -Encoding UTF8 (Join-Path $dir 'result.txt')
+    return
+}
+
+if ($Cmd -eq 'closetest') {
+    # Same steps twice with the user's Steam UI GPU mode: PRoot traces every close (default), then
+    # only closes in the netlink range (switch file "close-netlink", proot-09). Each run: fresh
+    # start, 60 s idle span, 60 s arrow-key span, the PRoot stop lines of the last minute and the
+    # "Broken pipe" lines that appeared (the pipe shadow PRoot gives up with the switch exists
+    # against exactly that). PROOT_STAT lines need the app's I/O statistics option on
+    # 사용자의 Steam 화면 GPU 방식으로 같은 단계를 두 번: PRoot가 close를 전부 추적(기본), 그다음 netlink 구간의
+    # close만 추적(스위치 파일 "close-netlink", proot-09). 실행마다: 새로 시작, 대기 60초 구간, 화살표 키 60초 구간,
+    # 마지막 1분의 PRoot 정지 줄, 새로 생긴 "Broken pipe" 줄(스위치를 켜면 포기하는 pipe shadow가 바로 이것을
+    # 막는 장치임). PROOT_STAT 줄은 앱의 IO 통계 옵션이 켜져 있어야 나옴
+    $CloseFile = "$SwDir/close-netlink"
+    $SteamOut = 'files/ezs/home/steam/ezs-logs/steam.log'
+    # First number in adb output, 0 when none (missing file) / adb 출력의 첫 숫자, 없으면 0(파일 없음)
+    function Get-Num($o) { if (($o -join ' ') -match '(\d+)') { return [int]$Matches[1] } return 0 }
+    $hadSwitch = @(Invoke-Adb shell run-as $Pkg ls $SwDir) -contains 'close-netlink'
+    $dir = Join-Path $Repo "reports\closetest_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss')"
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $results = @()
+    try {
+        foreach ($mode in @('all', 'netlink')) {
+            Invoke-Adb shell run-as $Pkg rm -f $CloseFile | Out-Null
+            if ($mode -eq 'netlink') { Invoke-Adb shell run-as $Pkg touch $CloseFile | Out-Null }
+            Write-Host "== close-${mode}: Steam 새로 시작, 60초 안정"
+            Invoke-Adb shell am force-stop $Pkg | Out-Null
+            $o = Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run steam
+            if (($o -join ' ') -match 'Error') { Write-Host ($o -join "`n"); throw '앱 시작 실패 (태블릿 연결·USB 디버깅 확인)' }
+            Start-Sleep -Seconds 60
+            # Which way PRoot ran (the app's switch line) / PRoot가 어느 방식으로 돌았는지(앱의 스위치 줄)
+            $results += "close-${mode}: " + ((@(Invoke-Adb shell "run-as $Pkg grep -a 'PRoot close' $SessionLog") | Select-Object -Last 1) -join '')
+            # The session log starts fresh at every start; the Steam output only grows within the session
+            # 세션 로그는 시작마다 새로 시작함. Steam 출력은 세션 안에서만 늘어남
+            $pipeBefore = Get-Num (Invoke-Adb shell "run-as $Pkg grep -a -c -i 'broken pipe' $SteamOut")
+            Write-Host '   대기 60초 측정'
+            $results += Measure-Span "close-$mode-idle" 60 $false
+            Write-Host '   화살표 키 이동 60초 측정'
+            $results += Measure-Span "close-$mode-move" 60 $true
+            # PRoot's minute summary written after the move span / 이동 구간 뒤에 쓰인 PRoot 1분 요약
+            Start-Sleep -Seconds 62
+            # ASCII pattern only (Korean in adb arguments is not safe on Windows): the minute's three lines
+            # adb 인자에는 ASCII 패턴만(Windows에서 adb 인자의 한국어는 안전하지 않음): 그 1분의 세 줄
+            $results += @(Invoke-Adb shell "run-as $Pkg grep -a 'PROOT_STAT' $SessionLog" | Select-Object -Last 3)
+            $pipeAfter = Get-Num (Invoke-Adb shell "run-as $Pkg grep -a -c -i 'broken pipe' $SteamOut")
+            $pipeApp = Get-Num (Invoke-Adb shell "run-as $Pkg grep -a -c -i 'broken pipe' $SessionLog")
+            $results += "close-${mode}: Broken pipe 줄 Steam 출력 +$($pipeAfter - $pipeBefore), 앱 세션 로그 $pipeApp"
+            # Steam still up: the client did not end during the run / Steam이 살아 있는지: 실행 중 클라이언트가 끝나지 않았음
+            $done = Get-Num (Invoke-Adb shell "run-as $Pkg grep -a -c 'DONE steam' $SessionLog")
+            $results += "close-${mode}: Steam 끝남 $done번"
+        }
+        Get-Report | Out-Null
+    } finally {
+        # Put the switch back as it was / 스위치를 원래대로 되돌림
+        if ($hadSwitch) { Invoke-Adb shell run-as $Pkg touch $CloseFile | Out-Null }
+        else { Invoke-Adb shell run-as $Pkg rm -f $CloseFile | Out-Null }
+        Invoke-Adb shell am force-stop $Pkg | Out-Null
+    }
+    Write-Host ''
+    Write-Host "== 결과 ($dir)"
     $results | ForEach-Object { Write-Host $_ }
     $results | Set-Content -Encoding UTF8 (Join-Path $dir 'result.txt')
     return

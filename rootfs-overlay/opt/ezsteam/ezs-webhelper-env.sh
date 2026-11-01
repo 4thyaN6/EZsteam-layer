@@ -93,3 +93,14 @@ if [ -p /tmp/ezs-devtools.in ] && [ -p /tmp/ezs-devtools.out ] \
         echo "ezs-webhelper: 메뉴 바탕 DevTools 파이프 연결"
     fi
 fi
+
+# The app's PulseAudio server (PulseServer, mixed with the ALSA path): Chromium under ALSA counts
+# only real sound cards, found none and sent WebAudio (the Big Picture UI sounds) to a fake output
+# (2026-11-01). Told to the web helper only; games keep ALSA. Without the socket nothing changes.
+# 앱의 PulseAudio 서버(PulseServer, ALSA 경로와 함께 섞임): ALSA의 Chromium은 실제 사운드카드만 세고, 하나도 없어
+# WebAudio(빅픽처 UI 효과음)를 가짜 출력으로 보냈음(2026-11-01). 웹 도우미에만 알림. 게임은 ALSA 그대로임. 소켓이
+# 없으면 바뀌는 것 없음
+if [ -S /tmp/ezs-pulse/native ]; then
+    export PULSE_SERVER=unix:/tmp/ezs-pulse/native
+    echo "ezs-webhelper: 소리 PulseAudio (앱 서버 /tmp/ezs-pulse/native)"
+fi

@@ -519,6 +519,8 @@ def bus_call(conn, sender, path, iface, method, params, inv):
             inv.return_dbus_error("org.freedesktop.DBus.Error.ServiceUnknown",
                                   "The name %s was not provided by any .service files" % n)
     elif method in ("AddMatch", "RemoveMatch"):
+        if method == "AddMatch":
+            note_rule(params.unpack()[0])
         inv.return_value(None)
     elif method == "GetConnectionUnixUser":
         inv.return_value(V("(u)", (os.getuid(),)))
@@ -528,6 +530,20 @@ def bus_call(conn, sender, path, iface, method, params, inv):
         inv.return_value(V("(s)", (GUID,)))
     else:
         inv.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", method)
+
+
+# Match rules clients register, each distinct one once: which signals Steam listens for (the
+# network page showed no active network although every state value said connected, 2026-11-01)
+# 클라이언트가 등록하는 매치 규칙, 서로 다른 것마다 한 번: Steam이 어떤 신호를 듣는지(모든 상태 값이 연결됨인데도
+# 네트워크 화면에 활성 네트워크가 없었음, 2026-11-01)
+rules = set()
+
+
+def note_rule(rule):
+    if rule in rules or len(rules) >= 40:
+        return
+    rules.add(rule)
+    log("버스 규칙 " + rule[:200])
 
 
 def send_signal(conn, path, iface, name, body):
@@ -799,6 +815,109 @@ def read_cmd():
     return args, env, cwd
 
 
+# ---------------------------------------------------------------- NetworkManager names Steam uses
+# Steam이 쓰는 NetworkManager 이름
+
+STEAM = os.path.join(os.environ.get("HOME", "/home/steam"), ".local/share/Steam")
+SCAN_OUT = os.path.join(os.environ.get("HOME", "/home/steam"), "ezs-logs", "nm-scan.txt")
+SCAN_KEY = os.path.join(os.environ.get("HOME", "/home/steam"), ".local/share/ezsteam", "nm-scan.key")
+NM_TAG = b"org.freedesktop.NetworkManager"
+
+
+def scan_files():
+    """Client files that may talk to NetworkManager or show its data: the native client parts and
+    the Steam UI scripts / NetworkManager와 대화하거나 그 값을 보여 줄 수 있는 클라이언트 파일: 네이티브
+    클라이언트 부분과 Steam 화면 스크립트"""
+    import glob
+    out = []
+    for pat in ("linuxarm64/*.so", "steamrtarm64/*.so", "steamrtarm64/steam", "steamui/*.js"):
+        out += sorted(f for f in glob.glob(os.path.join(STEAM, pat)) if os.path.isfile(f))
+    return out
+
+
+def scan_one(path, names, apis):
+    """Strings next to every NetworkManager interface name in one file (binary: printable runs
+    within 4 KB either side), plus the Steam UI's own network calls in scripts. Returns the count
+    of interface name places
+    한 파일에서 NetworkManager 인터페이스 이름이 있는 곳마다 그 주변 문자열(바이너리: 앞뒤 4KB 안의 출력 가능한
+    문자열)과 스크립트의 Steam 화면 자체 네트워크 호출을 모음. 인터페이스 이름이 있는 곳 수를 돌려줌"""
+    import mmap
+    import re
+    word = re.compile(rb"[\x20-\x7e]{3,}")
+    ident = re.compile(rb"^[A-Za-z][A-Za-z0-9_.]{2,79}$")
+    hits = 0
+    with open(path, "rb") as f:
+        size = os.fstat(f.fileno()).st_size
+        if size == 0:
+            return 0
+        m = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+        try:
+            if path.endswith(".js"):
+                for api in re.findall(rb"(?:Network|Wifi|WiFi|Wireless)[A-Za-z]*\.[A-Za-z]+\(?", m):
+                    apis[api.decode()] = apis.get(api.decode(), 0) + 1
+            pos = m.find(NM_TAG)
+            while pos >= 0 and hits < 400:
+                hits += 1
+                lo, hi = max(0, pos - 4096), min(size, pos + 4096)
+                for w in word.findall(m[lo:hi]):
+                    for part in w.split(b"\x00"):
+                        part = part.strip()
+                        if ident.match(part):
+                            k = part.decode()
+                            names[k] = names.get(k, 0) + 1
+                pos = m.find(NM_TAG, hi)
+        finally:
+            m.close()
+    return hits
+
+
+def nm_scan():
+    """Once per client build: which NetworkManager properties and methods the Steam client names,
+    written to ezs-logs/nm-scan.txt (the report carries it). Facts for the stand-in instead of
+    guessing what the network page reads. Local only, nothing is sent anywhere
+    클라이언트 빌드마다 한 번: Steam 클라이언트가 이름으로 가진 NetworkManager 속성·메서드를 ezs-logs/nm-scan.txt에
+    씀(제보에 들어감). 네트워크 화면이 무엇을 읽는지 추측하지 않고 대역에 맞출 사실. 기기 안에서만, 어디로도 보내지 않음"""
+    time.sleep(30)
+    try:
+        files = scan_files()
+        key = "\n".join("%s %d %d" % (f, os.path.getsize(f), int(os.path.getmtime(f))) for f in files)
+        try:
+            with open(SCAN_KEY) as k:
+                if k.read() == key and os.path.isfile(SCAN_OUT):
+                    log("NM 스캔: 같은 클라이언트, 지난 결과 그대로 (ezs-logs/nm-scan.txt)")
+                    return
+        except OSError:
+            pass
+        t0 = time.time()
+        names, apis, per = {}, {}, []
+        for f in files:
+            try:
+                n = scan_one(f, names, apis)
+            except (OSError, ValueError):
+                continue
+            if n:
+                per.append("%s: 인터페이스 이름 %d곳" % (os.path.relpath(f, STEAM), n))
+        with open(SCAN_OUT, "w") as out:
+            out.write("# NetworkManager names near its interface strings in the Steam client (%s)\n"
+                      % time.strftime("%Y-%m-%d %H:%M:%S"))
+            out.write("# Steam 클라이언트에서 NetworkManager 인터페이스 문자열 주변의 이름\n\n")
+            for line in per:
+                out.write(line + "\n")
+            out.write("\n## names / 이름 (count)\n")
+            for k in sorted(names):
+                out.write("%s %d\n" % (k, names[k]))
+            out.write("\n## Steam UI network calls / Steam 화면 네트워크 호출 (count)\n")
+            for k in sorted(apis):
+                out.write("%s %d\n" % (k, apis[k]))
+        os.makedirs(os.path.dirname(SCAN_KEY), exist_ok=True)
+        with open(SCAN_KEY, "w") as k:
+            k.write(key)
+        log("NM 스캔: 파일 %d개 중 %d개에 인터페이스 이름, 이름 %d개, 화면 호출 %d개, %.0f초 → ezs-logs/nm-scan.txt"
+            % (len(files), len(per), len(names), len(apis), time.time() - t0))
+    except Exception as e:
+        log("NM 스캔 실패: %s" % e)
+
+
 def steam_loop(loop):
     log_path = os.path.join(os.environ.get("HOME", "/home/steam"), "ezs-logs", "steam.log")
     n = 0
@@ -880,6 +999,8 @@ def main():
     else:
         log("메뉴 바탕: 끔 (no-menubg)")
     threading.Thread(target=steam_loop, args=(loop,), daemon=True).start()
+    # Low-priority one-off scan after the start settled / 시작이 안정된 뒤 한 번 도는 낮은 우선순위 검사
+    threading.Thread(target=nm_scan, daemon=True).start()
     loop.run()
     server.stop()
 
