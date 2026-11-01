@@ -35,11 +35,11 @@ import java.util.Arrays;
 import java.util.Locale;
 
 /**
- * Live display test: starts display.sh (Xvfb with its screen in a file + test windows) in the
+ * Live display test: starts display.sh (Xwayland on ezs-wl with its screen in a file + test windows) in the
  * rootfs, shows that screen with FramebufferView, and sends touch / key input back through XTEST.
  * Touch: one finger = left button (tap = click, drag = drag), two-finger tap = right click,
  * two-finger vertical drag = wheel. Resolution comes from the intent (EXTRA_W / EXTRA_H).
- * 실시간 화면 시험: rootfs에서 display.sh(화면을 파일로 두는 Xvfb + 시험 창)를 띄우고,
+ * 실시간 화면 시험: rootfs에서 display.sh(화면을 파일로 두는 ezs-wl 위 Xwayland + 시험 창)를 띄우고,
  * 그 화면을 FramebufferView로 보여 주며, 터치·키 입력을 XTEST로 돌려보냄.
  * 터치: 한 손가락 = 왼쪽 버튼(탭 = 클릭, 끌기 = 드래그), 두 손가락 탭 = 오른쪽 클릭,
  * 두 손가락 세로 끌기 = 휠. 해상도는 인텐트(EXTRA_W / EXTRA_H)로 받음
@@ -918,7 +918,9 @@ public class DisplayActivity extends Activity {
         // "장치 <name>, API <ver>" only; the next line "장치 확장 ..." (extension list) took its place (2026-10-30)
         // "장치 <이름>, API <버전>"만. 다음 줄 "장치 확장 ..."(확장 목록)이 그 자리를 차지했음(2026-10-30)
         if (s.startsWith("INFO present : 장치 ") && s.contains(", API ")) hudRenderer = s.substring("INFO present : 장치 ".length());
-        else if (s.startsWith("OK   xvfb : ")) hudXserver = s.contains("서버 xwayland") ? "Xwayland" : "Xvfb";
+        // X server ready line; Xwayland is the only screen server (Xvfb removed, 2026-11-01)
+        // X 서버 준비 줄. 화면 서버는 Xwayland 하나뿐임(Xvfb 제거, 2026-11-01)
+        else if (s.startsWith("OK   xserver : ")) hudXserver = "Xwayland";
         // First Steam window after a (re)start: the centre progress card is no longer needed
         // (re)시작 뒤 첫 Steam 창: 가운데 진행 카드가 더는 필요 없음
         if (!steamWindowSeen && s.startsWith("X 포커스") && s.contains("(새 창)")) {
@@ -2943,17 +2945,16 @@ public class DisplayActivity extends Activity {
      *             in front of GL for the Steam client and games
      *   gpu-node  /dev/kgsl-3d0 also bound to /dev/dri/renderD128, EZS_GPU_NODE=1 (libdrm shim,
      *             Turnip DRM numbers, X11 DRI3 path)
-     *   xwayland  EZS_XSERVER=xwayland: display.sh starts ezs-wl + Xwayland instead of Xvfb
+     * The screen server is always Xwayland on ezs-wl (former "xwayland" switch, Xvfb removed 2026-11-01).
      * GPU 화면 경로 시험 스위치(MainActivity [시험], ~/.local/share/ezsteam의 파일). 각각 기본 끔 = 지금 경로:
      *   zink-gl   EZS_ZINK=1: steam-run.sh / EZ Proton이 Steam 클라이언트와 게임의 GL 앞에 Zink(Vulkan 위 OpenGL,
      *             /opt/ezsteam/mesax)를 둠
      *   gpu-node  /dev/kgsl-3d0을 /dev/dri/renderD128에도 바인드, EZS_GPU_NODE=1(libdrm 심, Turnip DRM 번호, X11 DRI3 경로)
-     *   xwayland  EZS_XSERVER=xwayland: display.sh가 Xvfb 대신 ezs-wl + Xwayland를 띄움
+     * 화면 서버는 항상 ezs-wl 위 Xwayland임(예전 "xwayland" 스위치, Xvfb는 2026-11-01 제거).
      */
     private void applyDisplayPathSwitches(GlibcLauncher.Config c) {
         boolean zink = MainActivity.testSwitch(this, MainActivity.SW_ZINK);
         boolean node = MainActivity.testSwitch(this, MainActivity.SW_GPU_NODE);
-        boolean xwl = MainActivity.testSwitch(this, MainActivity.SW_XWAYLAND);
         zinkOn = zink;
         if (zink) c.env.put("EZS_ZINK", "1");
         String nodeState = "끔";
@@ -2967,9 +2968,8 @@ public class DisplayActivity extends Activity {
                 nodeState = "켬이나 /dev/kgsl-3d0 없음 → 끔";
             }
         }
-        if (xwl) c.env.put("EZS_XSERVER", "xwayland");
         log("시험 스위치: Zink GL " + (zink ? "켬" : "끔") + ", GPU 장치 " + nodeState
-                + ", 화면 방식 " + (xwl ? "Xwayland" : "Xvfb"));
+                + ", 화면 방식 Xwayland");
     }
 
     /** This Steam start drew its UI with the GPU / was started in Big Picture (from the start line)
@@ -4322,9 +4322,9 @@ public class DisplayActivity extends Activity {
             files.add(whLog);
             alias.put(whLog, "steamwebhelper-output.log");
         }
-        // X server output (Xvfb or Xwayland: glamor / GBM / EGL start-up for the GPU display path test)
-        // X 서버 출력(Xvfb 또는 Xwayland: GPU 화면 경로 시험용 glamor / GBM / EGL 시작 줄)
-        File xLog = new File(rootfs, "tmp/ezs-xvfb-display.log");
+        // X server output (Xwayland: glamor / GBM / EGL start-up for the GPU display path test)
+        // X 서버 출력(Xwayland: GPU 화면 경로 시험용 glamor / GBM / EGL 시작 줄)
+        File xLog = new File(rootfs, "tmp/ezs-xserver.log");
         if (xLog.isFile()) {
             files.add(xLog);
             alias.put(xLog, "xserver.log");
@@ -4707,9 +4707,9 @@ public class DisplayActivity extends Activity {
     }
 
     /**
-     * Close display.sh's stdin (it then stops Xvfb and the test windows), force-stop after 3 s.
+     * Close display.sh's stdin (it then stops the X server and the test windows), force-stop after 3 s.
      * The screen file stays mapped until fb is closed here.
-     * display.sh의 stdin을 닫음(그러면 Xvfb와 시험 창을 끔). 3초 뒤에도 남으면 강제 종료함.
+     * display.sh의 stdin을 닫음(그러면 X 서버와 시험 창을 끔). 3초 뒤에도 남으면 강제 종료함.
      * 화면 파일 매핑은 여기서 fb를 닫을 때까지 유지됨
      */
     /** Send a signal to every child process of this app (same uid) / 이 앱의 모든 자식 프로세스에 시그널을 보냄(같은 uid) */

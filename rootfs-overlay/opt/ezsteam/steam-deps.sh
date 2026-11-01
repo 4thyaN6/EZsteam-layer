@@ -117,7 +117,9 @@ if m:
 SW=/home/steam/.local/share/ezsteam
 MX=/opt/ezsteam/mesax
 gpu_missing() {
-    if [ -f "$SW/xwayland" ] && ! command -v Xwayland >/dev/null 2>&1; then echo xwayland; fi
+    # Xwayland: the only screen server now, always needed (its switch removed, 2026-11-01)
+    # Xwayland: 이제 유일한 화면 서버라 항상 필요함(스위치 제거, 2026-11-01)
+    if ! command -v Xwayland >/dev/null 2>&1; then echo xwayland; fi
     if [ -f "$SW/zink-gl" ] || [ -f "$SW/gpu-node" ]; then
         # glvnd front ends, looked up as files (ldconfig is not on the PATH here)
         # glvnd 앞단, 파일로 찾음(여기서 ldconfig는 PATH에 없음)

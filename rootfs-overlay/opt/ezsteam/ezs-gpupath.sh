@@ -39,7 +39,7 @@ ezg_append() {
 }
 
 EZG_DRI3=0
-if [ "${EZS_GPU_NODE:-0}" = 1 ] && [ -c /dev/dri/renderD128 ] && [ "${EZS_XSERVER_RUNNING:-xvfb}" = xwayland ]; then
+if [ "${EZS_GPU_NODE:-0}" = 1 ] && [ -c /dev/dri/renderD128 ] && [ "${EZS_XSERVER_RUNNING:-xwayland}" = xwayland ]; then
     EZG_DRI3=1
 fi
 

@@ -31,11 +31,11 @@ param(
     [Parameter(Mandatory = $true)][ValidateSet('push', 'install', 'check', 'report', 'steam', 'compare', 'menushot', 'shot', 'whtest', 'xcmtest', 'release')][string]$Cmd,
     # steam: seconds to wait after the start before the report / steam: 시작 뒤 제보까지 기다리는 초
     [int]$Wait = 90,
-    # Display path for steam: '' = as set in the app, xvfb = Zink GL on Xvfb, xwayland = Zink GL +
-    # GPU device + Xwayland (set through the app's switch files, kept afterwards)
-    # steam의 화면 경로: '' = 앱에서 정한 그대로, xvfb = Xvfb 위 Zink GL, xwayland = Zink GL + GPU 장치 + Xwayland
-    # (앱의 스위치 파일로 정하고, 끝난 뒤에도 그대로 둠)
-    [ValidateSet('', 'xvfb', 'xwayland')][string]$Path = ''
+    # Display path for steam: '' = as set in the app, xwayland = Zink GL + GPU device (set through
+    # the app's switch files, kept afterwards). The screen server is always Xwayland (Xvfb removed)
+    # steam의 화면 경로: '' = 앱에서 정한 그대로, xwayland = Zink GL + GPU 장치(앱의 스위치 파일로 정하고, 끝난 뒤에도
+    # 그대로 둠). 화면 서버는 항상 Xwayland임(Xvfb 제거)
+    [ValidateSet('', 'xwayland')][string]$Path = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -122,17 +122,18 @@ if ($Cmd -eq 'report') {
 $SwDir = 'files/ezs/home/steam/.local/share/ezsteam'
 function Get-Switches {
     $have = @(Invoke-Adb shell run-as $Pkg ls $SwDir)
-    return @('zink-gl', 'gpu-node', 'xwayland') | Where-Object { $have -contains $_ }
+    return @('zink-gl', 'gpu-node') | Where-Object { $have -contains $_ }
 }
 function Set-Switches([string[]]$On) {
     Invoke-Adb shell run-as $Pkg mkdir -p $SwDir | Out-Null
-    foreach ($n in @('zink-gl', 'gpu-node', 'xwayland')) {
+    foreach ($n in @('zink-gl', 'gpu-node')) {
         if ($On -contains $n) { Invoke-Adb shell run-as $Pkg touch "$SwDir/$n" | Out-Null }
         else { Invoke-Adb shell run-as $Pkg rm -f "$SwDir/$n" | Out-Null }
     }
     Write-Host "스위치: $(if ($On) { $On -join ', ' } else { '모두 끔' })"
 }
-$PathSwitches = @{ 'xvfb' = @('zink-gl'); 'xwayland' = @('zink-gl', 'gpu-node', 'xwayland') }
+# The former "xwayland" switch file is ignored by the app now (Xwayland always) / 예전 "xwayland" 스위치 파일은 이제 앱이 무시함(항상 Xwayland)
+$PathSwitches = @{ 'xwayland' = @('zink-gl', 'gpu-node') }
 
 # One GPU path check run; returns its log lines / GPU 경로 점검 한 번, 그 로그 줄을 돌려줌
 function Invoke-Check {
@@ -542,15 +543,12 @@ if ($Cmd -eq 'xcmtest') {
 }
 
 if ($Cmd -eq 'check') {
-    # Both display paths in one go, the app's own switches put back afterwards; the report holds
-    # both runs (gpu-check-prev.log = Xvfb, gpu-check.log = Xwayland + GPU device)
-    # 두 화면 경로를 한 번에 점검하고, 끝나면 앱의 스위치를 되돌림. 제보에 두 실행이 모두 들어감
-    # (gpu-check-prev.log = Xvfb, gpu-check.log = Xwayland + GPU 장치)
+    # The display path (Zink GL + GPU device on Xwayland) once, the app's own switches put back
+    # afterwards (the Xvfb pass went with Xvfb, 2026-11-01)
+    # 화면 경로(Xwayland 위 Zink GL + GPU 장치)를 한 번 점검하고, 끝나면 앱의 스위치를 되돌림(Xvfb 회차는 Xvfb와 함께
+    # 없앰, 2026-11-01)
     $saved = @(Get-Switches)
-    Write-Host '== 1/2: Zink GL + Xvfb'
-    Set-Switches $PathSwitches['xvfb']
-    Invoke-Check
-    Write-Host '== 2/2: Zink GL + GPU 장치 + Xwayland'
+    Write-Host '== Zink GL + GPU 장치 + Xwayland'
     Set-Switches $PathSwitches['xwayland']
     Invoke-Check
     Get-Report | Out-Null

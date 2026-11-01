@@ -308,14 +308,13 @@ public class MainActivity extends Activity {
         fileSwitch(f, s(R.string.test_hidraw), "hidraw-off", R.string.v_off, R.string.v_default);
         // GPU display path, step by step (each off = the current path): Zink GL = OpenGL through
         // Zink on Vulkan (/opt/ezsteam/mesax) for the Steam client and games; GPU device = the
-        // Android GPU also shown as /dev/dri/renderD128 with the libdrm shim; screen server =
-        // Xwayland on our guest compositor ezs-wl instead of Xvfb. Read at the next Steam start
+        // Android GPU also shown as /dev/dri/renderD128 with the libdrm shim. The screen server is
+        // always Xwayland on ezs-wl (its switch and Xvfb removed, 2026-11-01). Read at the next Steam start
         // GPU 화면 경로, 단계별(각각 끄면 지금 경로): Zink GL = Steam 클라이언트와 게임의 OpenGL을 Vulkan 위
         // Zink로(/opt/ezsteam/mesax), GPU 장치 = 안드로이드 GPU를 libdrm 심과 함께 /dev/dri/renderD128로도 보임,
-        // 화면 방식 = Xvfb 대신 자체 rootfs 컴포지터 ezs-wl 위의 Xwayland. 다음 Steam 시작 때 읽음
+        // 화면 서버는 항상 ezs-wl 위 Xwayland(그 스위치와 Xvfb는 2026-11-01 제거). 다음 Steam 시작 때 읽음
         fileSwitch(f, s(R.string.test_zink), SW_ZINK, R.string.v_on, R.string.v_off);
         fileSwitch(f, s(R.string.test_gpu_node), SW_GPU_NODE, R.string.v_on, R.string.v_off);
-        fileSwitch(f, s(R.string.test_xserver), SW_XWAYLAND, R.string.v_xwayland, R.string.v_xvfb);
         // One run of the GL/Vulkan cases behind the switches above, without Steam (gpu-check.sh): one
         // line per case and crash locations, instead of one Steam start per variant
         // 위 스위치 뒤의 GL/Vulkan 경우들을 Steam 없이 한 번에 돌림(gpu-check.sh): 경우마다 한 줄과 크래시 위치. 변형마다
@@ -610,9 +609,12 @@ public class MainActivity extends Activity {
     }
 
 
-    /** X server and tools from [시험 도구 설치] are in the rootfs / [시험 도구 설치]의 X 서버·도구가 rootfs에 있음 */
+    /** X server (Xwayland) and tools from [시험 도구 설치] are in the rootfs; a device with only the
+     *  former Xvfb is asked to run the tools step again, which adds Xwayland
+     *  [시험 도구 설치]의 X 서버(Xwayland)·도구가 rootfs에 있음. 예전 Xvfb만 있는 기기는 도구 단계를 다시 하게 되며
+     *  그때 Xwayland가 추가됨 */
     private boolean toolsInstalled() {
-        return new File(RootfsInstaller.rootfsDir(this), "usr/bin/Xvfb").exists();
+        return new File(RootfsInstaller.rootfsDir(this), "usr/bin/Xwayland").exists();
     }
 
     private boolean steamInstalled() {
@@ -620,9 +622,9 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * One-button setup for a new device: rootfs -> GPU driver -> tools (Xvfb) -> Steam client, each
+     * One-button setup for a new device: rootfs -> GPU driver -> tools (Xwayland) -> Steam client, each
      * only when missing, stopping at the first step that does not finish.
-     * 새 기기용 한 번에 준비: rootfs -> GPU 드라이버 -> 도구(Xvfb) -> Steam 클라이언트. 빠진 것만 하고,
+     * 새 기기용 한 번에 준비: rootfs -> GPU 드라이버 -> 도구(Xwayland) -> Steam 클라이언트. 빠진 것만 하고,
      * 끝나지 않은 단계에서 멈춤
      */
     private void doSetupAll() throws Exception {
@@ -677,7 +679,7 @@ public class MainActivity extends Activity {
         if (RootfsInstaller.installedVersion(this).isEmpty()) return "rootfs 미설치";
         if (RootfsInstaller.needsInstall(this)) return "rootfs 갱신 필요";
         if (DriverInstaller.installedVersion(this, "turnip").isEmpty()) return "드라이버 미설치";
-        if (!toolsInstalled()) return "시험 도구(Xvfb) 미설치";
+        if (!toolsInstalled()) return "시험 도구(Xwayland) 미설치";
         if (!new File(RootfsInstaller.rootfsDir(this), "home/steam/.local/share/Steam/steamrtarm64/steam").isFile()) {
             return "Steam 미설치";
         }
@@ -1040,7 +1042,7 @@ public class MainActivity extends Activity {
 
     /** The file compat/ezproton reads for the Native choice / compat/ezproton이 Native 선택으로 읽는 파일 */
     /** Switch files of the GPU display path (see the [시험] section) / GPU 화면 경로 스위치 파일([시험] 영역 참고) */
-    static final String SW_ZINK = "zink-gl", SW_GPU_NODE = "gpu-node", SW_XWAYLAND = "xwayland";
+    static final String SW_ZINK = "zink-gl", SW_GPU_NODE = "gpu-node";
 
     /** True when a test switch file is present / 시험 스위치 파일이 있으면 참 */
     static boolean testSwitch(android.content.Context ctx, String name) {
@@ -1543,9 +1545,11 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Install the optional test tools (Xvfb, xwd) with apt inside the rootfs. Runs as PRoot fake
+     * Install the X server and tools (Xwayland = screen server, Xvfb = hidden installer screen and
+     * drawing test, xwd) with apt inside the rootfs. Runs as PRoot fake
      * root and uses the device's DNS servers. Only on a button press; downloads from Debian mirrors.
-     * 선택 시험 도구(Xvfb, xwd)를 rootfs 안에서 apt로 설치함. PRoot 가짜 root로 실행하고
+     * X 서버와 도구(Xwayland = 화면 서버, Xvfb = 보이지 않는 설치 화면과 그리기 시험, xwd)를 rootfs 안에서 apt로
+     * 설치함. PRoot 가짜 root로 실행하고
      * 기기 DNS 서버를 씀. 버튼을 누를 때만 동작하며 Debian 미러에서 받음
      */
     private void doToolsInstall() throws Exception {
