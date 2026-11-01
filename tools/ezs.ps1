@@ -107,8 +107,8 @@ function Get-Report {
         return $null
     }
     Write-Host "제보: $local ($([math]::Round((Get-Item $local).Length / 1KB)) KB)"
-    # Show it in Explorer on the PC disk (not the tablet) / PC 디스크에서 탐색기로 보여 줌(태블릿 아님)
-    try { Start-Process explorer.exe "/select,`"$local`"" } catch { }
+    # No Explorer window: the path is printed above (windows piled up per test)
+    # 탐색기 창 안 띄움: 경로는 위에 찍음(시험마다 창이 쌓였음)
     return $local
 }
 
@@ -297,7 +297,6 @@ if ($Cmd -eq 'shot') {
     $line = Get-Shot 'manual' $dir 1500 $true 3
     $line | Set-Content -Encoding UTF8 (Join-Path $dir 'result.txt')
     Write-Host "그림: $dir"
-    try { Start-Process explorer.exe "`"$dir`"" } catch { }
     return
 }
 
@@ -359,7 +358,6 @@ if ($Cmd -eq 'menushot') {
     Write-Host "== 결과 (그림: $dir)"
     $results | ForEach-Object { Write-Host $_ }
     $results | Set-Content -Encoding UTF8 (Join-Path $dir 'result.txt')
-    try { Start-Process explorer.exe "`"$dir`"" } catch { }
     return
 }
 
@@ -462,7 +460,6 @@ if ($Cmd -eq 'whtest') {
     Write-Host "== 결과 (그림: $dir)"
     $results | ForEach-Object { Write-Host $_ }
     $results | Set-Content -Encoding UTF8 (Join-Path $dir 'result.txt')
-    try { Start-Process explorer.exe "`"$dir`"" } catch { }
     return
 }
 
@@ -541,7 +538,6 @@ if ($Cmd -eq 'xcmtest') {
     Write-Host "== 결과 (그림: $dir)"
     $results | ForEach-Object { Write-Host $_ }
     $results | Set-Content -Encoding UTF8 (Join-Path $dir 'result.txt')
-    try { Start-Process explorer.exe "`"$dir`"" } catch { }
     return
 }
 
