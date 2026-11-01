@@ -232,12 +232,17 @@ function Measure-Span([string]$Label, [int]$Sec, [bool]$Keys) {
 # 메뉴 확인: 가이드 네 번, 누를 때마다 프레임 기록(메뉴 상태는 가정하지 않음). 줄에 메뉴 깨짐 띠 잡음 점수가 있음.
 # 시작 직후에 실행함: 시작 60초 뒤 메뉴를 열었을 때 깨짐이 나왔고(2026-10-31 13:46, 14:16), 화살표 이동 1분 뒤에는
 # 나오지 않았음(9회, 2026-10-31 16:02~16:33)
-function Test-Menu([string]$Tag, [string]$Dir) {
+# $Presses: guide presses (whtest uses 12: the fault shows from the second or third opening on,
+# the first is always clean, user 2026-11-01). With many presses one picture per press, no burst
+# $Presses: 가이드 누름 수(whtest는 12번: 깨짐은 두 번째·세 번째 열 때부터 나오고 첫 번째는 늘 정상, 사용자
+# 2026-11-01). 누름이 많을 때는 누를 때마다 한 장, 묶음 없음
+function Test-Menu([string]$Tag, [string]$Dir, [int]$Presses = 4) {
     $out = @()
-    for ($r = 1; $r -le 4; $r++) {
+    $burst = if ($Presses -gt 4) { 0 } else { 1500 }
+    for ($r = 1; $r -le $Presses; $r++) {
         Invoke-Adb shell am broadcast -a app.ezsteam.GUIDE | Out-Null
         Start-Sleep -Seconds 4
-        $out += Get-Shot "$Tag-g$r" $Dir 1500 $false 1
+        $out += Get-Shot "$Tag-g$r" $Dir $burst $false 1
     }
     return $out
 }
@@ -375,11 +380,15 @@ if ($Cmd -eq 'whtest') {
     foreach ($ln in (Get-Content $listFile -Encoding UTF8)) {
         $t = $ln.Trim()
         if (-not $t -or $t.StartsWith('#')) { continue }
-        # tag|KEY=VALUE|WxH (third part optional: X screen size for that run)
-        # tag|KEY=VALUE|WxH (셋째 부분은 생략 가능: 그 실행의 X 화면 크기)
-        $p = @($t -split '\|', 3)
+        # tag|KEY=VALUE|WxH|mode (third and fourth parts optional: X screen size for that run,
+        # Steam UI GPU mode 1-3, default 2 = ANGLE Vulkan)
+        # tag|KEY=VALUE|WxH|mode (셋째·넷째 부분은 생략 가능: 그 실행의 X 화면 크기, Steam 화면 GPU 방식 1~3,
+        # 기본 2 = ANGLE Vulkan)
+        $p = @($t -split '\|', 4)
+        $mode = 2
+        if ($p.Count -gt 3 -and $p[3].Trim() -match '^[1-3]$') { $mode = [int]$p[3].Trim() }
         $variants += @{ Tag = $p[0].Trim(); Line = $(if ($p.Count -gt 1) { $p[1].Trim() } else { '' })
-                        Size = $(if ($p.Count -gt 2) { $p[2].Trim() } else { '' }) }
+                        Size = $(if ($p.Count -gt 2) { $p[2].Trim() } else { '' }); Mode = $mode }
     }
     $WhFile = "$SwDir/wh-test.env"
     $tmpLocal = Join-Path $env:TEMP 'ezs-wh-test.env'
@@ -394,7 +403,7 @@ if ($Cmd -eq 'whtest') {
     $results = @()
     try {
         foreach ($v in $variants) {
-            $t = "vk-$($v.Tag)"
+            $t = "m$($v.Mode)-$($v.Tag)"
             Invoke-Adb shell run-as $Pkg rm -f $WhFile | Out-Null
             if ($v.Line) {
                 # ASCII, LF only, as the guest shell reads it / guest 셸이 읽는 대로 ASCII, LF만
@@ -408,7 +417,8 @@ if ($Cmd -eq 'whtest') {
                 Write-Host "== ${t}: 변형 없음"
             }
             if ($v.Size) { Write-Host "   X 화면 $($v.Size)" }
-            Start-SteamMode 2 $v.Size
+            Write-Host "   Steam 화면 GPU 방식 $($v.Mode)"
+            Start-SteamMode $v.Mode $v.Size
             # Did the web helper take it? Its own line from ezs-webhelper-env.sh
             # 웹 도우미가 받았는지: ezs-webhelper-env.sh가 남기는 줄
             # Only the variant line itself (the style injector also writes "ezs-webhelper:" lines,
@@ -423,7 +433,7 @@ if ($Cmd -eq 'whtest') {
                 $results += @(Invoke-Adb shell "run-as $Pkg grep -a 'ezs-webhelper: css ' $SessionLog" | Select-Object -Last 4)
             }
             Write-Host '   메뉴 확인 (시작 직후)'
-            $results += Test-Menu $t $dir
+            $results += Test-Menu $t $dir 12
             Write-Host '   화살표 키 이동 60초 측정 (메뉴가 열린 채면 프레임이 0으로 나옴)'
             $results += Measure-Span "$t-move" 60 $true
         }
