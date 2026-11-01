@@ -433,20 +433,46 @@ seen = set()
 asked = {"n": 0}
 
 
-def note(kind, path, iface, name, answered):
+# Program behind each bus connection (peer credentials -> /proc/<pid>/comm): which program asks
+# NetworkManager - the Steam binaries hold no NetworkManager names of their own, only the web
+# helper's Chromium does (scan 2026-11-01)
+# 버스 연결마다 상대 프로그램(상대 자격 증명 -> /proc/<pid>/comm): 누가 NetworkManager에 묻는지. Steam 실행
+# 파일에는 자체 NetworkManager 이름이 없고 웹 도우미의 Chromium에만 있었음(스캔 2026-11-01)
+who_of = {}
+
+
+def peer_name(conn):
+    """Program and pid of the connection's other end, ? when unknown / 연결 상대의 프로그램과 pid, 모르면 ?"""
+    try:
+        cred = conn.get_peer_credentials()
+        if cred is None:
+            # Anonymous authentication leaves no credentials: ask the socket (SO_PEERCRED)
+            # 익명 인증이면 자격 증명이 남지 않음: 소켓에 물음(SO_PEERCRED)
+            cred = conn.get_stream().get_socket().get_credentials()
+        pid = cred.get_unix_pid() if cred else -1
+        if pid and pid > 0:
+            with open("/proc/%d/comm" % pid) as f:
+                return "%s %d" % (f.read().strip(), pid)
+    except Exception:  # noqa: BLE001 - only a log detail
+        pass
+    return "?"
+
+
+def note(kind, path, iface, name, answered, conn=None):
     asked["n"] += 1
-    key = (kind, path, iface, name)
+    who = who_of.get(conn, "?") if conn is not None else "?"
+    key = (kind, path, iface, name, who.split(" ")[0])
     if key in seen or len(seen) >= 80:
         return
     seen.add(key)
-    log("요청 %s %s %s.%s%s" % (kind, path, iface.rsplit(".", 1)[-1], name, "" if answered else " (답 없음)"))
+    log("요청 %s %s %s.%s%s [%s]" % (kind, path, iface.rsplit(".", 1)[-1], name, "" if answered else " (답 없음)", who))
 
 
 def nm_call(conn, sender, path, iface, method, params, inv):
     known = method in ("GetDevices", "GetAllDevices", "GetPermissions", "CheckConnectivity", "state",
                        "ListConnections", "GetSettings", "GetManagedObjects", "GetAccessPoints",
                        "GetAllAccessPoints", "RequestScan")
-    note("호출", path, iface, method, known)
+    note("호출", path, iface, method, known, conn)
     V = GLib.Variant
     if method in ("GetDevices", "GetAllDevices"):
         inv.return_value(V("(ao)", ([DEV],)))
@@ -472,7 +498,7 @@ def nm_call(conn, sender, path, iface, method, params, inv):
 
 def nm_get(conn, sender, path, iface, name):
     v = props(path, iface).get(name)
-    note("속성", path, iface, name, v is not None)
+    note("속성", path, iface, name, v is not None, conn)
     return v
 
 
@@ -520,7 +546,7 @@ def bus_call(conn, sender, path, iface, method, params, inv):
                                   "The name %s was not provided by any .service files" % n)
     elif method in ("AddMatch", "RemoveMatch"):
         if method == "AddMatch":
-            note_rule(params.unpack()[0])
+            note_rule(params.unpack()[0], who_of.get(conn, "?"))
         inv.return_value(None)
     elif method == "GetConnectionUnixUser":
         inv.return_value(V("(u)", (os.getuid(),)))
@@ -539,11 +565,11 @@ def bus_call(conn, sender, path, iface, method, params, inv):
 rules = set()
 
 
-def note_rule(rule):
+def note_rule(rule, who="?"):
     if rule in rules or len(rules) >= 40:
         return
     rules.add(rule)
-    log("버스 규칙 " + rule[:200])
+    log("버스 규칙 [%s] %s" % (who, rule[:200]))
 
 
 def send_signal(conn, path, iface, name, body):
@@ -561,6 +587,7 @@ def send_signal(conn, path, iface, name, body):
 def new_connection(server, conn):
     """Every client gets the bus object and the NetworkManager objects on its own connection
     클라이언트마다 자기 연결에 버스 객체와 NetworkManager 객체를 받음"""
+    who_of[conn] = peer_name(conn)
     conn.register_object("/org/freedesktop/DBus", BUS_IFACE, bus_call, None, None)
     conn.register_object("/", BUS_IFACE, bus_call, None, None)
     # Both kinds' interfaces are registered; objects() decides which ones answers list
@@ -590,11 +617,12 @@ def new_connection(server, conn):
     # First few and then every 20th, so a client that reconnects often does not flood the log
     # 처음 몇 개와 그 뒤 20번째마다: 자주 다시 붙는 클라이언트가 로그를 채우지 않게 함
     if total <= 5 or total % 20 == 0:
-        log("버스 연결 %d번째 (지금 %d개)" % (total, n))
+        log("버스 연결 %d번째 (지금 %d개) %s" % (total, n, who_of.get(conn, "?")))
     return True
 
 
 def closed(conn, remote_peer_vanished, error):
+    who_of.pop(conn, None)
     with lock:
         if conn in clients:
             clients.remove(conn)
@@ -822,6 +850,10 @@ STEAM = os.path.join(os.environ.get("HOME", "/home/steam"), ".local/share/Steam"
 SCAN_OUT = os.path.join(os.environ.get("HOME", "/home/steam"), "ezs-logs", "nm-scan.txt")
 SCAN_KEY = os.path.join(os.environ.get("HOME", "/home/steam"), ".local/share/ezsteam", "nm-scan.key")
 NM_TAG = b"org.freedesktop.NetworkManager"
+# Other signs of a NetworkManager client: the libnm library and its calls, the object path form
+# NetworkManager 클라이언트의 다른 흔적: libnm 라이브러리와 그 호출, 객체 경로 형태
+NM_HINTS = (b"libnm.so", b"nm_client_", b"nm_device_", b"nm_access_point_", b"/org/freedesktop/NetworkManager",
+            b"NMClient", b"steamos-manager", b"com.steampowered.SteamOSManager")
 
 
 def scan_files():
@@ -852,6 +884,16 @@ def scan_one(path, names, apis):
             return 0
         m = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
         try:
+            # Count of each hint in this file / 이 파일의 흔적마다 수
+            for h in NM_HINTS:
+                c = 0
+                q = m.find(h)
+                while q >= 0 and c < 1000:
+                    c += 1
+                    q = m.find(h, q + 1)
+                if c:
+                    k = "흔적 " + h.decode() + " @ " + os.path.basename(path)
+                    names[k] = names.get(k, 0) + c
             if path.endswith(".js"):
                 for api in re.findall(rb"(?:Network|Wifi|WiFi|Wireless)[A-Za-z]*\.[A-Za-z]+\(?", m):
                     apis[api.decode()] = apis.get(api.decode(), 0) + 1
@@ -880,7 +922,7 @@ def nm_scan():
     time.sleep(30)
     try:
         files = scan_files()
-        key = "\n".join("%s %d %d" % (f, os.path.getsize(f), int(os.path.getmtime(f))) for f in files)
+        key = "v2\n" + "\n".join("%s %d %d" % (f, os.path.getsize(f), int(os.path.getmtime(f))) for f in files)
         try:
             with open(SCAN_KEY) as k:
                 if k.read() == key and os.path.isfile(SCAN_OUT):
@@ -903,6 +945,10 @@ def nm_scan():
             out.write("# Steam 클라이언트에서 NetworkManager 인터페이스 문자열 주변의 이름\n\n")
             for line in per:
                 out.write(line + "\n")
+            # Is libnm in the rootfs at all / rootfs에 libnm이 있는지
+            import glob
+            libnm = glob.glob("/usr/lib/aarch64-linux-gnu/libnm.so*")
+            out.write("libnm: %s\n" % (", ".join(libnm) if libnm else "없음"))
             out.write("\n## names / 이름 (count)\n")
             for k in sorted(names):
                 out.write("%s %d\n" % (k, names[k]))
