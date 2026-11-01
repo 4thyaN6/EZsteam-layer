@@ -1,25 +1,21 @@
-# Web helper variants for ezs-whtest.bat (ANGLE Vulkan Steam UI), one per line: tag|KEY=VALUE
-# An empty value after "|" = no variant (comparison run). EZS_WH_FLAGS_ADD=... adds Chromium flags.
+# Web helper variants for ezs-whtest.bat (ANGLE Vulkan Steam UI), one per line: tag|KEY=VALUE|WxH
+# An empty value after the first "|" = no variant (comparison run). EZS_WH_FLAGS_ADD=... adds
+# Chromium flags. The optional third part is the X screen size for that run only.
 # The line is written to ~/.local/share/ezsteam/wh-test.env and read by ezs-webhelper-env.sh.
-# Earlier variants (TU_DEBUG sysmem/noubwc/nolrz, --ui-disable-partial-swap, ANGLE features
-# supportsIncrementalPresent/preferDrawClearOverVkCmdClearAttachments) cost nothing extra but could
-# not be judged: the fault did not show in the comparison run either (2026-10-31 16:13-16:33)
-# ezs-whtest.bat용 웹 도우미 변형(ANGLE Vulkan Steam 화면), 줄마다 하나: tag|KEY=VALUE
-# "|" 뒤가 비면 변형 없음(비교용 실행). EZS_WH_FLAGS_ADD=...는 Chromium 플래그를 더함.
-# 줄은 ~/.local/share/ezsteam/wh-test.env에 쓰이고 ezs-webhelper-env.sh가 읽음.
-# 앞의 변형(TU_DEBUG sysmem/noubwc/nolrz, --ui-disable-partial-swap, ANGLE 기능 supportsIncrementalPresent/
-# preferDrawClearOverVkCmdClearAttachments)은 추가 비용이 없었지만 판정 못 함: 비교용 실행에서도 깨짐이 나오지 않았음
-# (2026-10-31 16:13~16:33)
+# Results so far (2026-10-31): no effect on the menu band fault from TU_DEBUG sysmem/noubwc/nolrz,
+# --ui-disable-partial-swap, ANGLE supportsIncrementalPresent/preferDrawClear...,
+# --disable-features=BackdropFilterMirrorEdgeMode, --disable-gpu-rasterization (+54%p CPU);
+# ANGLE allocateNonZeroMemory made the web helper die again and again
+# ezs-whtest.bat용 웹 도우미 변형(ANGLE Vulkan Steam 화면), 줄마다 하나: tag|KEY=VALUE|WxH
+# 첫 "|" 뒤가 비면 변형 없음(비교용 실행). EZS_WH_FLAGS_ADD=...는 Chromium 플래그를 더함. 셋째 부분(생략 가능)은
+# 그 실행에만 쓰는 X 화면 크기. 줄은 ~/.local/share/ezsteam/wh-test.env에 쓰이고 ezs-webhelper-env.sh가 읽음.
+# 지금까지 결과(2026-10-31): 메뉴 띠 깨짐에 효과 없음 — TU_DEBUG sysmem/noubwc/nolrz, --ui-disable-partial-swap,
+# ANGLE supportsIncrementalPresent/preferDrawClear…, --disable-features=BackdropFilterMirrorEdgeMode,
+# --disable-gpu-rasterization(CPU +54%p). ANGLE allocateNonZeroMemory는 웹 도우미를 계속 죽였음
 base|
-# Blur behind the header/footer reads its edges clamped instead of mirrored (Chromium feature,
-# on by default since M129). The broken bands are exactly the 40-row header/footer over the panel
-# 머리줄·안내줄 뒤 흐림이 가장자리를 거울 대신 늘여서 읽음(Chromium 기능, M129부터 기본 켬).
-# 깨지는 띠가 정확히 패널 위 40줄 머리줄·안내줄 자리임
-mirroroff|EZS_WH_FLAGS_ADD=--disable-features=BackdropFilterMirrorEdgeMode
-# Page drawing (raster) on the CPU, compositing still on the GPU / 페이지 그리기(래스터)는 CPU, 합성은 그대로 GPU
-nogpuraster|EZS_WH_FLAGS_ADD=--disable-gpu-rasterization
-# New allocations filled with non-zero values: if the noise pattern changes, the bands are unwritten
-# memory (its first run was not measured: the app screen came up late, 2026-10-31 16:28)
-# 새 할당을 0이 아닌 값으로 채움: 잡음 모양이 바뀌면 띠는 쓰이지 않은 메모리임(첫 실행은 앱 화면이 늦게 떠 측정 못 함,
-# 2026-10-31 16:28)
-anglenonzero|EZS_WH_FLAGS_ADD=--enable-angle-features=allocateNonZeroMemory
+# Blur behind the header/footer bars turned off by a style rule (ezs-cefcss.py, DevTools port)
+# 머리줄·안내줄 뒤 흐림을 스타일 규칙으로 끔(ezs-cefcss.py, DevTools 포트)
+noblur|EZS_WH_NOBLUR=1
+# Same Steam UI on a 1280x720 X screen: does the fault follow the screen size?
+# 같은 Steam 화면을 1280x720 X 화면에서: 깨짐이 화면 크기를 따르는지
+base720||1280x720

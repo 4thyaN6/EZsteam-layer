@@ -457,7 +457,12 @@ public class MainActivity extends Activity {
             // Steam UI GPU mode chosen by the PC for this and later starts (ezs-compare.bat)
             // PC가 정한 Steam 화면 GPU 방식(이번과 이후 시작, ezs-compare.bat)
             setGpuModeFromPc(i);
-            openSteam(steamSize()[0], steamSize()[1]);
+            // X screen size for this start only, not saved ("1280x720", test runs of ezs-whtest.bat:
+            // whether the Steam menu fault depends on the screen size)
+            // 이번 시작에만 쓰는 X 화면 크기, 저장하지 않음("1280x720", ezs-whtest.bat 시험 실행: Steam 메뉴 깨짐이
+            // 화면 크기에 따라 달라지는지)
+            int[] sz = pcSize(i.getStringExtra(EXTRA_PC_SIZE));
+            openSteam(sz[0], sz[1]);
         } else if ("setgpu".equals(run)) {
             // Only put the mode back (end of a comparison run) / 방식만 되돌림(비교 실행 끝)
             setGpuModeFromPc(i);
@@ -472,6 +477,24 @@ public class MainActivity extends Activity {
 
     /** Extra with the Steam UI GPU mode index (STEAM_GPU_MODES) / Steam 화면 GPU 방식 번호 extra(STEAM_GPU_MODES) */
     static final String EXTRA_PC_GPU = "ezs.gpumode";
+    /** Extra with a one-off X screen size "WxH" / 한 번만 쓰는 X 화면 크기 "WxH" extra */
+    static final String EXTRA_PC_SIZE = "ezs.size";
+
+    /** "WxH" within 640x360..3840x2400 and even, else the saved size / 640x360~3840x2400 사이 짝수면 그 크기, 아니면 저장된 크기 */
+    private int[] pcSize(String s) {
+        if (s != null) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)x(\\d+)").matcher(s.trim());
+            if (m.matches()) {
+                int w = Integer.parseInt(m.group(1)), h = Integer.parseInt(m.group(2));
+                if (w >= 640 && h >= 360 && w <= 3840 && h <= 2400 && w % 2 == 0 && h % 2 == 0) {
+                    log("PC 요청: 이번 시작만 X 화면 " + w + "x" + h);
+                    return new int[]{w, h};
+                }
+            }
+            log("PC 요청: 화면 크기 '" + s + "' 무시 (형식 WxH)");
+        }
+        return steamSize();
+    }
 
     private void setGpuModeFromPc(android.content.Intent i) {
         int m = i.getIntExtra(EXTRA_PC_GPU, -1);

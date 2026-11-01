@@ -200,9 +200,13 @@ function Get-Shot([string]$Label, [string]$Dir, [int]$Burst = 1500, [bool]$X = $
 
 # Shared steps of the unattended GPU runs / 사람 없이 도는 GPU 실행의 공통 단계
 # Fresh Steam start in a Steam UI GPU mode, then 60 s to settle / Steam 화면 GPU 방식으로 Steam 새로 시작, 60초 안정
-function Start-SteamMode([int]$Mode) {
+# $Size "WxH" = X screen size for this start only (not saved in the app)
+# $Size "WxH" = 이번 시작에만 쓰는 X 화면 크기(앱에 저장 안 함)
+function Start-SteamMode([int]$Mode, [string]$Size = '') {
     Invoke-Adb shell am force-stop $Pkg | Out-Null
-    $o = Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run steam --ei ezs.gpumode $Mode
+    $extra = @()
+    if ($Size) { $extra = @('--es', 'ezs.size', $Size) }
+    $o = Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run steam --ei ezs.gpumode $Mode @extra
     if (($o -join ' ') -match 'Error') { Write-Host ($o -join "`n"); throw '앱 시작 실패 (태블릿 연결·USB 디버깅 확인)' }
     Start-Sleep -Seconds 60
 }
@@ -371,8 +375,11 @@ if ($Cmd -eq 'whtest') {
     foreach ($ln in (Get-Content $listFile -Encoding UTF8)) {
         $t = $ln.Trim()
         if (-not $t -or $t.StartsWith('#')) { continue }
-        $p = @($t -split '\|', 2)
-        $variants += @{ Tag = $p[0].Trim(); Line = $(if ($p.Count -gt 1) { $p[1].Trim() } else { '' }) }
+        # tag|KEY=VALUE|WxH (third part optional: X screen size for that run)
+        # tag|KEY=VALUE|WxH (셋째 부분은 생략 가능: 그 실행의 X 화면 크기)
+        $p = @($t -split '\|', 3)
+        $variants += @{ Tag = $p[0].Trim(); Line = $(if ($p.Count -gt 1) { $p[1].Trim() } else { '' })
+                        Size = $(if ($p.Count -gt 2) { $p[2].Trim() } else { '' }) }
     }
     $WhFile = "$SwDir/wh-test.env"
     $tmpLocal = Join-Path $env:TEMP 'ezs-wh-test.env'
@@ -400,12 +407,18 @@ if ($Cmd -eq 'whtest') {
             } else {
                 Write-Host "== ${t}: 변형 없음"
             }
-            Start-SteamMode 2
+            if ($v.Size) { Write-Host "   X 화면 $($v.Size)" }
+            Start-SteamMode 2 $v.Size
             # Did the web helper take it? Its own line from ezs-webhelper-env.sh
             # 웹 도우미가 받았는지: ezs-webhelper-env.sh가 남기는 줄
             $took = @(Invoke-Adb shell "run-as $Pkg grep -a 'ezs-webhelper: ' $SessionLog" | Select-Object -Last 1)
             $ok = if (-not $v.Line) { '해당 없음' } elseif (($took -join ' ') -match '시험 변형') { '적용됨' } else { '적용 안 됨' }
-            $results += "${t}: 변형 '$($v.Line)' → $ok"
+            $results += "${t}: 변형 '$($v.Line)' → $ok$(if ($v.Size) { ", X 화면 $($v.Size)" })"
+            # Injector lines of the no-blur variant / 흐림 끄기 변형의 주입기 줄
+            if ($v.Line -match 'EZS_WH_NOBLUR') {
+                Start-Sleep -Seconds 5
+                $results += @(Invoke-Adb shell "run-as $Pkg grep -a 'ezs-cefcss: ' $SessionLog" | Select-Object -Last 4)
+            }
             Write-Host '   메뉴 확인 (시작 직후)'
             $results += Test-Menu $t $dir
             Write-Host '   화살표 키 이동 60초 측정 (메뉴가 열린 채면 프레임이 0으로 나옴)'

@@ -70,5 +70,14 @@ if [ -f "$EZS_WH_TEST" ]; then
     . "$EZS_WH_TEST"
     set +a
     [ -n "${EZS_WH_FLAGS_ADD:-}" ] && EZS_CEF_FLAGS="${EZS_CEF_FLAGS:+$EZS_CEF_FLAGS }$EZS_WH_FLAGS_ADD"
+    # EZS_WH_NOBLUR=1: DevTools port on 127.0.0.1:8080 and the style injector that turns off the
+    # blur behind the header/footer bars (ezs-cefcss.py, ends with this helper). Test only: while
+    # it runs, any program on the device can reach the port
+    # EZS_WH_NOBLUR=1: 127.0.0.1:8080 DevTools 포트와 머리줄·안내줄 뒤 흐림을 끄는 스타일 주입기(ezs-cefcss.py, 이
+    # 도우미와 함께 끝남). 시험 전용: 도는 동안 기기의 어떤 프로그램이든 포트에 닿을 수 있음
+    if [ "${EZS_WH_NOBLUR:-0}" = 1 ]; then
+        EZS_CEF_FLAGS="${EZS_CEF_FLAGS:+$EZS_CEF_FLAGS }--remote-debugging-address=127.0.0.1 --remote-debugging-port=8080"
+        python3 /opt/ezsteam/ezs-cefcss.py &
+    fi
     echo "ezs-webhelper: 시험 변형 $(tr '\n' ' ' < "$EZS_WH_TEST")"
 fi
