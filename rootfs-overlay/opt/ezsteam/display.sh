@@ -235,8 +235,16 @@ if [ "$MODE" = steam ]; then
     # 2a. Steam client; its own output is filtered by steam-run.sh
     # 2a. Steam 클라이언트. 출력 거르기는 steam-run.sh가 함
     echo "READY $W $H $FB/Xvfb_screen0"
-    # This shell becomes the Steam run script (one process less; the app ends everything on close)
-    # 이 셸이 Steam 실행 스크립트로 바뀜(프로세스 1개 절약, 닫을 때는 앱이 모두 종료시킴)
+    # This shell becomes ezs-agent: system bus, NetworkManager stand-in and the Steam start loop in
+    # one process (it runs steam-run.sh as the check step before each start, and falls back to
+    # steam-run.sh alone without python3-gi). The switch file "no-agent" keeps the old path. The
+    # app ends everything on close
+    # 이 셸이 ezs-agent로 바뀜: 시스템 버스, NetworkManager 대역, Steam 시작 반복을 프로세스 하나로(시작마다 검사 단계로
+    # steam-run.sh를 돌리고, python3-gi가 없으면 steam-run.sh 단독으로 돌아감). 스위치 파일 "no-agent"면 예전 경로.
+    # 닫을 때는 앱이 모두 종료시킴
+    if [ ! -f /home/steam/.local/share/ezsteam/no-agent ] && command -v python3 >/dev/null 2>&1; then
+        exec python3 /opt/ezsteam/ezs-agent.py
+    fi
     exec sh /opt/ezsteam/steam-run.sh
 elif [ "$MODE" = gpucheck ]; then
     # 2b. GPU path check: no test windows, the checks draw their own (gpu-check.sh)

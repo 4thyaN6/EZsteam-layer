@@ -14,7 +14,18 @@ STEAM_DIR=$HOME/.local/share/Steam
 BIN=$STEAM_DIR/steamrtarm64/steam
 LOG=$HOME/ezs-logs/steam.log
 mkdir -p "$HOME/ezs-logs"
-: > "$LOG"
+# With ezs-agent (display.sh starts it) this script is only the check step before each start:
+# EZS_AGENT_STEP = start number, the script ends where it used to start the client and leaves the
+# command for the agent (/tmp/ezs-steam.cmd, .env, .cwd); the agent runs the system bus and the
+# NetworkManager stand-in. Without it everything below runs as before
+# ezs-agent(display.sh가 띄움)와 함께면 이 스크립트는 시작마다 하는 검사 단계일 뿐임: EZS_AGENT_STEP = 시작 번호. 클라이언트를
+# 띄우던 자리에서 끝나고 명령을 에이전트에 남김(/tmp/ezs-steam.cmd, .env, .cwd). 시스템 버스와 NetworkManager 대역은
+# 에이전트가 맡음. 없으면 아래 모두 예전대로 돎
+AGENT_STEP=${EZS_AGENT_STEP:-}
+# The log is emptied once per session, not at every agent step / 로그는 세션에 한 번만 비움(에이전트 단계마다가 아님)
+if [ -z "$AGENT_STEP" ] || [ "$AGENT_STEP" = 1 ]; then
+    : > "$LOG"
+fi
 
 [ -x "$BIN" ] || { echo "FAIL steam : $BIN 없음 ([Steam 설치] 먼저)"; exit 0; }
 echo "INFO id : $(id)"
@@ -46,9 +57,16 @@ mkdir -p /tmp/dumps
 if command -v dbus-daemon >/dev/null 2>&1; then
     # Address written to a file, not a pipe: the forked daemon may keep the descriptor open
     # 주소는 파이프가 아닌 파일로 받음: fork된 데몬이 디스크립터를 계속 열어 둘 수 있음
-    rm -f /tmp/ezs-dbus.addr
-    dbus-daemon --session --fork --print-address=3 3>/tmp/ezs-dbus.addr >/dev/null 2>&1
-    addr=$(head -n 1 /tmp/ezs-dbus.addr 2>/dev/null)
+    # Later agent steps reuse the session bus of the first step / 에이전트의 다음 단계는 첫 단계의 세션 버스를 다시 씀
+    addr=""
+    if [ -n "$AGENT_STEP" ] && [ "$AGENT_STEP" != 1 ]; then
+        addr=$(head -n 1 /tmp/ezs-dbus.addr 2>/dev/null)
+    fi
+    if [ -z "$addr" ]; then
+        rm -f /tmp/ezs-dbus.addr
+        dbus-daemon --session --fork --print-address=3 3>/tmp/ezs-dbus.addr >/dev/null 2>&1
+        addr=$(head -n 1 /tmp/ezs-dbus.addr 2>/dev/null)
+    fi
     if [ -n "$addr" ]; then
         export DBUS_SESSION_BUS_ADDRESS="$addr"
         echo "OK   dbus : $addr"
@@ -205,21 +223,28 @@ cd "$STEAM_DIR" || exit 0
 # 클라이언트가 뜨기 전에 NetworkManager 대역이 있는 시스템 버스를 띄움(클라이언트는 시작할 때 NetworkManager를
 # 찾음). 세션 동안 작은 프로세스 2개. EZS_NETSTATE=0이거나 패키지가 아직 없으면 건너뜀(다음 시작 때 steam-deps.sh가 설치함)
 start_netstate() {
-    [ "${EZS_NETSTATE:-1}" = 1 ] || { echo "INFO network : NetworkManager 대역 끔 (EZS_NETSTATE=0)"; return; }
-    if ! command -v dbus-daemon >/dev/null 2>&1; then
-        echo "INFO network : dbus-daemon 없음, NetworkManager 대역 건너뜀"
-        return
-    fi
-    mkdir -p /run/dbus 2>/dev/null
     # D-Bus clients (libdbus in the Steam client) abort without a machine id: a random local one,
-    # made once (not tied to the device) / D-Bus 클라이언트(Steam 클라이언트의 libdbus)는 machine id가 없으면
-    # 멈춤: 한 번 만드는 임의의 로컬 값(기기와 무관)
+    # made once (not tied to the device). Needed with the agent's bus too
+    # D-Bus 클라이언트(Steam 클라이언트의 libdbus)는 machine id가 없으면 멈춤: 한 번 만드는 임의의 로컬 값(기기와 무관).
+    # 에이전트 버스에서도 필요함
     if [ ! -s /etc/machine-id ]; then
         tr -d '-' < /proc/sys/kernel/random/uuid > /etc/machine-id 2>/dev/null \
             || echo "WARN network : /etc/machine-id를 만들지 못함"
     fi
     mkdir -p /var/lib/dbus 2>/dev/null
     [ -e /var/lib/dbus/machine-id ] || ln -s /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null
+    # The agent already serves the system bus and the stand-in / 에이전트가 이미 시스템 버스와 대역을 맡음
+    if [ -n "$AGENT_STEP" ]; then
+        [ "$AGENT_STEP" = 1 ] && echo "INFO network : 시스템 버스·NetworkManager 대역은 ezs-agent가 맡음"
+        NETSTATE_UP=1
+        return
+    fi
+    [ "${EZS_NETSTATE:-1}" = 1 ] || { echo "INFO network : NetworkManager 대역 끔 (EZS_NETSTATE=0)"; return; }
+    if ! command -v dbus-daemon >/dev/null 2>&1; then
+        echo "INFO network : dbus-daemon 없음, NetworkManager 대역 건너뜀"
+        return
+    fi
+    mkdir -p /run/dbus 2>/dev/null
     rm -f /run/dbus/system_bus_socket
     dbus-daemon --config-file=/opt/ezsteam/ezs-system-bus.conf --nofork --nopidfile >/dev/null 2>&1 &
     w=0
@@ -235,8 +260,14 @@ NETSTATE_UP=
 start_netstate
 # Big Picture restart asked by the app, read at the next start / 앱이 요청한 빅픽처 다시 시작. 다음 시작 때 읽음
 BPMARK=/tmp/ezs-bigpicture-next
-rm -f "$BPMARK"
+# The mark is read by the step it asked for, so only the first step clears an old one
+# 표시는 그것이 요청한 단계가 읽으므로 첫 단계만 예전 것을 지움
+if [ -z "$AGENT_STEP" ] || [ "$AGENT_STEP" = 1 ]; then
+    rm -f "$BPMARK"
+fi
 n=0
+# Agent step N: this run is start N / 에이전트 N단계: 이번 실행이 N번째 시작임
+[ -n "$AGENT_STEP" ] && n=$((AGENT_STEP - 1))
 while :; do
     n=$((n + 1))
     # Restart after a self update: the client may have replaced its own files (web helper
@@ -246,7 +277,8 @@ while :; do
     # 자체 갱신 후 재시작: 클라이언트가 자기 파일(웹 도우미 감쌈 스크립트, 실행 감쌈)을 바꾸고 첫 설정 파일을
     # 썼을 수 있으므로 연결과 설정을 다시 적용함(새 설치 첫 세션이 연결 안 된 웹 도우미로 돌았음: 도우미
     # 프로세스 9개, 2026-10-19)
-    if [ $n -gt 1 ]; then
+    # (With the agent the top of this script just ran both for this step / 에이전트와 함께면 이 단계에서 스크립트 윗부분이 방금 둘 다 했음)
+    if [ $n -gt 1 ] && [ -z "$AGENT_STEP" ]; then
         sh /opt/ezsteam/ezsteam-prepare.sh
         client_settings
     fi
@@ -573,6 +605,16 @@ print(r, os.strerror(ctypes.get_errno()))' 2>&1 | tail -n 1)
         # 확인, 2026-10-25)
         export SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0 SDL_HIDAPI_LIBUSB=0 EZS_UDEV_CTL_PRESENT=1 EZS_UEVENT_STUB=1
         echo "INFO steam : HID 찾기 줄임(시험): SDL_JOYSTICK_HIDAPI=0 SDL_HIDAPI_UDEV=0 SDL_HIDAPI_LIBUSB=0 EZS_UDEV_CTL_PRESENT=1 EZS_UEVENT_STUB=1"
+    fi
+    if [ -n "$AGENT_STEP" ]; then
+        # Command, environment and folder for the agent, then this check step ends (same words and
+        # environment the line below would use) / 에이전트용 명령·환경·폴더를 남기고 이 검사 단계는 끝남(아래 줄이 쓸 것과
+        # 같은 낱말과 환경)
+        export LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_CLIENT_PRELOAD"
+        printf '%s\0' "$BIN" -no-cef-sandbox $GPUARG $BPARG -chromeosnopreallocate $VERIFY ${EZS_STEAM_EXTRA:-} > /tmp/ezs-steam.cmd
+        env -0 > /tmp/ezs-steam.env
+        pwd > /tmp/ezs-steam.cwd
+        exit 0
     fi
     LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$EZS_CLIENT_PRELOAD" \
         "$BIN" -no-cef-sandbox $GPUARG $BPARG -chromeosnopreallocate $VERIFY ${EZS_STEAM_EXTRA:-} >>"$LOG" 2>&1

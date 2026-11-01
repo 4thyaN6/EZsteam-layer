@@ -436,6 +436,13 @@ if ($Cmd -eq 'whtest') {
             $results += Test-Menu $t $dir 12
             Write-Host '   화살표 키 이동 60초 측정 (메뉴가 열린 채면 프레임이 0으로 나옴)'
             $results += Measure-Span "$t-move" 60 $true
+            # Sound of this run: the app's stream lines and Chromium's own audio lines. Why: Big
+            # Picture played only its start sound, never the move sounds, while games had sound
+            # (user 2026-11-01)
+            # 이번 실행의 소리: 앱의 스트림 줄과 Chromium 자체 오디오 줄. 이유: 빅픽처는 시작 소리만 나고 이동 소리는 안
+            # 났는데 게임은 소리가 났음(사용자 2026-11-01)
+            $results += @(Invoke-Adb shell "run-as $Pkg grep -a 'AUDIO ' $SessionLog" | Select-Object -Last 8)
+            $results += @(Invoke-Adb shell "run-as $Pkg grep -a -i -E 'audio|alsa|pulse' files/ezs/home/steam/.local/share/Steam/logs/cef_log.txt" | Select-Object -Last 12)
         }
         Get-Report | Out-Null
     } finally {

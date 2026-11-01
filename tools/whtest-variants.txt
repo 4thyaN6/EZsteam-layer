@@ -1,27 +1,20 @@
 # Web helper variants for ezs-whtest.bat, one per line: tag|KEY=VALUE|WxH|mode (mode 1-3, default 2)
 # An empty value after the first "|" = no variant (comparison run). EZS_WH_FLAGS_ADD=... adds
-# Chromium flags. The optional third part is the X screen size for that run only.
+# Chromium flags (quote it when it holds spaces). The third part is the X screen size for that run.
 # The line is written to ~/.local/share/ezsteam/wh-test.env and read by ezs-webhelper-env.sh.
-# Results so far (2026-10-31): no effect on the menu band fault from TU_DEBUG sysmem/noubwc/nolrz,
-# --ui-disable-partial-swap, ANGLE supportsIncrementalPresent/preferDrawClear...,
-# --disable-features=BackdropFilterMirrorEdgeMode, --disable-gpu-rasterization (+54%p CPU);
-# ANGLE allocateNonZeroMemory made the web helper die again and again
 # ezs-whtest.bat용 웹 도우미 변형, 줄마다 하나: tag|KEY=VALUE|WxH|mode(방식 1~3, 기본 2)
-# 첫 "|" 뒤가 비면 변형 없음(비교용 실행). EZS_WH_FLAGS_ADD=...는 Chromium 플래그를 더함. 셋째 부분(생략 가능)은
-# 그 실행에만 쓰는 X 화면 크기. 줄은 ~/.local/share/ezsteam/wh-test.env에 쓰이고 ezs-webhelper-env.sh가 읽음.
-# 지금까지 결과(2026-10-31): 메뉴 띠 깨짐에 효과 없음 — TU_DEBUG sysmem/noubwc/nolrz, --ui-disable-partial-swap,
-# ANGLE supportsIncrementalPresent/preferDrawClear…, --disable-features=BackdropFilterMirrorEdgeMode,
-# --disable-gpu-rasterization(CPU +54%p). ANGLE allocateNonZeroMemory는 웹 도우미를 계속 죽였음
-# Also no effect (2026-11-01 13:55): blur behind header/footer turned off (EZS_WH_NOBLUR=1, the
-# menu background became sharp, so the rule was applied) and a 1280x720 X screen
-# 이것도 효과 없음(2026-11-01 13:55): 머리줄·안내줄 뒤 흐림 끄기(EZS_WH_NOBLUR=1, 메뉴 배경이 선명해져 규칙은
-# 적용됐음), 1280x720 X 화면
-# Black page background: bands clean at the second opening twice (2026-11-01 14:31, 15:28). The
-# fault grows from the second or third opening on (user), so 12 guide presses per run now, and the
-# same pair in mode 1 (GL, white bands) as well
-# 검정 페이지 바탕: 두 번째 열 때 띠가 두 번 모두 깨끗했음(2026-11-01 14:31, 15:28). 깨짐은 두 번째·세 번째
-# 열 때부터 심해지므로(사용자) 이제 실행마다 가이드 12번, 같은 짝을 방식 1(GL, 흰 띠)에서도 함
-base|||2
-blackbg|EZS_WH_CSS='html,body{background:#000!important}'||2
-base|||1
-blackbg|EZS_WH_CSS='html,body{background:#000!important}'||1
+# 첫 "|" 뒤가 비면 변형 없음(비교용 실행). EZS_WH_FLAGS_ADD=...는 Chromium 플래그를 더함(빈칸이 있으면 따옴표로 묶음).
+# 셋째 부분은 그 실행의 X 화면 크기. 줄은 ~/.local/share/ezsteam/wh-test.env에 쓰이고 ezs-webhelper-env.sh가 읽음
+#
+# Menu band fault (cause found 2026-11-01, fix put off to later optimisation, user): base and
+# EZS_WH_CSS='html,body{background:#000!important}' in modes 1 and 2, 12 guide presses
+# 메뉴 띠 깨짐(원인 확정 2026-11-01, 해결은 나중 최적화로 미룸, 사용자): 방식 1·2에서 base와
+# EZS_WH_CSS='html,body{background:#000!important}', 가이드 12번
+#
+# Big Picture sound: only the start sound plays, no move sounds (games have sound). Chromium's own
+# audio log lines (vmodule) to see whether it opens an output for the move sounds and why not;
+# the second run without the autoplay rule (a sound may be held back without a user gesture)
+# 빅픽처 소리: 시작 소리만 나고 이동 소리는 안 남(게임은 소리 남). Chromium 자체 오디오 기록(vmodule)으로 이동 소리에
+# 출력을 여는지, 아니면 왜 안 여는지 봄. 둘째 실행은 자동 재생 규칙을 끔(사용자 동작 없이는 소리를 막을 수 있음)
+sndlog|EZS_WH_FLAGS_ADD='--vmodule=*audio*=2,*alsa*=2,*pulse*=2'||2
+sndautoplay|EZS_WH_FLAGS_ADD='--autoplay-policy=no-user-gesture-required --vmodule=*audio*=2,*alsa*=2,*pulse*=2'||2

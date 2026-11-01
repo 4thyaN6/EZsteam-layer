@@ -25,3 +25,5 @@ src-mesa/
 rootfs-overlay/opt/ezsteam/mesax/
 # Reports pulled by ezs-report.bat / ezs-check.bat (never uploaded) / ezs-report.bat·ezs-check.bat이 가져온 제보(올리지 않음)
 reports/
+# Python byte code from local checks / 로컬 확인에서 생긴 Python 바이트코드
+__pycache__/
