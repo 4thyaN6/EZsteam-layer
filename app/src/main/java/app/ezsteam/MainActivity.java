@@ -463,10 +463,9 @@ public class MainActivity extends Activity {
             // Steam UI GPU mode chosen by the PC for this and later starts (ezs-compare.bat)
             // PC가 정한 Steam 화면 GPU 방식(이번과 이후 시작, ezs-compare.bat)
             setGpuModeFromPc(i);
-            // X screen size for this start only, not saved ("1280x720", test runs of ezs-whtest.bat:
-            // whether the Steam menu fault depends on the screen size)
-            // 이번 시작에만 쓰는 X 화면 크기, 저장하지 않음("1280x720", ezs-whtest.bat 시험 실행: Steam 메뉴 깨짐이
-            // 화면 크기에 따라 달라지는지)
+            // X screen size for this start only, not saved ("1280x720", PC test runs through
+            // tools/ezs.ps1 -Size)
+            // 이번 시작에만 쓰는 X 화면 크기, 저장하지 않음("1280x720", tools/ezs.ps1 -Size로 하는 PC 시험 실행)
             int[] sz = pcSize(i.getStringExtra(EXTRA_PC_SIZE));
             openSteam(sz[0], sz[1]);
         } else if ("setgpu".equals(run)) {

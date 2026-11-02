@@ -49,7 +49,6 @@
 | `rootfs-overlay/opt/ezsteam/drawtest.sh`, `xwd2png.py` | [그리기 시험]: Xvfb `:99` + Turnip `vkcube` 600프레임, fps, `xwd` 캡처를 `~/ezs-logs/drawtest.png`로 저장해 앱에 표시 |
 | `rootfs-overlay/opt/ezsteam/display.sh` | [화면 WxH]: `ezs-wl` + rootful Xwayland `:98`(유일한 화면 서버, Xvfb 대체 경로 없음) + 시험 창(vkcube, xclock, xeyes, xcalc, keyview), 앱이 stdin을 닫으면 종료 |
 | `native/ezswl/ezs_wl.c` | rootfs 안 최소 Wayland 컴포지터 `ezs-wl`(자체 작성, MIT): rootful Xwayland 하나의 toplevel 프레임을 Xvfb와 같은 XWD 화면 파일로 복사(앱 쪽 변경 없음). wl_compositor, wl_shm, wl_output, xdg_wm_base, `--rdev`일 때 linux-dmabuf v4(주 장치 = GPU 노드, LINEAR만, mmap 읽기). seat 없음(입력은 XTEST) |
-| `native/ezsxcm/ezs_xcm.c` | 최소 X 합성 관리자 `ezs-xcm`(자체 작성, MIT, 시험 스위치 `~/.local/share/ezsteam/xcm`): rootful Xwayland의 최상위 창을 Composite로 리디렉트하고, 바뀔 때마다 검정 위에 아래→위로 그림(ARGB 창은 알파 반영, Render Over). 결과는 Composite 오버레이 창(입력 통과). 투명한 32비트 창(Steam 빅픽처)의 투명 부분이 렌더러가 남긴 값으로 보이던 문제 확인용 |
 | `native/ezsdrm/ezs_drm.c` | libdrm 심 `libezs_drm.so`(LD_PRELOAD, 자체 작성): kgsl fd/장치 번호에 대해 render 노드 형식, `/dev/dri/renderD128` platform 장치, GEM 핸들 대신 dma-buf 번호표. 나머지는 실제 libdrm |
 | `rootfs-overlay/opt/ezsteam/ezs-gpupath.sh` | GPU 화면 경로 시험 스위치 환경(steam-run.sh·EZ Proton이 불러옴): `EZS_ZINK=1` Zink 앞단, `EZS_GPU_NODE=1` 심 + mesax Turnip, Xwayland와 함께면 DRI3(소프트웨어 출력 끔). 스위치가 모두 꺼지면 아무것도 바꾸지 않음 |
 | `rootfs-overlay/opt/ezsteam/keyview.py` | 키 확인 창(libX11 ctypes): 키보드 포커스를 갖고 받은 X 키코드·키 이름을 창과 앱 로그(`KEY`)에 표시 |
@@ -76,7 +75,7 @@ Valve ARM64 Proton(`toolmanifest_arm64.vdf`)은 `require_tool_appid 4185400`(Ste
 ## 고정 작업 순서 (Windows)
 1. 받은 라운드 zip 안의 `ezsteam-layer` 폴더를 `D:\AndroidStudioProject\`에 덮어쓰기
 2. `ezs-push.bat` 더블클릭 → 커밋 메시지 입력(Enter = update) → 업로드
-3. GitHub Actions가 모두 초록이 되면 `ezs-install.bat` 더블클릭 → 최신 APK를 받아 태블릿에 덮어 설치(최신이 아니면 기다리라고 알려 줌)
+3. `ezs-install.bat` 더블클릭(업로드 직후 바로 해도 됨) → 이 커밋으로 빌드된 APK가 올라올 때까지 20초마다 확인하며 기다린 뒤(최대 60분) 받아 태블릿에 덮어 설치
 4. 앱 첫 줄 `app build=<커밋 7자리>`로 새 APK인지 확인
 - 최신 APK 고정 주소: 사전 출시 `apk-latest`(main 빌드마다 CI가 교체). rootfs·드라이버용 `releases/latest`에는 영향 없음
 - CI 서명: 저장소 비밀값 `DEBUG_KEYSTORE_B64`(PC의 debug.keystore)로 고정 → 삭제 없이 덮어 설치

@@ -107,7 +107,6 @@ MX=/opt/ezsteam/mesax
 WL=/opt/ezsteam/bin/ezs-wl
 XPID=""
 WPID=""
-CPID=""
 start_xwayland() {
     # $1: font path / $1: 글꼴 경로
     # Own runtime folder for the Wayland socket, passed only to ezs-wl and Xwayland (Steam keeps its own)
@@ -170,21 +169,6 @@ start_xwayland() {
     # what glamor chose / "-verbose 3"(GPU 쪽)은 서버가 켠 확장(DRI3, Present, GLX)과 glamor가 고른 것도 출력함
     grep -i -E 'glamor|gbm|egl|dri3|present|glx|zink|drm' /tmp/ezs-xserver.log | head -n 20 | sed 's/^/INFO xwayland : /'
     echo "INFO wayland : Xwayland :$D ${W}x${H}, $([ $GPUOK = 1 ] && echo "GPU 노드 $RDEV (glamor 시도)" || echo "공유 메모리")"
-    # X compositing manager test (switch file "xcm", written by ezs-xcmtest.bat): blends 32-bit
-    # windows such as Steam's Big Picture window with their alpha, to check whether the broken
-    # Steam menu bands come from alpha that nothing applies (one more process while it is on)
-    # X 합성 관리자 시험(스위치 파일 "xcm", ezs-xcmtest.bat가 씀): Steam 빅픽처 창 같은 32비트 창을 알파로 섞음.
-    # 깨진 Steam 메뉴 띠가 아무도 적용하지 않은 알파 때문인지 확인함(켜진 동안 프로세스 1개 더)
-    # Switch file "xcm-nosel" instead: the same without announcing a compositing manager
-    # 스위치 파일 "xcm-nosel"이면: 합성 관리자임을 알리지 않고 같은 일을 함
-    XCMSW=/home/steam/.local/share/ezsteam
-    XCMARG=""
-    [ -f "$XCMSW/xcm-nosel" ] && XCMARG="--no-cm-selection"
-    if { [ -f "$XCMSW/xcm" ] || [ -f "$XCMSW/xcm-nosel" ]; } && [ -x /opt/ezsteam/bin/ezs-xcm ]; then
-        DISPLAY=:$D /opt/ezsteam/bin/ezs-xcm $XCMARG &
-        CPID=$!
-        echo "INFO xcm : 시험 스위치 켬, ezs-xcm 시작 (pid $CPID) $XCMARG"
-    fi
     return 0
 }
 XSERVER=xwayland
@@ -280,7 +264,7 @@ fi
 while read -r _; do :; done
 kill ${LOOP:-} 2>/dev/null
 [ -f /tmp/ezs-vkcube.pid ] && kill "$(cat /tmp/ezs-vkcube.pid)" 2>/dev/null
-kill $PIDS $CPID $XPID $WPID 2>/dev/null
+kill $PIDS $XPID $WPID 2>/dev/null
 wait $XPID 2>/dev/null
 tail -n 3 /tmp/ezs-vkcube-display.log 2>/dev/null | sed 's/^/INFO vkcube : /'
 echo "DONE"

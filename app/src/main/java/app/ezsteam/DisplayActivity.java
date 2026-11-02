@@ -1011,9 +1011,9 @@ public class DisplayActivity extends Activity {
                 // 스위치 상태를 로그에 남겨 제보에서 켜졌는지 보이게 함
                 log("시험 스위치: Steam HID 찾기 " + (MainActivity.steamHidLow(this) ? "줄임" : "기본(끔)"));
                 // PRoot stops for close only on netlink descriptors by default (proot-09); the test
-                // switch brings back every close. The state goes into the log (ezs-closetest.bat reads it)
+                // switch brings back every close. The state goes into the log
                 // PRoot는 기본으로 netlink 디스크립터의 close에서만 멈춤(proot-09). 시험 스위치는 close 전부로 되돌림.
-                // 상태를 로그에 남김(ezs-closetest.bat가 읽음)
+                // 상태를 로그에 남김
                 boolean closeAll = MainActivity.testSwitch(this, MainActivity.SW_CLOSE_FULL);
                 if (closeAll) c.env.put("PROOT_FULL_CLOSE", "1");
                 log("시험 스위치: PRoot close " + (closeAll ? "전부(시험)" : "netlink만(기본)"));
@@ -3900,10 +3900,10 @@ public class DisplayActivity extends Activity {
     /** Measurement span from the PC (ezs-compare.bat): extras phase=start|end, label
      *  PC가 보내는 측정 구간(ezs-compare.bat): extra phase=start|end, label */
     static final String ACTION_PC_MEASURE = "app.ezsteam.MEASURE";
-    /** One Steam guide press from the PC (ezs-menushot.bat) / PC가 보내는 Steam 가이드 한 번 누름(ezs-menushot.bat) */
+    /** One Steam guide press from the PC (ezs-compare.bat menu check) / PC가 보내는 Steam 가이드 한 번 누름(ezs-compare.bat 메뉴 확인) */
     static final String ACTION_PC_GUIDE = "app.ezsteam.GUIDE";
-    /** Layer screenshots from the PC (ezs-menushot.bat): extra label
-     *  PC가 보내는 단계별 화면 캡처(ezs-menushot.bat): extra label */
+    /** Layer screenshots from the PC (ezs-compare.bat menu check): extra label
+     *  PC가 보내는 단계별 화면 캡처(ezs-compare.bat 메뉴 확인): extra label */
     static final String ACTION_PC_SHOT = "app.ezsteam.SHOT";
 
     /**
@@ -4180,8 +4180,8 @@ public class DisplayActivity extends Activity {
                     measure(i.getStringExtra("phase"), i.getStringExtra("label"));
                     return;
                 }
-                // Steam guide press and layer screenshots for ezs-menushot.bat
-                // ezs-menushot.bat용 Steam 가이드 누름과 단계별 화면 캡처
+                // Steam guide press and layer screenshots for the PC menu check (ezs-compare.bat)
+                // PC 메뉴 확인(ezs-compare.bat)용 Steam 가이드 누름과 단계별 화면 캡처
                 if (ACTION_PC_GUIDE.equals(i.getAction())) {
                     log("PC 요청: Steam 가이드");
                     sendSteamGuide();

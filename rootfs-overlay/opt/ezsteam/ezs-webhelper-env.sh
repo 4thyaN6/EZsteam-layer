@@ -44,36 +44,6 @@ if [ "${EZS_ZINK:-0}" = 1 ]; then
     echo "ezs-webhelper: Zink kopper=${EZS_WH_KOPPER:-1} present=$MESA_VK_WSI_PRESENT_MODE wsi=${MESA_VK_WSI_DEBUG:-} LIBGL_KOPPER_DISABLE=${LIBGL_KOPPER_DISABLE:-(없음)} LIBGL_DRI3_DISABLE=${LIBGL_DRI3_DISABLE:-(없음)}"
 fi
 
-# Test variant for the web helper, written by the PC helper (ezs-whtest.bat) and removed by it
-# afterwards; absent = no change. KEY=VALUE lines, exported (e.g. TU_DEBUG=sysmem). The line
-# EZS_WH_FLAGS_ADD=... is appended to the Chromium flags (EZS_CEF_FLAGS, expanded on the launch
-# line after this file). Why: the Steam menu bands broke with ANGLE Vulkan in the X server's own
-# picture (menushot 2026-10-30 23:58), so the fix is looked for on the helper side, one variant at
-# a time
-# 웹 도우미 시험 변형. PC 도우미(ezs-whtest.bat)가 쓰고 끝나면 지움. 없으면 바뀌는 것 없음. KEY=VALUE 줄을
-# export함(예: TU_DEBUG=sysmem). EZS_WH_FLAGS_ADD=... 줄은 Chromium 플래그(EZS_CEF_FLAGS, 이 파일 다음 실행 줄에서
-# 펼쳐짐)에 덧붙임. 이유: ANGLE Vulkan에서 Steam 메뉴 띠가 X 서버 자체 그림에서 깨졌으므로(menushot
-# 2026-10-30 23:58) 도우미 쪽에서 해결책을 하나씩 찾음
-EZS_WH_TEST="$HOME/.local/share/ezsteam/wh-test.env"
-if [ -f "$EZS_WH_TEST" ]; then
-    set -a
-    . "$EZS_WH_TEST"
-    set +a
-    [ -n "${EZS_WH_FLAGS_ADD:-}" ] && EZS_CEF_FLAGS="${EZS_CEF_FLAGS:+$EZS_CEF_FLAGS }$EZS_WH_FLAGS_ADD"
-    # EZS_WH_NOBLUR=1: DevTools port on 127.0.0.1:8080 and the style injector that turns off the
-    # blur behind the header/footer bars (ezs-cefcss.py, ends with this helper). Test only: while
-    # it runs, any program on the device can reach the port
-    # EZS_WH_NOBLUR=1: 127.0.0.1:8080 DevTools 포트와 머리줄·안내줄 뒤 흐림을 끄는 스타일 주입기(ezs-cefcss.py, 이
-    # 도우미와 함께 끝남). 시험 전용: 도는 동안 기기의 어떤 프로그램이든 포트에 닿을 수 있음
-    # EZS_WH_CSS=<rule> does the same with that rule instead of the blur rule
-    # EZS_WH_CSS=<규칙>이면 흐림 규칙 대신 그 규칙으로 같은 일을 함
-    if [ "${EZS_WH_NOBLUR:-0}" = 1 ] || [ -n "${EZS_WH_CSS:-}" ]; then
-        EZS_CEF_FLAGS="${EZS_CEF_FLAGS:+$EZS_CEF_FLAGS }--remote-debugging-address=127.0.0.1 --remote-debugging-port=8080"
-        python3 /opt/ezsteam/ezs-cefcss.py &
-    fi
-    echo "ezs-webhelper: 시험 변형 $(tr '\n' ' ' < "$EZS_WH_TEST")"
-fi
-
 # Steam menu background through ezs-agent (it made the two FIFOs): the web helper's fds 3 and 4
 # become Chromium's DevTools pipe (--remote-debugging-pipe), the agent gives the main menu and
 # quick access pages an opaque black page background (their transparent part is not cleared with
