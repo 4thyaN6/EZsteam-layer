@@ -718,6 +718,30 @@ MENU_JS = ("(function(){var d=document;if(!d||!d.head)return 'no-head';"
            "d.head.appendChild(s);return 'added';})()") % repr(MENU_CSS).replace("'", '"')
 
 
+# Text from the phone's keyboard into the Steam UI, through the same pipe. Hangul typed through X
+# (a spare keycode remapped to the character) reached the X server with the right mapping, yet the
+# Steam UI showed the first syllable for every later one ("아 아 아 아아 아 아" for different
+# syllables, device 2026-11-02 22:39; English with real keys was fine): Chromium does not follow
+# the remapped keycodes. Input.insertText / Input.imeSetComposition hand the text to the page that
+# has a focused text field, with no keycode involved. The app writes one JSON line per request to
+# TX_IN ({"id","op":"commit"|"compose","text"}) and gets {"id","ok"} on TX_OUT; ok false = no Steam
+# page has a focused text field (a game has the input), then the app types through X as before.
+# The text is only passed on, never logged.
+# 휴대폰 키보드 글자를 같은 파이프로 Steam 화면에 넣음. X로 친 한글(예비 키코드를 그 글자로 바꿈)은 X 서버에 맞는 배치로
+# 도착했지만 Steam 화면은 나중 글자를 모두 첫 음절로 보였음(서로 다른 음절에 "아 아 아 아아 아 아", 기기 2026-11-02
+# 22:39. 실제 키가 있는 영문은 정상): Chromium이 바뀐 키코드 배치를 따라가지 않음. Input.insertText /
+# Input.imeSetComposition은 키코드 없이 텍스트 칸에 포커스가 있는 페이지에 글자를 넘김. 앱은 요청마다 JSON 한 줄을
+# TX_IN에 쓰고({"id","op":"commit"|"compose","text"}) TX_OUT으로 {"id","ok"}를 받음. ok false = 텍스트 칸에 포커스가
+# 있는 Steam 페이지가 없음(게임이 입력을 가짐). 그러면 앱이 전처럼 X로 침. 글자는 넘기기만 하고 기록하지 않음
+TX_IN = "/tmp/ezs-text.in"
+TX_OUT = "/tmp/ezs-text.out"
+# 3 = this document has the focus and its focused element takes text
+# 3 = 이 문서가 포커스를 가졌고 포커스된 요소가 글자를 받음
+FOCUS_JS = ("(function(){var a=document.activeElement;"
+            "var ed=!!a&&(a.isContentEditable||/^(INPUT|TEXTAREA)$/.test(a.tagName));"
+            "return (document.hasFocus()?1:0)+(ed?2:0);})()")
+
+
 def menubg_on():
     home = os.environ.get("HOME", "/home/steam")
     return not os.path.exists(os.path.join(home, ".local/share/ezsteam/no-menubg"))
@@ -725,7 +749,7 @@ def menubg_on():
 
 def make_fifos():
     """The two FIFOs the web helper wrapper links to fds 3 and 4 / 웹 도우미 감쌈이 fd 3·4에 잇는 FIFO 두 개"""
-    for p in (DT_IN, DT_OUT):
+    for p in (DT_IN, DT_OUT, TX_IN, TX_OUT):
         try:
             os.unlink(p)
         except OSError:
@@ -750,6 +774,90 @@ def devtools_loop():
     state = {}      # targetId -> last result
     answered = {"any": False}
     audio_lines = {"n": 0}
+    # Keyboard text: every page target gets its own session; requests wait in a queue and are
+    # handled one at a time (focus check of the pages, then the input command)
+    # 키보드 글자: 페이지 대상마다 세션 하나. 요청은 줄에 쌓여 하나씩 처리됨(페이지 포커스 확인 뒤 입력 명령)
+    tin = os.open(TX_IN, os.O_RDWR | os.O_NONBLOCK)
+    tout = os.open(TX_OUT, os.O_RDWR | os.O_NONBLOCK)
+    tbuf = [b""]
+    pages = {}      # targetId -> sessionId (all pages, for text) / 모든 페이지(글자용)
+    queue = []      # waiting requests / 기다리는 요청
+    cur = {}        # request in progress / 처리 중인 요청
+    focus = {"sid": None, "at": 0.0}
+    tstat = {"ok": 0, "no": 0, "logged": 0}
+
+    def treply(rid, ok):
+        try:
+            os.write(tout, (json.dumps({"id": rid, "ok": ok}) + "\n").encode())
+        except OSError:
+            pass
+        tstat["ok" if ok else "no"] += 1
+        # First answers of a session in the log (counts only) / 세션의 처음 답들을 기록(개수만)
+        if tstat["logged"] < 6:
+            tstat["logged"] += 1
+            log("키보드 글자: Steam 화면 입력 %s (성공 %d, 해당 없음 %d)" % ("성공" if ok else "해당 없음(X로)", tstat["ok"], tstat["no"]))
+
+    def tsend_op(sid):
+        r = cur["req"]
+        t = r.get("text", "")
+        if r.get("op") == "compose":
+            params = {"text": t, "selectionStart": len(t), "selectionEnd": len(t)}
+            i = send({"method": "Input.imeSetComposition", "sessionId": sid, "params": params})
+        else:
+            i = send({"method": "Input.insertText", "sessionId": sid, "params": {"text": t}})
+        pending[i] = ("op", sid, r.get("id"))
+        cur["phase"] = "op"
+        cur["deadline"] = time.time() + 0.5
+
+    def tpump():
+        """Start the next request when none is running / 처리 중인 것이 없으면 다음 요청을 시작함"""
+        while not cur and queue:
+            r = queue.pop(0)
+            cur.update({"req": r, "best": None, "wait": set()})
+            # The page found last time, if it was found less than 1.5 s ago
+            # 1.5초 안에 찾은 페이지가 있으면 그대로 씀
+            if focus["sid"] and time.time() - focus["at"] < 1.5 and focus["sid"] in pages.values():
+                tsend_op(focus["sid"])
+                return
+            if not pages:
+                cur.clear()
+                treply(r.get("id"), False)
+                continue
+            for sid in pages.values():
+                i = send({"method": "Runtime.evaluate", "sessionId": sid,
+                          "params": {"expression": FOCUS_JS, "returnByValue": True}})
+                pending[i] = ("focus", sid, r.get("id"))
+                cur["wait"].add(i)
+            cur["phase"] = "focus"
+            cur["deadline"] = time.time() + 0.25
+
+    def tfocus_done():
+        """All pages answered (or time is up): send to the focused text field, or say no
+        모든 페이지가 답함(또는 시간 끝): 포커스된 텍스트 칸으로 보내거나 없다고 답함"""
+        sid = cur.get("best")
+        if sid:
+            focus["sid"], focus["at"] = sid, time.time()
+            tsend_op(sid)
+        else:
+            focus["sid"] = None
+            rid = cur["req"].get("id")
+            cur.clear()
+            treply(rid, False)
+            tpump()
+
+    def tread():
+        try:
+            chunk = os.read(tin, 65536)
+        except BlockingIOError:
+            return
+        tbuf[0] += chunk
+        while b"\n" in tbuf[0]:
+            line, tbuf[0] = tbuf[0].split(b"\n", 1)
+            try:
+                queue.append(json.loads(line))
+            except ValueError:
+                continue
+        tpump()
 
     def send(obj):
         nid["n"] += 1
@@ -762,8 +870,23 @@ def devtools_loop():
         send({"method": "Target.getTargets"})
         end = time.time() + 3
         while time.time() < end:
-            r, _, _ = select.select([rfd], [], [], max(0.0, end - time.time()))
-            if not r:
+            wait = max(0.0, end - time.time())
+            if cur:
+                wait = min(wait, max(0.0, cur["deadline"] - time.time()))
+            r, _, _ = select.select([rfd, tin], [], [], wait)
+            # A text request whose answers did not all come in time / 답이 제때 다 오지 않은 글자 요청
+            if cur and time.time() >= cur["deadline"]:
+                if cur["phase"] == "focus":
+                    tfocus_done()
+                else:
+                    rid = cur["req"].get("id")
+                    focus["sid"] = None
+                    cur.clear()
+                    treply(rid, False)
+                    tpump()
+            if tin in r:
+                tread()
+            if rfd not in r:
                 continue
             try:
                 chunk = os.read(rfd, 65536)
@@ -793,6 +916,19 @@ def devtools_loop():
                 res = msg.get("result") or {}
                 if "targetInfos" in res:
                     live = set()
+                    # Every page gets a session for keyboard text / 페이지마다 키보드 글자용 세션
+                    plive = set()
+                    for t in res["targetInfos"]:
+                        if t.get("type") != "page":
+                            continue
+                        tid = t.get("targetId")
+                        plive.add(tid)
+                        if tid not in pages and not any(k == "tattach" and t2 == tid for k, t2, _ in pending.values()):
+                            i = send({"method": "Target.attachToTarget", "params": {"targetId": tid, "flatten": True}})
+                            pending[i] = ("tattach", tid, None)
+                    for tid in list(pages):
+                        if tid not in plive:
+                            pages.pop(tid, None)
                     for t in res["targetInfos"]:
                         title = t.get("title", "")
                         if t.get("type") != "page" or not title.startswith(MENU_PAGES + SOUND_PAGES):
@@ -814,6 +950,24 @@ def devtools_loop():
                         if tid not in live:
                             sessions.pop(tid, None)
                             state.pop(tid, None)
+                elif mid in pending and pending[mid][0] in ("tattach", "focus", "op"):
+                    kind, a, b = pending.pop(mid)
+                    if kind == "tattach":
+                        if "sessionId" in res:
+                            pages[a] = res["sessionId"]
+                    elif kind == "focus" and cur and cur.get("phase") == "focus" and mid in cur["wait"]:
+                        cur["wait"].discard(mid)
+                        if ((res.get("result") or {}).get("value")) == 3:
+                            cur["best"] = a
+                        if cur["best"] or not cur["wait"]:
+                            tfocus_done()
+                    elif kind == "op" and cur and cur.get("phase") == "op":
+                        ok = "error" not in msg
+                        if not ok:
+                            focus["sid"] = None
+                        cur.clear()
+                        treply(b, ok)
+                        tpump()
                 elif mid in pending:
                     kind, tid, title = pending.pop(mid)
                     if kind == "attach" and "sessionId" in res and title.startswith(SOUND_PAGES):

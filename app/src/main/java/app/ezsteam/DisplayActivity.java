@@ -88,6 +88,8 @@ public class DisplayActivity extends Activity {
     private ScrollView logScroll;
     private volatile Process proc;
     private volatile XTestClient xtest;
+    /** Rootfs of this session (Steam UI text path) / 이 세션의 rootfs(Steam 화면 글자 경로) */
+    private volatile File cfgRootfs;
     private volatile XvfbFramebuffer fb;
     private volatile boolean finishing;
 
@@ -131,6 +133,17 @@ public class DisplayActivity extends Activity {
      *  first records / 녹음 스트림(Pulse·ALSA)용 휴대폰 마이크. 프로그램이 처음 녹음할 때 RECORD_AUDIO를 물음 */
     private volatile app.ezsteam.runtime.MicCapture mic;
     private static final int REQ_MIC = 41;
+    /**
+     * Keyboard queue: soft keyboard text and keys, and key presses, go out one after another on
+     * this thread, so text handed to the Steam UI (which waits for the agent's answer) and keys
+     * sent through X keep their order.
+     * 키보드 줄: 소프트 키보드 글자·키와 키 누름을 이 스레드에서 차례로 보냄. Steam 화면으로 넘기는 글자(에이전트 답을
+     * 기다림)와 X로 보내는 키의 순서가 유지됨
+     */
+    private final java.util.concurrent.ExecutorService kbd =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> new Thread(r, "ezs-kbd"));
+    /** Steam UI text path (keyboard queue only) / Steam 화면 글자 경로(키보드 줄에서만 씀) */
+    private app.ezsteam.runtime.SteamTextBridge textBridge;
     /** Soft keyboard log lines written this session / 이번 세션에 쓴 소프트 키보드 로그 줄 수 */
     private int imeLogged;
     /** Game frame path check, app side (answers ezs-present-probe) / 게임 프레임 경로 확인의 앱 쪽(ezs-present-probe에 답함) */
@@ -830,8 +843,25 @@ public class DisplayActivity extends Activity {
                     sec / 60, sec % 60, wsiName.isEmpty() ? "" : "게임 화면 " + wsiName + "  ", cpuText,
                     audio == null ? "" : "  소리 " + audio.activeStreams())));
         });
-        // Soft keyboard text arrives here as key events / 소프트 키보드 텍스트는 키 이벤트로 바뀌어 여기로 옴
-        view.setKeyListener(this::sendKey);
+        // Soft keyboard text arrives here as key events, through the keyboard queue
+        // 소프트 키보드 텍스트는 키 이벤트로 바뀌어 키보드 줄을 거쳐 여기로 옴
+        view.setKeyListener(e -> kbdRun(() -> sendKey(e)));
+        // Committed text and the syllable being composed: into the Steam UI's focused text field
+        // when there is one (no keycodes, Hangul included), otherwise typed through X as before
+        // 확정 글자와 조합 중인 글자: Steam 화면에 포커스된 텍스트 칸이 있으면 거기로(키코드 없이, 한글 포함), 없으면 전처럼 X로 침
+        view.setTextListener(new FramebufferView.TextListener() {
+            @Override
+            public void onCommit(String text) {
+                kbdRun(() -> {
+                    if (!steamText("commit", text)) view.sendChars(text);
+                });
+            }
+
+            @Override
+            public void onCompose(String text) {
+                kbdRun(() -> steamText("compose", text));
+            }
+        });
         // Characters with no key (Korean and others) go in through a spare X keycode
         // 키가 없는 글자(한글 등)는 X 예비 키코드로 들어감
         view.setCharListener(cps -> {
@@ -990,6 +1020,7 @@ public class DisplayActivity extends Activity {
             killLeftovers();
             GlibcLauncher.Config c = new GlibcLauncher.Config();
             c.rootfs = RootfsInstaller.rootfsDir(this);
+            cfgRootfs = c.rootfs;
             c.nativeLibDir = new File(getApplicationInfo().nativeLibraryDir);
             c.dataDir = RootfsInstaller.dataDir(this);
             if (!DriverInstaller.apply(this, c, "turnip")) {
@@ -1611,7 +1642,44 @@ public class DisplayActivity extends Activity {
             view.sendChars(e.getCharacters());
             return true;
         }
-        return sendKey(e) || super.dispatchKeyEvent(e);
+        return sendKeyQueued(e) || super.dispatchKeyEvent(e);
+    }
+
+    /** Run on the keyboard queue; dropped once the screen closed / 키보드 줄에서 실행. 화면이 닫힌 뒤에는 버림 */
+    private void kbdRun(Runnable r) {
+        try {
+            kbd.execute(r);
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+        }
+    }
+
+    /** sendKey through the keyboard queue; the answer (sent or not) is known at once
+     *  키보드 줄을 거치는 sendKey. 보낼 수 있는지는 바로 알 수 있음 */
+    private boolean sendKeyQueued(KeyEvent e) {
+        if (XKeys.keycode(e) == 0) {
+            lastKey = "?" + e.getKeyCode();
+            return false;
+        }
+        if (xtest == null) return false;
+        kbdRun(() -> sendKey(e));
+        return true;
+    }
+
+    /**
+     * Text into the Steam UI through ezs-agent (keyboard queue only); false when it did not go
+     * there: not Steam mode, no agent, or no Steam page with a focused text field.
+     * ezs-agent를 거쳐 Steam 화면에 글자를 넣음(키보드 줄에서만). 넣지 못하면 false: Steam 모드 아님, 에이전트 없음,
+     * 텍스트 칸에 포커스가 있는 Steam 페이지 없음
+     */
+    private boolean steamText(String op, String text) {
+        if (!"steam".equals(mode) || cfgRootfs == null) return false;
+        app.ezsteam.runtime.SteamTextBridge b = textBridge;
+        if (b == null || !b.usable()) {
+            if (b != null) b.close();
+            b = textBridge = app.ezsteam.runtime.SteamTextBridge.open(cfgRootfs);
+            if (b == null) return false;
+        }
+        return b.request(op, text, "commit".equals(op) ? 600 : 300);
     }
 
     /**
@@ -4730,6 +4798,16 @@ public class DisplayActivity extends Activity {
         if (a != null) a.close();
         app.ezsteam.runtime.MicCapture mc = mic;
         if (mc != null) mc.close();
+        // Keyboard queue ends after closing the Steam UI text path on its own thread
+        // 키보드 줄은 자기 스레드에서 Steam 화면 글자 경로를 닫은 뒤 끝남
+        try {
+            kbd.execute(() -> {
+                if (textBridge != null) textBridge.close();
+                textBridge = null;
+            });
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+        }
+        kbd.shutdown();
         app.ezsteam.runtime.PresentProbe pp = present;
         if (pp != null) pp.close();
         app.ezsteam.runtime.PadFile pf = pad;

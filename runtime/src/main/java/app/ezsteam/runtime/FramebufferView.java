@@ -64,6 +64,7 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
     private volatile KeyListener keyListener;
     private volatile CharListener charListener;
     private volatile ImeListener imeListener;
+    private volatile TextListener textListener;
     private int uSrc, uMode, uSharp;
     private volatile StatsListener stats;
 
@@ -191,6 +192,20 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         imeListener = l;
     }
 
+    /** Takes the keyboard's text instead of sendChars: committed text and the syllable being
+     *  composed ("" = none). The app routes it (Steam UI through DevTools, else sendChars)
+     *  sendChars 대신 키보드의 글자를 받음: 확정 글자와 조합 중인 글자("" = 없음). 앱이 경로를 정함(Steam 화면은 DevTools,
+     *  아니면 sendChars) */
+    public interface TextListener {
+        void onCommit(String text);
+
+        void onCompose(String text);
+    }
+
+    public void setTextListener(TextListener l) {
+        textListener = l;
+    }
+
     /** Report one soft keyboard call (kind, length, Hangul count) / 소프트 키보드 호출 하나를 알림(종류, 길이, 한글 수) */
     private void ime(String kind, CharSequence text) {
         ImeListener l = imeListener;
@@ -283,7 +298,12 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
             // The committed text replaces the composing one / 확정된 글자가 조합 중인 글자를 대신함
             composing = "";
             ime("확정", text);
-            sendChars(text);
+            TextListener tl = textListener;
+            if (tl != null) {
+                if (text != null && text.length() > 0) tl.onCommit(text.toString());
+            } else {
+                sendChars(text);
+            }
             return true;
         }
 
@@ -291,6 +311,8 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         public boolean setComposingText(CharSequence text, int newCursorPosition) {
             composing = text == null ? "" : text.toString();
             ime("조합", text);
+            TextListener tl = textListener;
+            if (tl != null) tl.onCompose(composing);
             return true;
         }
 
@@ -305,7 +327,12 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
             String c = composing;
             composing = "";
             ime("조합 끝", c);
-            sendChars(c);
+            TextListener tl = textListener;
+            if (tl != null) {
+                if (!c.isEmpty()) tl.onCommit(c);
+            } else {
+                sendChars(c);
+            }
             return true;
         }
 
