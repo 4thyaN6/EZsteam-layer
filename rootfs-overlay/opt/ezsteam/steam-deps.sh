@@ -58,19 +58,26 @@ fi
 # Not in older rootfs builds, so they are installed here the same way as missing libraries
 # 세션 시스템 버스와 NetworkManager 대역용 패키지(Steam 연결 표시와 설정 > 인터넷에 NetworkManager가 필요함.
 # ezs-netstate.py, steam-run.sh): dbus-daemon, python3-gi. 이전 rootfs에는 없어 없는 라이브러리와 같은 방식으로 여기서 설치함
+# tzdata: zone files for TZ=<zone name> (GlibcLauncher passes the phone's zone; without the files
+# glibc fell back to UTC and Big Picture showed the time 9 hours behind in Korea, 2026-11-02)
+# tzdata: TZ=<시간대 이름>용 시간대 파일(GlibcLauncher가 휴대폰 시간대를 넘김. 파일이 없으면 glibc가 UTC로 처리해 한국에서
+# 빅픽처 시간이 9시간 늦게 보였음, 2026-11-02)
 EXTRA_PKGS="dbus-daemon python3-gi gir1.2-glib-2.0"
 extra_missing() {
     command -v dbus-daemon >/dev/null 2>&1 && python3 -c 'import gi; gi.require_version("Gio", "2.0"); from gi.repository import Gio' 2>/dev/null \
         || echo "$EXTRA_PKGS"
+    [ -f /usr/share/zoneinfo/Etc/UTC ] || echo tzdata
 }
-extra=$(extra_missing)
+extra=$(extra_missing | tr '\n' ' ' | sed 's/ *$//')
 if [ -n "$extra" ]; then
     if [ "$MODE" = install ]; then
         ls /var/lib/apt/lists/*Packages >/dev/null 2>&1 || $APT update >/dev/null || echo "FAIL apt-update"
-        if out=$($APT install -y --no-install-recommends $extra 2>&1); then
-            echo "OK   deps : 세션 버스·네트워크 대역 패키지 설치 ($extra)"
+        # noninteractive: tzdata's setup would otherwise ask for a zone (the guest TZ decides anyway)
+        # noninteractive: 아니면 tzdata 설정이 시간대를 물음(어차피 guest의 TZ가 정함)
+        if out=$(DEBIAN_FRONTEND=noninteractive $APT install -y --no-install-recommends $extra 2>&1); then
+            echo "OK   deps : 세션 버스·네트워크 대역·시간대 패키지 설치 ($extra)"
         else
-            echo "FAIL deps : 세션 버스·네트워크 대역 패키지 설치 실패 ($extra)"
+            echo "FAIL deps : 세션 버스·네트워크 대역·시간대 패키지 설치 실패 ($extra)"
             echo "$out" | tail -n 3 | sed 's/^/FAIL deps :   /'
         fi
     elif [ -n "${EZS_DEPS_REQUEST:-}" ]; then
@@ -78,7 +85,7 @@ if [ -n "$extra" ]; then
         echo "NEED deps : $extra"
         exit 0
     else
-        echo "WARN deps : 세션 버스·네트워크 대역 패키지 없음 ($extra)"
+        echo "WARN deps : 세션 버스·네트워크 대역·시간대 패키지 없음 ($extra)"
     fi
 fi
 

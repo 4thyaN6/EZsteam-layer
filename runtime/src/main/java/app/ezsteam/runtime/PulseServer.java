@@ -31,8 +31,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * server is (PULSE_SERVER in ezs-webhelper-env.sh); games keep the ALSA path.
  * Scope: one sink "ezs_out" (48 kHz stereo) and its monitor, playback streams in S16LE / FLOAT32LE /
  * S32LE, any rate (linear resampling to 48 kHz), mono or stereo (more channels: first two kept).
- * Record streams are accepted and get silence (no microphone yet: that needs the Android
- * RECORD_AUDIO permission, a separate decision). No shared memory: the AUTH reply never offers it,
+ * Record streams get the phone's microphone through MicCapture (source "ezs_in"; RECORD_AUDIO is
+ * asked when the first record stream opens), silence until it is granted or without a MicCapture.
+ * No shared memory: the AUTH reply never offers it,
  * so audio comes inline over the socket.
  * PulseAudio 네이티브 프로토콜 최소 서버. 자체 코드(MIT). 프로토콜 사실(pstream 프레임, tagstruct, 명령 형식)로
  * 작성했고 PipeWire의 MIT pulse 서버와 클라이언트 쪽은 사실 확인용으로만 봄. PulseAudio 코드 없음.
@@ -42,8 +43,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * 받았고 빅픽처 UI 효과음이 들리지 않았음(2026-11-01). PulseAudio 서버가 있으면 그 서버의 출력 장치를 씀. 이 서버
  * 위치는 웹 도우미에만 알림(ezs-webhelper-env.sh의 PULSE_SERVER). 게임은 ALSA 경로 그대로임.
  * 범위: 출력 장치 "ezs_out"(48kHz 스테레오) 하나와 그 모니터. 재생 스트림은 S16LE / FLOAT32LE / S32LE, 주파수는
- * 무엇이든(48kHz로 선형 변환), 모노·스테레오(채널이 더 많으면 앞 두 개). 녹음 스트림은 받되 무음을 줌(마이크는 아직
- * 없음: 안드로이드 RECORD_AUDIO 권한이 필요해 따로 결정할 일). 공유 메모리 없음: AUTH 답에서 알리지 않으므로 소리는
+ * 무엇이든(48kHz로 선형 변환), 모노·스테레오(채널이 더 많으면 앞 두 개). 녹음 스트림은 MicCapture로 휴대폰 마이크를
+ * 받음(소스 "ezs_in", 첫 녹음 스트림이 열릴 때 RECORD_AUDIO를 물음). 허용 전이나 MicCapture가 없으면 무음. 공유 메모리 없음: AUTH 답에서 알리지 않으므로 소리는
  * 소켓으로 직접 옴
  */
 public final class PulseServer implements Closeable {
@@ -87,6 +88,8 @@ public final class PulseServer implements Closeable {
     private static final int FMT_S16LE = 3, FMT_FLOAT32LE = 5, FMT_S32LE = 7;
 
     private static final String SINK = "ezs_out", MONITOR = "ezs_out.monitor";
+    /** Microphone source, offered when a MicCapture is given / 마이크 소스, MicCapture가 있을 때 알림 */
+    private static final String MIC = "ezs_in";
     private static final int RATE = 48000;
 
     private final File socketFile;
@@ -95,16 +98,20 @@ public final class PulseServer implements Closeable {
     private final LocalSocket bound;
     private final LocalServerSocket server;
     private final AudioServer mixer;
+    /** Microphone for record streams, null = silence / 녹음 스트림용 마이크, null이면 무음 */
+    private final MicCapture mic;
     private final AudioServer.Log log;
     private volatile boolean closed;
     private final java.util.concurrent.atomic.AtomicInteger clientIds = new java.util.concurrent.atomic.AtomicInteger();
     private final Set<Client> clients = ConcurrentHashMap.newKeySet();
 
-    private PulseServer(File socketFile, LocalSocket bound, LocalServerSocket server, AudioServer mixer, AudioServer.Log log) {
+    private PulseServer(File socketFile, LocalSocket bound, LocalServerSocket server, AudioServer mixer,
+                        MicCapture mic, AudioServer.Log log) {
         this.socketFile = socketFile;
         this.bound = bound;
         this.server = server;
         this.mixer = mixer;
+        this.mic = mic;
         this.log = log;
     }
 
@@ -113,6 +120,12 @@ public final class PulseServer implements Closeable {
      * rootfs + GUEST_SOCKET 위치에 소켓을 만들고(이전 것은 바꿈) 연결을 받기 시작함
      */
     public static PulseServer start(File rootfs, AudioServer mixer, AudioServer.Log log) throws IOException {
+        return start(rootfs, mixer, null, log);
+    }
+
+    /** Same, with the microphone for record streams (null = silence)
+     *  같음. 녹음 스트림용 마이크를 함께 줌(null이면 무음) */
+    public static PulseServer start(File rootfs, AudioServer mixer, MicCapture mic, AudioServer.Log log) throws IOException {
         File f = new File(rootfs, GUEST_SOCKET.substring(1));
         File dir = f.getParentFile();
         if (dir != null && !dir.isDirectory() && !dir.mkdirs()) throw new IOException("cannot create " + dir);
@@ -120,7 +133,7 @@ public final class PulseServer implements Closeable {
         LocalSocket s = new LocalSocket();
         s.bind(new LocalSocketAddress(f.getAbsolutePath(), LocalSocketAddress.Namespace.FILESYSTEM));
         LocalServerSocket server = new LocalServerSocket(s.getFileDescriptor());
-        PulseServer p = new PulseServer(f, s, server, mixer, log);
+        PulseServer p = new PulseServer(f, s, server, mixer, mic, log);
         Thread t = new Thread(p::acceptLoop, "ezs-pulse-accept");
         t.setDaemon(true);
         t.start();
@@ -463,8 +476,12 @@ public final class PulseServer implements Closeable {
         boolean startedSent;
         /** Frames the mixer had taken at the last flush (read index base) / 마지막 flush 때 믹서가 가져간 프레임(읽기 위치 기준) */
         long dropped;
-        // Record: silence sent and the time it started / 녹음: 보낸 무음과 시작 시각
+        // Record: bytes sent and the time it started / 녹음: 보낸 바이트와 시작 시각
         long recSent, recStart;
+        /** Record: microphone reader (null = silence), fraction of a 48 kHz sample carried over
+         *  녹음: 마이크 읽는 쪽(null이면 무음), 다음으로 넘기는 48kHz 샘플의 소수 부분 */
+        MicCapture.Tap tap;
+        double recFrac;
         long droppedBytes;
 
         Stream(boolean playback, int channel, Spec spec, int[] map) {
@@ -623,7 +640,7 @@ public final class PulseServer implements Closeable {
                 }
                 case CMD_SERVER_INFO: {
                     Writer w = new Writer().str("pulseaudio").str("16.1").str("steam").str("ezsteam")
-                            .spec(new Spec(FMT_S16LE, 2, RATE)).str(SINK).str(MONITOR).u32(1);
+                            .spec(new Spec(FMT_S16LE, 2, RATE)).str(SINK).str(source()).u32(1);
                     if (version >= 15) w.map(new int[]{1, 2});
                     reply(tag, w);
                     break;
@@ -633,8 +650,8 @@ public final class PulseServer implements Closeable {
                     long idx = (Long) r.next();
                     String n = (String) r.next();
                     boolean sink = cmd == CMD_SINK_INFO;
-                    String own = sink ? SINK : MONITOR;
-                    boolean match = (idx == 0 && n == null) || own.equals(n)
+                    String own = sink ? SINK : source();
+                    boolean match = (idx == 0 && n == null) || own.equals(n) || (!sink && MONITOR.equals(n))
                             || (sink ? "@DEFAULT_SINK@" : "@DEFAULT_SOURCE@").equals(n)
                             || (idx == INVALID_L && n == null);
                     if (!match) {
@@ -684,6 +701,8 @@ public final class PulseServer implements Closeable {
                         if (!cork && !s.playback) {
                             s.recStart = System.nanoTime();
                             s.recSent = 0;
+                            // Resumed: start from fresh microphone samples / 다시 시작: 새 마이크 샘플부터
+                            if (s.tap != null) s.tap.clear();
                         }
                         if (cork) s.startedSent = false;
                     }
@@ -824,19 +843,24 @@ public final class PulseServer implements Closeable {
             }
         }
 
-        /** Sink entry or monitor-source entry / 출력 장치 항목 또는 모니터 소스 항목 */
+        /** Sink entry, or the source entry (microphone, or the sink's monitor without one)
+         *  출력 장치 항목 또는 소스 항목(마이크, 없으면 출력 장치의 모니터) */
         private void device(Writer w, boolean sink) {
-            w.u32(0).str(sink ? SINK : MONITOR).str(sink ? "EZsteam output" : "Monitor of EZsteam output")
+            boolean micSrc = !sink && mic != null;
+            String desc = sink ? "EZsteam output" : micSrc ? "EZsteam microphone" : "Monitor of EZsteam output";
+            w.u32(0).str(sink ? SINK : source()).str(desc)
                     .spec(new Spec(FMT_S16LE, 2, RATE)).map(new int[]{1, 2})
-                    .u32(INVALID_L).cvolume(2).bool(false)
-                    .u32(0).str(sink ? MONITOR : SINK)
-                    .usec(0).str("ezsteam")
+                    .u32(INVALID_L).cvolume(2).bool(false);
+            // Sink: its monitor source; monitor source: the sink; microphone: monitors nothing
+            // 출력 장치: 그 모니터 소스, 모니터 소스: 출력 장치, 마이크: 모니터하는 장치 없음
+            if (micSrc) w.u32(INVALID_L).str(null);
+            else w.u32(0).str(sink ? MONITOR : SINK);
+            w.usec(0).str("ezsteam")
                     // Sink: LATENCY | DECIBEL_VOLUME | DYNAMIC_LATENCY; source: LATENCY | DECIBEL_VOLUME | DYNAMIC_LATENCY
                     // 출력: LATENCY | DECIBEL_VOLUME | DYNAMIC_LATENCY, 소스: LATENCY | DECIBEL_VOLUME | DYNAMIC_LATENCY
                     .u32(sink ? 0x0002 | 0x0020 | 0x0080 : 0x0002 | 0x0020 | 0x0040);
             if (version >= 13) {
-                w.props("device.description", sink ? "EZsteam output" : "Monitor of EZsteam output",
-                        "device.class", sink ? "sound" : "monitor");
+                w.props("device.description", desc, "device.class", sink || micSrc ? "sound" : "monitor");
                 w.usec(0);
             }
             if (version >= 15) {
@@ -897,14 +921,15 @@ public final class PulseServer implements Closeable {
             s.corked = (Boolean) v.get(5);
             fixRecord(s, (Long) v.get(4), (Long) v.get(6));
             s.recStart = System.nanoTime();
+            if (mic != null) s.tap = mic.open("pulse " + name);
             streams.put(s.channel, s);
             Writer w = new Writer().u32(s.channel).u32(s.channel);
             if (version >= 9) w.u32(s.maxlength).u32(s.fragsize);
-            if (version >= 12) w.spec(spec).map(map).u32(0).str(MONITOR).bool(false);
+            if (version >= 12) w.spec(spec).map(map).u32(0).str(source()).bool(false);
             if (version >= 13) w.usec(0);
             if (version >= 22) w.pcmFormat();
             reply(tag, w);
-            log.log("AUDIO pulse 녹음 열림 " + spec.name() + " (마이크 없음, 무음)");
+            log.log("AUDIO pulse 녹음 열림 " + spec.name() + (mic != null ? " (마이크)" : " (마이크 없음, 무음)"));
         }
 
         /** Final buffer values for a playback stream ("-1" = server's choice)
@@ -1053,9 +1078,9 @@ public final class PulseServer implements Closeable {
         }
 
         /** Pacer: asks playback streams for data as the mixer plays them, sends STARTED, and
-         *  sends silence to record streams in real time (every 5 ms)
+         *  sends record streams their data in real time (every 5 ms)
          *  박자 맞춤: 믹서가 재생하는 만큼 재생 스트림에 데이터를 요청하고 STARTED를 보내며, 녹음 스트림에는
-         *  실시간으로 무음을 보냄(5ms마다) */
+         *  실시간으로 데이터를 보냄(5ms마다) */
         private void pace() {
             try {
                 while (!done && !closed) {
@@ -1072,7 +1097,7 @@ public final class PulseServer implements Closeable {
                             }
                             if (start) event(CMD_STARTED, s.channel, 0, false);
                         } else {
-                            silence(s);
+                            record(s);
                         }
                     }
                 }
@@ -1086,9 +1111,12 @@ public final class PulseServer implements Closeable {
             }
         }
 
-        /** Silence for a record stream, as much as real time allows, in fragsize pieces
-         *  녹음 스트림용 무음. 실제 시간만큼 fragsize 조각으로 보냄 */
-        private void silence(Stream s) throws IOException {
+        /** Data for a record stream, as much as real time allows, in fragsize pieces: microphone
+         *  samples (48 kHz mono) converted to the stream's rate, channels and format; silence where
+         *  none arrived yet or without a microphone
+         *  녹음 스트림용 데이터. 실제 시간만큼 fragsize 조각으로 보냄: 마이크 샘플(48kHz 모노)을 스트림의 주파수·채널·
+         *  형식으로 바꿈. 아직 오지 않은 부분이나 마이크가 없으면 무음 */
+        private void record(Stream s) throws IOException {
             byte[] piece = null;
             synchronized (s) {
                 if (s.corked) return;
@@ -1096,13 +1124,38 @@ public final class PulseServer implements Closeable {
                 if (due - s.recSent >= s.fragsize) {
                     piece = new byte[(int) s.fragsize];
                     s.recSent += s.fragsize;
+                    if (s.tap != null) fill(s, piece);
                 }
             }
             if (piece != null) frame(s.channel, piece);
         }
 
+        /** Microphone samples into one record piece (linear resampling, same value on every channel)
+         *  마이크 샘플을 녹음 조각 하나에 채움(선형 변환, 모든 채널에 같은 값) */
+        private void fill(Stream s, byte[] piece) {
+            int fb = s.spec.frameBytes(), sb = s.spec.sampleBytes();
+            int frames = piece.length / fb;
+            // 48 kHz samples this piece covers, the fraction carried to the next piece
+            // 이 조각이 담는 48kHz 샘플 수, 소수 부분은 다음 조각으로 넘김
+            double want = frames * (double) MicCapture.RATE / s.spec.rate + s.recFrac;
+            int m = (int) want;
+            s.recFrac = want - m;
+            if (m <= 0) return;
+            short[] in = new short[m];
+            s.tap.poll(in, m);
+            for (int i = 0; i < frames; i++) {
+                double x = (i + 0.5) * m / frames - 0.5;
+                int a = Math.max(0, Math.min(m - 1, (int) Math.floor(x)));
+                int b = Math.min(m - 1, a + 1);
+                double t = Math.max(0, Math.min(1, x - a));
+                int v = (int) Math.round(in[a] + (in[b] - in[a]) * t);
+                for (int c = 0; c < s.spec.channels; c++) putSample(s.spec.format, piece, i * fb + c * sb, v);
+            }
+        }
+
         private void endStream(Stream s, String why) {
             if (s.src != null) s.src.end();
+            if (s.tap != null) s.tap.close();
             if (s.playback) {
                 log.log(String.format(Locale.ROOT, "AUDIO pulse 재생 %s (%.1f초 분량%s)", why,
                         s.written / ((double) s.spec.rate * s.spec.frameBytes()),
@@ -1112,6 +1165,26 @@ public final class PulseServer implements Closeable {
     }
 
     private static final long INVALID_L = 0xFFFFFFFFL;
+
+    /** Default source name: the microphone when there is one, otherwise the sink's monitor
+     *  기본 소스 이름: 마이크가 있으면 마이크, 없으면 출력 장치의 모니터 */
+    private String source() {
+        return mic != null ? MIC : MONITOR;
+    }
+
+    /** One 16-bit value written in the client's format / 16비트 값 하나를 클라이언트 형식으로 씀 */
+    private static void putSample(int format, byte[] d, int o, int v) {
+        if (format == FMT_S16LE) {
+            d[o] = (byte) v;
+            d[o + 1] = (byte) (v >> 8);
+            return;
+        }
+        int bits = format == FMT_S32LE ? v << 16 : Float.floatToIntBits(v / 32768f);
+        d[o] = (byte) bits;
+        d[o + 1] = (byte) (bits >> 8);
+        d[o + 2] = (byte) (bits >> 16);
+        d[o + 3] = (byte) (bits >> 24);
+    }
 
     private static int be32(byte[] b, int o) {
         return ((b[o] & 0xff) << 24) | ((b[o + 1] & 0xff) << 16) | ((b[o + 2] & 0xff) << 8) | (b[o + 3] & 0xff);

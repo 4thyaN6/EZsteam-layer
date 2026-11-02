@@ -8,4 +8,7 @@
     <!-- Read the current network's DNS servers for the rootfs resolv.conf (RootfsInstaller) -->
     <!-- rootfs resolv.conf용으로 현재 네트워크의 DNS 서버를 읽음(RootfsInstaller) -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Microphone for record streams (MicCapture); asked at run time only when a program records -->
+    <!-- 녹음 스트림용 마이크(MicCapture). 프로그램이 녹음할 때만 실행 중에 물음 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 </manifest>

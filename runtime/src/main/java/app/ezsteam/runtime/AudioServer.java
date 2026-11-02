@@ -39,8 +39,13 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * Stream per connection: 16-byte header ("EZSA", version 1, rate, channels; little-endian uint32),
  * then interleaved signed 16-bit little-endian samples until the plugin closes the connection.
  * 48 kHz is mixed (mono is spread to both sides); any other rate gets its own AudioTrack as before.
+ * Capture (the plugin's record streams): header "EZSR" (version 1, 48000, 2), then the app sends
+ * the microphone (MicCapture) as 48 kHz stereo 16-bit until the plugin closes; without a
+ * MicCapture the connection is closed and the plugin gives silence as before.
  * 연결당 스트림: 16바이트 머리("EZSA", 버전 1, rate, channels, 리틀엔디언 uint32), 그 뒤로 플러그인이 연결을 닫을 때까지
- * 인터리브된 16비트 부호 있는 리틀엔디언 샘플. 48kHz는 섞음(모노는 양쪽으로), 다른 주파수는 전처럼 따로 AudioTrack을 씀
+ * 인터리브된 16비트 부호 있는 리틀엔디언 샘플. 48kHz는 섞음(모노는 양쪽으로), 다른 주파수는 전처럼 따로 AudioTrack을 씀.
+ * 녹음(플러그인의 녹음 스트림): 머리 "EZSR"(버전 1, 48000, 2) 뒤 플러그인이 닫을 때까지 앱이 마이크(MicCapture)를
+ * 48kHz 스테레오 16비트로 보냄. MicCapture가 없으면 연결을 닫고 플러그인은 전처럼 무음을 줌
  */
 public final class AudioServer implements Closeable {
 
@@ -84,6 +89,9 @@ public final class AudioServer implements Closeable {
     /** Streams being mixed / 섞는 중인 스트림 */
     private final CopyOnWriteArrayList<Source> sources = new CopyOnWriteArrayList<>();
     private AudioTrack out;
+    /** Microphone for the plugin's record streams, null = they stay silent
+     *  플러그인 녹음 스트림용 마이크, null이면 무음 그대로 */
+    private volatile MicCapture mic;
 
     private AudioServer(File socketFile, LocalSocket bound, LocalServerSocket server, Log log) {
         this.socketFile = socketFile;
@@ -115,6 +123,11 @@ public final class AudioServer implements Closeable {
         t.setDaemon(true);
         t.start();
         return a;
+    }
+
+    /** Microphone for record streams opened from now on / 이제부터 열리는 녹음 스트림에 쓸 마이크 */
+    public void setMic(MicCapture m) {
+        mic = m;
     }
 
     public int activeStreams() {
@@ -341,6 +354,10 @@ public final class AudioServer implements Closeable {
             byte[] h = new byte[16];
             new DataInputStream(in).readFully(h);
             ByteBuffer hb = ByteBuffer.wrap(h).order(ByteOrder.LITTLE_ENDIAN);
+            if (h[0] == 'E' && h[1] == 'Z' && h[2] == 'S' && h[3] == 'R' && hb.getInt(4) == 1) {
+                record(c);
+                return;
+            }
             if (h[0] != 'E' || h[1] != 'Z' || h[2] != 'S' || h[3] != 'A' || hb.getInt(4) != 1) {
                 log.log("AUDIO 알 수 없는 연결(머리 불일치), 닫음");
                 return;
@@ -432,6 +449,46 @@ public final class AudioServer implements Closeable {
                 own.release();
             }
             closeQuietly(c);
+        }
+    }
+
+    /**
+     * Record connection: microphone samples (48 kHz mono) as stereo 16-bit, written in 10 ms pieces
+     * as they arrive. The write blocks while the plugin is not reading (stream stopped); MicCapture
+     * then drops the oldest samples of this reader, so a restart does not hear old sound for long.
+     * 녹음 연결: 마이크 샘플(48kHz 모노)을 스테레오 16비트로, 오는 대로 10ms 조각으로 씀. 플러그인이 읽지 않으면(스트림
+     * 멈춤) 쓰기가 기다리고, 그동안 MicCapture가 이 읽는 쪽의 가장 오래된 샘플을 버림. 다시 시작할 때 오래된 소리가 길게
+     * 들리지 않음
+     */
+    private void record(LocalSocket c) throws IOException {
+        MicCapture m = mic;
+        if (m == null) {
+            log.log("AUDIO 녹음 연결: 마이크 없음, 닫음 (플러그인은 무음)");
+            return;
+        }
+        MicCapture.Tap tap = m.open("ALSA");
+        long frames = 0;
+        try (java.io.OutputStream os = c.getOutputStream()) {
+            short[] in = new short[RATE / 100];
+            byte[] b = new byte[in.length * 4];
+            while (!closed) {
+                int n = tap.take(in, in.length, 50);
+                if (n == 0) continue;
+                for (int i = 0; i < n; i++) {
+                    int o = i * 4;
+                    b[o] = b[o + 2] = (byte) in[i];
+                    b[o + 1] = b[o + 3] = (byte) (in[i] >> 8);
+                }
+                os.write(b, 0, n * 4);
+                frames += n;
+            }
+        } catch (IOException e) {
+            // The plugin closed the stream: normal end / 플러그인이 스트림을 닫음: 정상 끝
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            tap.close();
+            log.log(String.format(Locale.ROOT, "AUDIO 녹음 연결 끝 (%.1f초 보냄)", frames / (double) RATE));
         }
     }
 

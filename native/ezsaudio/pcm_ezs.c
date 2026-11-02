@@ -29,10 +29,15 @@
  * 실제 카드처럼 ALSA 버퍼 하나만큼만 앞서 쓸 수 있음. 소켓 송신 버퍼를 작게 두어 실시간으로 재생하는
  * 앱의 AudioTrack도 속도를 맞춤. 앱이 듣고 있지 않으면 샘플을 버리고 프로그램은 소리 없이 계속 돎.
  *
- * Capture: silence at the same clock, without a connection. ALSA's own "null" capture cannot be
- * used here: it opens /dev/full, which Android denies to apps (measured: Permission denied).
- * 녹음: 연결 없이 같은 시계로 무음을 줌. ALSA 자체 "null" 녹음은 여기서 못 씀: /dev/full을 여는데
- * 안드로이드가 앱에 허용하지 않음(실측: Permission denied).
+ * Capture: the same clock; the app's microphone arrives over its own connection (header "EZSR",
+ * then 48 kHz stereo S16_LE from the app). Each period takes what has arrived; missing samples are
+ * silence, and more than 100 ms waiting in the socket is skipped so the delay stays short. Without
+ * the app (or an older app that closes the connection) it is silence, as before. ALSA's own "null"
+ * capture cannot be used here: it opens /dev/full, which Android denies to apps (measured).
+ * 녹음: 같은 시계를 따름. 앱의 마이크가 별도 연결로 옴(머리 "EZSR", 그 뒤 앱이 48kHz 스테레오 S16_LE를 보냄). 주기마다
+ * 도착한 만큼 가져가고 모자란 샘플은 무음. 소켓에 100ms보다 많이 쌓이면 건너뛰어 지연을 짧게 유지함. 앱이 없거나(또는
+ * 연결을 닫는 이전 앱이면) 전처럼 무음. ALSA 자체 "null" 녹음은 여기서 못 씀: /dev/full을 여는데 안드로이드가 앱에
+ * 허용하지 않음(실측).
  *
  * Config / 설정:
  *   pcm_type.ezs { lib "/opt/ezsteam/lib/libasound_module_pcm_ezs.so" }
@@ -47,6 +52,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/timerfd.h>
 #include <sys/un.h>
@@ -60,6 +66,9 @@
 /* Small send buffer: little sound waits in the socket (kernel doubles the value)
    작은 송신 버퍼: 소켓 안에서 기다리는 소리를 적게 함(커널이 값을 두 배로 잡음) */
 #define EZS_SNDBUF 16384
+/* Capture: most microphone data kept waiting, 100 ms; the rest is skipped
+   녹음: 기다리게 두는 마이크 데이터 최대 100ms, 나머지는 건너뜀 */
+#define EZS_REC_KEEP (EZS_RATE / 10 * EZS_FRAME_BYTES)
 
 typedef struct {
     snd_pcm_ioplug_t io;
@@ -76,8 +85,11 @@ typedef struct {
     /* Position when not running / 실행 중이 아닐 때의 위치 */
     uint64_t held;
     int running;
-    /* Capture stream (silence, no connection) / 녹음 스트림(무음, 연결 없음) */
+    /* Capture stream (microphone from the app, silence without it) / 녹음 스트림(앱의 마이크, 없으면 무음) */
     int capture;
+    /* Capture: bytes of a frame cut off by the last read / 녹음: 지난 읽기에서 잘린 프레임의 바이트 */
+    unsigned char carry[EZS_FRAME_BYTES];
+    int carried;
 } ezs_t;
 
 /* Monotonic clock in ns / 단조 시계(ns) */
@@ -131,7 +143,7 @@ static void send_all(ezs_t *e, const void *buf, size_t len)
    앱에 연결하고 머리를 보냄. 앱이 없으면 조용히 연결 안 된 상태로 둠 */
 static void try_connect(ezs_t *e)
 {
-    if (e->sock >= 0 || e->capture) return;
+    if (e->sock >= 0) return;
     int s = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (s < 0) return;
     struct sockaddr_un a;
@@ -152,14 +164,73 @@ static void try_connect(ezs_t *e)
         return;
     }
     int sz = EZS_SNDBUF;
-    setsockopt(s, SOL_SOCKET, SO_SNDBUF, &sz, sizeof(sz));
+    setsockopt(s, SOL_SOCKET, e->capture ? SO_RCVBUF : SO_SNDBUF, &sz, sizeof(sz));
     e->sock = s;
+    e->carried = 0;
     uint32_t hdr[4];
-    memcpy(&hdr[0], "EZSA", 4);
+    memcpy(&hdr[0], e->capture ? "EZSR" : "EZSA", 4);
     hdr[1] = 1;
     hdr[2] = EZS_RATE;
     hdr[3] = EZS_CHANNELS;
     send_all(e, hdr, sizeof(hdr));
+}
+
+/* Capture: fill size frames from the app's microphone without waiting; silence for what has not
+   arrived. A closed connection is dropped (silence from then on)
+   녹음: 앱의 마이크로 size 프레임을 기다리지 않고 채움. 도착하지 않은 부분은 무음. 닫힌 연결은 버림(그 뒤로 무음) */
+static void read_mic(ezs_t *e, char *buf, snd_pcm_uframes_t size)
+{
+    size_t need = size * EZS_FRAME_BYTES, got = 0;
+    memset(buf, 0, need);
+    if (e->sock < 0) return;
+    /* Too much waiting (the program read late): skip the oldest, whole frames only
+       너무 많이 쌓임(프로그램이 늦게 읽음): 오래된 것을 건너뜀, 프레임 단위로만 */
+    int avail = 0;
+    if (ioctl(e->sock, FIONREAD, &avail) == 0 && (size_t)avail > need + EZS_REC_KEEP) {
+        size_t skip = (size_t)avail - need - EZS_REC_KEEP;
+        skip -= (skip + (size_t)e->carried) % EZS_FRAME_BYTES;
+        char junk[4096];
+        while (skip > 0) {
+            ssize_t n = recv(e->sock, junk, skip < sizeof(junk) ? skip : sizeof(junk), MSG_DONTWAIT);
+            if (n <= 0) break;
+            skip -= (size_t)n;
+        }
+        /* The cut-off frame's rest was skipped with it, so the socket is at a frame start again
+           (FIONREAD said the bytes were there) / 잘린 프레임의 나머지도 함께 건너뛰었으므로 소켓은 다시 프레임 시작에 있음
+           (FIONREAD로 바이트가 있음을 확인함) */
+        if (skip == 0) e->carried = 0;
+    }
+    /* A frame cut off last time first / 지난번 잘린 프레임 먼저 */
+    unsigned char *out = (unsigned char *)buf;
+    if (e->carried > 0) {
+        while (e->carried < EZS_FRAME_BYTES) {
+            ssize_t n = recv(e->sock, e->carry + e->carried, (size_t)(EZS_FRAME_BYTES - e->carried), MSG_DONTWAIT);
+            if (n == 0) goto gone;
+            if (n < 0) return;
+            e->carried += (int)n;
+        }
+        memcpy(out, e->carry, EZS_FRAME_BYTES);
+        got = EZS_FRAME_BYTES;
+        e->carried = 0;
+    }
+    while (got < need) {
+        ssize_t n = recv(e->sock, out + got, need - got, MSG_DONTWAIT);
+        if (n == 0) goto gone;
+        if (n < 0) break;
+        got += (size_t)n;
+    }
+    /* Keep a partial last frame for next time, silence in its place now
+       잘린 마지막 프레임은 다음을 위해 남기고 지금은 그 자리를 무음으로 */
+    int part = (int)(got % EZS_FRAME_BYTES);
+    if (part > 0) {
+        memcpy(e->carry, out + got - (size_t)part, (size_t)part);
+        e->carried = part;
+        memset(out + got - (size_t)part, 0, (size_t)part);
+    }
+    return;
+gone:
+    close(e->sock);
+    e->sock = -1;
 }
 
 /* Periodic timer for poll: period length while armed, off otherwise
@@ -221,7 +292,7 @@ static snd_pcm_sframes_t ezs_transfer(snd_pcm_ioplug_t *io, const snd_pcm_channe
     ezs_t *e = io->private_data;
     /* Interleaved: one area start for all channels / 인터리브: 모든 채널이 한 영역에서 시작 */
     char *buf = (char *)areas[0].addr + (areas[0].first + areas[0].step * offset) / 8;
-    if (e->capture) memset(buf, 0, size * EZS_FRAME_BYTES);
+    if (e->capture) read_mic(e, buf, size);
     else send_all(e, buf, size * EZS_FRAME_BYTES);
     e->written += size;
     return (snd_pcm_sframes_t)size;

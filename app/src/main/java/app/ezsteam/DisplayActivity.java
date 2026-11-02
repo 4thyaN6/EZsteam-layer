@@ -127,6 +127,10 @@ public class DisplayActivity extends Activity {
     private volatile app.ezsteam.runtime.AudioServer audio;
     /** PulseAudio server for the Steam web helper (mixed into audio) / Steam 웹 도우미용 PulseAudio 서버(audio에 섞임) */
     private volatile app.ezsteam.runtime.PulseServer pulse;
+    /** Phone microphone for record streams (Pulse and ALSA); RECORD_AUDIO is asked when a program
+     *  first records / 녹음 스트림(Pulse·ALSA)용 휴대폰 마이크. 프로그램이 처음 녹음할 때 RECORD_AUDIO를 물음 */
+    private volatile app.ezsteam.runtime.MicCapture mic;
+    private static final int REQ_MIC = 41;
     /** Game frame path check, app side (answers ezs-present-probe) / 게임 프레임 경로 확인의 앱 쪽(ezs-present-probe에 답함) */
     private volatile app.ezsteam.runtime.PresentProbe present;
     /** Game pad input held back: windows cover the game (direct path) / Steam menu raised by HOME
@@ -1078,6 +1082,12 @@ public class DisplayActivity extends Activity {
                 try {
                     audio = app.ezsteam.runtime.AudioServer.start(c.rootfs, this::log);
                     log("AUDIO 대기 " + app.ezsteam.runtime.AudioServer.GUEST_SOCKET);
+                    // Microphone for the programs' record streams; the permission is asked only when
+                    // one records (on the UI thread), until then they get silence
+                    // 프로그램 녹음 스트림용 마이크. 권한은 녹음할 때만 물음(UI 스레드). 그전에는 무음
+                    mic = new app.ezsteam.runtime.MicCapture(this, () -> runOnUiThread(() ->
+                            requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, REQ_MIC)), this::log);
+                    audio.setMic(mic);
                 } catch (IOException | RuntimeException e) {
                     log("AUDIO 시작 실패 (소리 없이 계속): " + e);
                 }
@@ -1087,7 +1097,7 @@ public class DisplayActivity extends Activity {
                 // 스위치 파일 "no-pulse"가 있으면 건너뜀
                 if (audio != null && !MainActivity.testSwitch(this, "no-pulse")) {
                     try {
-                        pulse = app.ezsteam.runtime.PulseServer.start(c.rootfs, audio, this::log);
+                        pulse = app.ezsteam.runtime.PulseServer.start(c.rootfs, audio, mic, this::log);
                         log("AUDIO pulse 대기 " + app.ezsteam.runtime.PulseServer.GUEST_SOCKET);
                     } catch (IOException | RuntimeException e) {
                         log("AUDIO pulse 시작 실패 (웹 도우미는 ALSA로): " + e);
@@ -4700,6 +4710,8 @@ public class DisplayActivity extends Activity {
         if (ps != null) ps.close();
         app.ezsteam.runtime.AudioServer a = audio;
         if (a != null) a.close();
+        app.ezsteam.runtime.MicCapture mc = mic;
+        if (mc != null) mc.close();
         app.ezsteam.runtime.PresentProbe pp = present;
         if (pp != null) pp.close();
         app.ezsteam.runtime.PadFile pf = pad;
@@ -4771,6 +4783,17 @@ public class DisplayActivity extends Activity {
                 f.close();
             } catch (IOException ignored) {
             }
+        }
+    }
+
+    /** Answer to the microphone question, written to the log (MicCapture checks the permission itself)
+     *  마이크 권한 답을 로그에 남김(MicCapture가 권한을 직접 다시 확인함) */
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode == REQ_MIC) {
+            boolean ok = results.length > 0 && results[0] == android.content.pm.PackageManager.PERMISSION_GRANTED;
+            log("AUDIO 마이크 권한 " + (ok ? "허용" : "거부 (녹음은 무음)"));
         }
     }
 }

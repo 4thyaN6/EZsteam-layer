@@ -22,6 +22,11 @@
          일반 권한이며 설치 시 허용됨 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Microphone for programs in the rootfs (MicCapture): asked only when a program first opens a
+         record stream (e.g. Steam voice chat); refused = they get silence. Nothing leaves the device -->
+    <!-- rootfs 안 프로그램용 마이크(MicCapture): 프로그램이 처음 녹음 스트림을 열 때만 물음(예: Steam 음성 채팅).
+         거부하면 무음을 받음. 기기 밖으로 나가는 데이터 없음 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- extractNativeLibs is irrelevant (no JNI libs); glibc files live in the rootfs -->
     <!-- JNI 라이브러리가 없어 해당 없음. glibc 파일은 rootfs 안에 있음 -->

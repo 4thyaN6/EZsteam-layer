@@ -308,6 +308,11 @@ while :; do
     # Packages for the stand-in may have just been installed by the deps step above
     # 바로 위 deps 단계가 대역용 패키지를 방금 설치했을 수 있음
     [ -n "$NETSTATE_UP" ] || start_netstate
+    # The phone's time zone by name once its tzdata file is there (the deps step above may have just
+    # installed it; until then TZ is the fixed UTC offset the app passed)
+    # tzdata 파일이 생기면 휴대폰 시간대를 이름으로 씀(위 deps 단계가 방금 설치했을 수 있음. 그전에는 앱이 넘긴 고정 UTC 차이)
+    if [ -n "${EZS_TZ_ID:-}" ] && [ -f "/usr/share/zoneinfo/$EZS_TZ_ID" ]; then export TZ="$EZS_TZ_ID"; fi
+    [ $n -eq 1 ] && echo "INFO time : TZ=${TZ:-(없음)} $(date '+%Y-%m-%d %H:%M %z')"
     # File check of the client: skipped (-noverifyfiles, faster start) only while the client UI
     # library loads. A fresh install from the current bootstrap stopped at once with "dlmopen
     # steamui.so failed: libavcodec.so.62" right after "Verification skipped" (tester device): the

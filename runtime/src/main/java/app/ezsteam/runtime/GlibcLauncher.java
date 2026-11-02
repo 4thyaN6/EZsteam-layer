@@ -110,8 +110,39 @@ public final class GlibcLauncher {
         env.put("TMPDIR", "/tmp");
         env.put("XDG_RUNTIME_DIR", "/run/user/ezg");
         env.put("DISPLAY", c.display);
+        // The phone's time zone (Android follows the network and the user's setting). Without TZ
+        // glibc used UTC and Big Picture showed the time 9 hours behind in Korea (2026-11-02).
+        // EZS_TZ_ID keeps the zone name so steam-run.sh can switch to it once tzdata is installed
+        // 휴대폰 시간대(안드로이드가 네트워크와 사용자 설정을 따름). TZ가 없으면 glibc가 UTC를 써서 한국에서 빅픽처 시간이
+        // 9시간 늦게 보였음(2026-11-02). EZS_TZ_ID에 시간대 이름을 남겨 tzdata가 설치되면 steam-run.sh가 그 이름으로 바꿈
+        java.util.TimeZone tz = java.util.TimeZone.getDefault();
+        env.put("TZ", guestTimeZone(c.rootfs, tz, System.currentTimeMillis()));
+        if (validZoneId(tz.getID())) env.put("EZS_TZ_ID", tz.getID());
         env.putAll(c.env);
         return env;
+    }
+
+    /** Zone names as tzdata files use them (Area/City, letters, digits, _ + -)
+     *  tzdata 파일 이름 형태의 시간대 이름(지역/도시, 문자·숫자·_ + -) */
+    static boolean validZoneId(String id) {
+        return id != null && id.matches("[A-Za-z][A-Za-z0-9_+\\-]*(/[A-Za-z0-9_+\\-]+)*") && !id.contains("..");
+    }
+
+    /**
+     * TZ value for the guest: the zone name when the rootfs has its tzdata file (daylight saving
+     * rules included), otherwise the current UTC offset in POSIX form, e.g. "<+0900>-9" (POSIX
+     * counts west of UTC, so the sign is reversed; fixed offset, no daylight saving change).
+     * guest용 TZ 값: rootfs에 그 tzdata 파일이 있으면 시간대 이름(일광 절약 규칙 포함), 없으면 지금의 UTC 차이를 POSIX
+     * 형식으로, 예: "<+0900>-9"(POSIX는 UTC 서쪽을 양수로 세므로 부호가 반대임. 고정 차이라 일광 절약 변경 없음)
+     */
+    static String guestTimeZone(File rootfs, java.util.TimeZone tz, long now) {
+        String id = tz.getID();
+        if (validZoneId(id) && new File(rootfs, "usr/share/zoneinfo/" + id).isFile()) return id;
+        int east = tz.getOffset(now) / 60000;
+        int abs = Math.abs(east);
+        String name = String.format(java.util.Locale.ROOT, "<%s%02d%02d>", east < 0 ? "-" : "+", abs / 60, abs % 60);
+        String off = (east > 0 ? "-" : "") + (abs / 60) + (abs % 60 != 0 ? String.format(java.util.Locale.ROOT, ":%02d", abs % 60) : "");
+        return name + off;
     }
 
     /**
