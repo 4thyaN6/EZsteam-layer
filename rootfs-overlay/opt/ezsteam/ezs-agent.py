@@ -126,6 +126,8 @@ NM_XML = """
   <property name="IpInterface" type="s" access="read"/>
   <property name="DeviceType" type="u" access="read"/>
   <property name="State" type="u" access="read"/>
+  <property name="StateReason" type="(uu)" access="read"/>
+  <property name="Udi" type="s" access="read"/>
   <property name="ActiveConnection" type="o" access="read"/>
   <property name="Ip4Config" type="o" access="read"/>
   <property name="Ip6Config" type="o" access="read"/>
@@ -319,6 +321,15 @@ def props(path, iface):
             "DeviceType": V("u", 2 if wifi() else 1),
             # 100 = ACTIVATED, 30 = DISCONNECTED
             "State": V("u", 100 if up else 30),
+            # libnm ignores "State" and takes a device's state only from "StateReason" (state,
+            # reason) (NetworkManager src/libnm-client-impl/nm-device.c). Without it libnm saw
+            # state 0 (UNKNOWN) although "State" said 100, and Big Picture showed no active network
+            # (ezs-nmcheck 2026-11-02). Reason 0 = none
+            # libnm은 "State"를 무시하고 장치 상태를 "StateReason"(상태, 이유)에서만 가져옴(NetworkManager
+            # src/libnm-client-impl/nm-device.c). 이것이 없어 "State"가 100인데도 libnm은 상태 0(UNKNOWN)으로 봤고
+            # 빅픽처에 활성 네트워크가 없었음(ezs-nmcheck 2026-11-02). 이유 0 = 없음
+            "StateReason": V("(uu)", (100 if up else 30, 0)),
+            "Udi": V("s", "/sys/devices/virtual/net/" + name),
             "ActiveConnection": V("o", AC if up else "/"),
             "Ip4Config": V("o", IP4 if up else "/"),
             "Ip6Config": V("o", "/"),
