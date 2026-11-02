@@ -44,6 +44,25 @@ if [ "${EZS_ZINK:-0}" = 1 ]; then
     echo "ezs-webhelper: Zink kopper=${EZS_WH_KOPPER:-1} present=$MESA_VK_WSI_PRESENT_MODE wsi=${MESA_VK_WSI_DEBUG:-} LIBGL_KOPPER_DISABLE=${LIBGL_KOPPER_DISABLE:-(없음)} LIBGL_DRI3_DISABLE=${LIBGL_DRI3_DISABLE:-(없음)}"
 fi
 
+# udev stand-ins for the web helper (native/ezscompat, same as the client): on store and community
+# pages Chromium's gamepad polling thread starts a udev watcher; the refused uevent socket made it
+# log "Failed to initialize a udev monitor." and crash at address 0 right after (Gamepad polling,
+# SIGSEGV, 2026-11-02 23:38:36), and Steam restarted the whole web helper. With the stand-in the
+# watcher is made and simply gets no events. The library is added once; its other parts stay off
+# outside the client process "steam"
+# 웹 도우미용 udev 대역(native/ezscompat, 클라이언트와 같음): 상점·커뮤니티 페이지에서 Chromium의 게임패드 감시 스레드가 udev
+# 감시를 시작하는데, uevent 소켓이 거부되자 "Failed to initialize a udev monitor."를 남기고 바로 주소 0에서 죽었음(Gamepad
+# polling, SIGSEGV, 2026-11-02 23:38:36). 그래서 Steam이 웹 도우미 전체를 다시 띄웠음. 대역이 있으면 감시 객체가 만들어지고
+# 사건만 오지 않음. 라이브러리는 한 번만 넣음. 나머지 기능은 클라이언트 프로세스 "steam" 밖에서는 꺼져 있음
+if [ -f /opt/ezsteam/lib/libezs_compat.so ]; then
+    case ":${LD_PRELOAD:-}:" in
+        *:/opt/ezsteam/lib/libezs_compat.so:*) ;;
+        *) export LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}/opt/ezsteam/lib/libezs_compat.so" ;;
+    esac
+    export EZS_UEVENT_STUB=1 EZS_UDEV_CTL_PRESENT=1
+    echo "ezs-webhelper: udev 대역 켬 (게임패드 감시 크래시 방지)"
+fi
+
 # Steam menu background through ezs-agent (it made the two FIFOs): the web helper's fds 3 and 4
 # become Chromium's DevTools pipe (--remote-debugging-pipe), the agent gives the main menu and
 # quick access pages an opaque black page background (their transparent part is not cleared with

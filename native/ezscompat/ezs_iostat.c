@@ -859,12 +859,31 @@ static struct ui_t *ui_entry(const char *path)
  * 소켓으로는 줄지 않았음). 있다고 답하면 그 확인을 건너뜀. 뒤따르는 netlink 소켓은 여전히 거부되므로(위 캐시가 답함)
  * 감시 객체는 만들어지지 않고 그 밖에는 바뀌는 것이 없음. 파일은 만들지 않으며 다른 프로그램은 실제 답을 봄
  */
+/*
+ * Processes the two udev stand-ins below apply to: the client "steam" and, since 2026-11-02, its
+ * web helper "steamwebhelper". Why the web helper: on store and community pages Chromium's gamepad
+ * polling thread starts a udev watcher; with the refused uevent socket it logged "Failed to
+ * initialize a udev monitor." and the same thread crashed at once with SIGSEGV at address 0 (crash
+ * report 23:38:36, Gamepad polling, libcef.so+0x783bd44), so Steam restarted the whole web helper
+ * (the UI "rebooted"). With the stand-in the watcher is made and gets no events, as in the client.
+ * 아래 두 udev 대역이 적용되는 프로세스: 클라이언트 "steam"과, 2026-11-02부터 그 웹 도우미 "steamwebhelper". 웹 도우미인
+ * 이유: 상점·커뮤니티 페이지에서 Chromium의 게임패드 감시 스레드가 udev 감시를 시작하는데, uevent 소켓이 거부되자 "Failed
+ * to initialize a udev monitor."를 남기고 같은 스레드가 바로 주소 0에서 SIGSEGV로 죽었음(크래시 보고 23:38:36, Gamepad
+ * polling, libcef.so+0x783bd44). 그래서 Steam이 웹 도우미 전체를 다시 띄웠음(화면 "재부팅"). 대역이 있으면 클라이언트처럼
+ * 감시 객체가 만들어지고 사건은 오지 않음
+ */
+static int udev_target(void)
+{
+    return strcmp(program_invocation_short_name, "steam") == 0
+        || strcmp(program_invocation_short_name, "steamwebhelper") == 0;
+}
+
 static int udev_ctl_present(void)
 {
     static int v = -1;
     if (v < 0) {
         const char *e = getenv("EZS_UDEV_CTL_PRESENT");
-        v = e && strcmp(e, "1") == 0 && strcmp(program_invocation_short_name, "steam") == 0;
+        v = e && strcmp(e, "1") == 0 && udev_target();
     }
     return v;
 }
@@ -1103,7 +1122,7 @@ static int uevent_stub(void)
     static int v = -1;
     if (v < 0) {
         const char *e = getenv("EZS_UEVENT_STUB");
-        v = e && strcmp(e, "1") == 0 && strcmp(program_invocation_short_name, "steam") == 0;
+        v = e && strcmp(e, "1") == 0 && udev_target();
     }
     return v;
 }
