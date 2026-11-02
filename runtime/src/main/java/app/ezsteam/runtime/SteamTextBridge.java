@@ -78,14 +78,22 @@ public final class SteamTextBridge implements Closeable {
         return !broken;
     }
 
+    /** request() answers / request()의 답 */
+    public static final int OK = 1, NOT_HERE = 0, NO_ANSWER = -1, FAILED = -2;
+
     /**
-     * One request; true when the agent put the text into a Steam text field within timeoutMs.
+     * One request. OK: the agent put the text into a Steam text field. NOT_HERE: no Steam page has a
+     * focused text field (type through X instead). NO_ANSWER: no answer within timeoutMs; the agent
+     * may still put the text in later, so the caller must not type it again through X (that is
+     * how a syllable could appear twice). FAILED: the FIFOs broke (agent gone), X is safe.
      * op: "commit" (final text) or "compose" (the syllable being composed, "" = none).
-     * 요청 하나. 에이전트가 timeoutMs 안에 Steam 텍스트 칸에 넣었으면 true.
+     * 요청 하나. OK: 에이전트가 Steam 텍스트 칸에 넣음. NOT_HERE: 텍스트 칸에 포커스가 있는 Steam 페이지가 없음(대신 X로 침).
+     * NO_ANSWER: timeoutMs 안에 답이 없음. 에이전트가 나중에 넣을 수 있으므로 부르는 쪽은 X로 다시 치면 안 됨(그러면 글자가
+     * 두 번 들어갈 수 있음). FAILED: FIFO가 깨짐(에이전트 없음), X로 쳐도 됨.
      * op: "commit"(확정 글자) 또는 "compose"(조합 중인 글자, "" = 없음)
      */
-    public boolean request(String op, String text, long timeoutMs) {
-        if (broken) return false;
+    public int request(String op, String text, long timeoutMs) {
+        if (broken) return FAILED;
         int id = ++nextId;
         try {
             byte[] line = (new JSONObject().put("id", id).put("op", op).put("text", text).toString() + "\n")
@@ -111,12 +119,12 @@ public final class SteamTextBridge implements Closeable {
                     try {
                         JSONObject a = new JSONObject(l);
                         // Late answers of earlier requests are skipped / 앞 요청의 늦은 답은 건너뜀
-                        if (a.optInt("id") == id) return a.optBoolean("ok");
+                        if (a.optInt("id") == id) return a.optBoolean("ok") ? OK : NOT_HERE;
                     } catch (JSONException ignored) {
                     }
                 }
                 long left = (end - System.nanoTime()) / 1_000_000L;
-                if (left <= 0) return false;
+                if (left <= 0) return NO_ANSWER;
                 Os.poll(new StructPollfd[]{pollFor(rfd, OsConstants.POLLIN)}, (int) Math.min(left, 100));
                 try {
                     int n = Os.read(rfd, buf, 0, buf.length);
@@ -127,7 +135,7 @@ public final class SteamTextBridge implements Closeable {
             }
         } catch (ErrnoException | JSONException | java.io.InterruptedIOException e) {
             broken = true;
-            return false;
+            return FAILED;
         }
     }
 

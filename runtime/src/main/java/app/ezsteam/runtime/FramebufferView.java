@@ -297,6 +297,17 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         public boolean commitText(CharSequence text, int newCursorPosition) {
             // The committed text replaces the composing one / 확정된 글자가 조합 중인 글자를 대신함
             composing = "";
+            // The keyboard committing what flushComposing already sent (within 1 s): skip it, it
+            // would appear twice (a syllable showed twice now and then, user 2026-11-02 22:55)
+            // flushComposing이 이미 보낸 것을 키보드가 확정함(1초 안): 건너뜀. 두 번 들어감(가끔 글자가 두 번 보였음, 사용자
+            // 2026-11-02 22:55)
+            String t = text == null ? "" : text.toString();
+            if (!flushed.isEmpty() && flushed.equals(t) && android.os.SystemClock.uptimeMillis() - flushedAt < 1000) {
+                flushed = "";
+                ime("확정 중복 건너뜀", text);
+                return true;
+            }
+            flushed = "";
             ime("확정", text);
             TextListener tl = textListener;
             if (tl != null) {
@@ -316,9 +327,17 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
             return true;
         }
 
-        /** Send the composing text if there is any / 조합 중인 글자가 있으면 보냄 */
+        /** Text sent by flushComposing and when, to drop the keyboard's own commit of it right after
+         *  flushComposing이 보낸 글자와 시각. 바로 뒤에 오는 키보드 자체 확정을 버리기 위함 */
+        private String flushed = "";
+        private long flushedAt;
+
+        /** Send the composing text if there is any (a key came another way) / 조합 중인 글자가 있으면 보냄(키가 다른 길로 옴) */
         void flushComposing() {
-            if (!composing.isEmpty()) finishComposingText();
+            if (composing.isEmpty()) return;
+            flushed = composing;
+            flushedAt = android.os.SystemClock.uptimeMillis();
+            finishComposingText();
         }
 
         @Override

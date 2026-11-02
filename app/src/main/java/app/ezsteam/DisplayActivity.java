@@ -145,7 +145,7 @@ public class DisplayActivity extends Activity {
     /** Steam UI text path (keyboard queue only) / Steam 화면 글자 경로(키보드 줄에서만 씀) */
     private app.ezsteam.runtime.SteamTextBridge textBridge;
     /** Soft keyboard log lines written this session / 이번 세션에 쓴 소프트 키보드 로그 줄 수 */
-    private int imeLogged;
+    private int imeLogged, imeOther;
     /** Game frame path check, app side (answers ezs-present-probe) / 게임 프레임 경로 확인의 앱 쪽(ezs-present-probe에 답함) */
     private volatile app.ezsteam.runtime.PresentProbe present;
     /** Game pad input held back: windows cover the game (direct path) / Steam menu raised by HOME
@@ -853,7 +853,14 @@ public class DisplayActivity extends Activity {
             @Override
             public void onCommit(String text) {
                 kbdRun(() -> {
-                    if (!steamText("commit", text)) view.sendChars(text);
+                    // X only when the Steam UI surely did not take it (no answer = it may still)
+                    // Steam 화면이 확실히 받지 않았을 때만 X로(답 없음 = 나중에 받을 수 있음)
+                    int r = steamText("commit", text);
+                    if (r == app.ezsteam.runtime.SteamTextBridge.NOT_HERE || r == app.ezsteam.runtime.SteamTextBridge.FAILED) {
+                        view.sendChars(text);
+                    } else if (r == app.ezsteam.runtime.SteamTextBridge.NO_ANSWER && textLate++ < 10) {
+                        log("키보드 글자: Steam 화면 답 늦음 (X로 다시 치지 않음)");
+                    }
                 });
             }
 
@@ -869,14 +876,16 @@ public class DisplayActivity extends Activity {
             if (x != null) x.typeChars(cps);
             lastKey = new String(Character.toChars(cps[cps.length - 1]));
         });
-        // Soft keyboard calls in the log (kind and counts only, never the text), first 80 of a
-        // session: Korean did not reach Steam chat (2026-11-02), this shows whether the keyboard
-        // composed and committed Hangul at all
-        // 소프트 키보드 호출을 로그에 남김(종류와 개수만, 글자는 남기지 않음), 세션의 처음 80개: Steam 채팅에 한글이
-        // 들어가지 않았음(2026-11-02). 키보드가 한글을 조합·확정했는지부터 보여 줌
+        // Soft keyboard calls in the log (kind and counts only, never the text): composing updates
+        // only the first 40 of a session (one per jamo), commits and the rest up to 300, so a
+        // syllable that appears twice can be matched with its commits later in a session
+        // 소프트 키보드 호출을 로그에 남김(종류와 개수만, 글자는 남기지 않음): 조합 갱신은 세션의 처음 40개만(자모마다 하나),
+        // 확정과 나머지는 300개까지. 세션 뒤쪽에서 두 번 들어간 글자도 확정 기록과 맞춰 볼 수 있음
         view.setImeListener((kind, chars, hangul) -> {
-            if (imeLogged < 80) {
-                imeLogged++;
+            boolean compose = "조합".equals(kind);
+            if (compose ? imeLogged < 40 : imeOther < 300) {
+                if (compose) imeLogged++;
+                else imeOther++;
                 log("IME " + kind + " " + chars + "글자 (한글 " + hangul + ")");
             }
         });
@@ -1666,21 +1675,26 @@ public class DisplayActivity extends Activity {
     }
 
     /**
-     * Text into the Steam UI through ezs-agent (keyboard queue only); false when it did not go
-     * there: not Steam mode, no agent, or no Steam page with a focused text field.
-     * ezs-agent를 거쳐 Steam 화면에 글자를 넣음(키보드 줄에서만). 넣지 못하면 false: Steam 모드 아님, 에이전트 없음,
-     * 텍스트 칸에 포커스가 있는 Steam 페이지 없음
+     * Text into the Steam UI through ezs-agent (keyboard queue only); answers SteamTextBridge.OK /
+     * NOT_HERE / NO_ANSWER / FAILED (also for: not Steam mode, no agent).
+     * ezs-agent를 거쳐 Steam 화면에 글자를 넣음(키보드 줄에서만). 답은 SteamTextBridge.OK / NOT_HERE / NO_ANSWER /
+     * FAILED(Steam 모드 아님, 에이전트 없음 포함)
      */
-    private boolean steamText(String op, String text) {
-        if (!"steam".equals(mode) || cfgRootfs == null) return false;
+    private int steamText(String op, String text) {
+        if (!"steam".equals(mode) || cfgRootfs == null) return app.ezsteam.runtime.SteamTextBridge.FAILED;
         app.ezsteam.runtime.SteamTextBridge b = textBridge;
         if (b == null || !b.usable()) {
             if (b != null) b.close();
             b = textBridge = app.ezsteam.runtime.SteamTextBridge.open(cfgRootfs);
-            if (b == null) return false;
+            if (b == null) return app.ezsteam.runtime.SteamTextBridge.FAILED;
         }
-        return b.request(op, text, "commit".equals(op) ? 600 : 300);
+        // Longer than the agent's own worst case (page focus check 0.25 s + command 0.5 s)
+        // 에이전트 자체 최대 시간(페이지 포커스 확인 0.25초 + 명령 0.5초)보다 길게
+        return b.request(op, text, "commit".equals(op) ? 1500 : 300);
     }
+
+    /** Late answers logged this session / 이번 세션에 기록한 늦은 답 수 */
+    private int textLate;
 
     /**
      * Send one Android key event to X; false when it has no X keycode (or input is not connected).
