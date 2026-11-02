@@ -17,7 +17,7 @@ bundled by it and keep their own licenses.
 | AMD FidelityFX Super Resolution 1.0 algorithm (EASU, RCAS), ported to GLSL ES in `FramebufferView` | MIT, Copyright (c) 2021 Advanced Micro Devices, Inc. | https://github.com/GPUOpen-Effects/FidelityFX-FSR |
 | LSFG frame generation layer (`/opt/ezsteam/lsfg/liblsfg-vk.so`), lsfg-vk 1.0.0 lineage | MIT | https://github.com/GameNative/lsfg-vk-android, commit in `lsfg/source.txt`; build script `tools/build-lsfg.sh` |
 | pe-parse, toml11, volk (inside the LSFG layer) | MIT | submodules of the above, commits in `lsfg/source.txt` |
-| dxbc (inside the LSFG layer, from DXVK) | zlib | submodule of the above |
+| dxbc (inside the LSFG layer, from DXVK) | zlib | submodule of the above (commit `78ab59a8`); its own repository is gone, so the build takes the same commit's files from https://github.com/AlkaidLab/lsfg-vk-android-legacy (commit in `lsfg/source.txt`) / 원래 저장소가 없어져 같은 커밋의 파일을 위 사본에서 가져옴 |
 | Mesa "mesax" bundle (`/opt/ezsteam/mesax`): Zink (`libgallium-*.so`), `libGLX_mesa.so.0`, `libEGL_mesa.so.0`, `libgbm.so.1`, `gbm/dri_gbm.so`, Turnip `libvulkan_freedreno.so` | MIT (Mesa) | https://archive.mesa3d.org, version and SHA-256 in `mesax/source.txt` and `tools/build-turnip-glibc.sh`; build script `tools/build-mesax.sh`; this project's patches `tools/patches/mesa-0*.py` (MIT) |
 | Wayland protocol code inside `ezs-wl` (xdg-shell, linux-dmabuf-v1), generated at build time | MIT (wayland-protocols, wayland-scanner output) | Debian `wayland-protocols`, `libwayland-bin` in `tools/build-alsa-plugin.sh` |
 

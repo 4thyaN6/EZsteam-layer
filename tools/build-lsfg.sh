@@ -21,6 +21,18 @@ COMMIT=d33caceb5e26cc6773834c00b4eb570ad4906272
 # Vulkan headers matching the layer's api_version (Debian's are a little older)
 # 레이어 api_version에 맞는 Vulkan 헤더(데비안 것은 조금 오래됨)
 VKH_TAG=v1.4.313
+# dxbc (DXVK's shader translator as a library, zlib): the submodule's own repository
+# (github.com/PancakeTAS/dxbc) is gone (404, CI "could not read Username", 2026-11-02). A copy of
+# the same submodule commit (78ab59a8, pinned by both lsfg-vk-android lineages) is kept as plain files
+# in AlkaidLab/lsfg-vk-android-legacy; that commit is used only when the original cannot be cloned
+# dxbc(DXVK의 셰이더 변환기를 라이브러리로 뺀 것, zlib): 하위 모듈의 원래 저장소(github.com/PancakeTAS/dxbc)가
+# 없어졌음(404, CI "could not read Username", 2026-11-02). 같은 하위 모듈 커밋(78ab59a8, lsfg-vk-android 두
+# 계열이 모두 고정한 것)의 사본이 AlkaidLab/lsfg-vk-android-legacy에 일반 파일로 있음. 원래 것을 받을 수 없을 때만
+# 그 커밋을 씀
+DXBC_COMMIT=78ab59a8aaeb43cd1b0a5e91ba86722433a10b78
+DXBC_COPY_REPO=https://github.com/AlkaidLab/lsfg-vk-android-legacy
+DXBC_COPY_COMMIT=793c4cec518ac7d94234dffd1487e5b06c08c005
+DXBC_FROM="submodule"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
@@ -35,7 +47,30 @@ apt-get install -y -q --no-install-recommends ca-certificates git cmake ninja-bu
 WORK=$(mktemp -d)
 git -c advice.detachedHead=false clone -q "$REPO" "$WORK/lsfg"
 git -C "$WORK/lsfg" checkout -q "$COMMIT"
-git -C "$WORK/lsfg" submodule update -q --init --recursive
+# Submodules; dxbc from the copy when its repository cannot be reached. git asks for a user name
+# on a missing repository, so prompts are turned off to fail at once
+# 하위 모듈. dxbc는 저장소에 닿지 못하면 사본에서 가져옴. git은 없는 저장소에서 사용자 이름을 물으므로 묻지 않게
+# 해서 바로 실패하게 함
+export GIT_TERMINAL_PROMPT=0
+if ! git -C "$WORK/lsfg" submodule update -q --init --recursive 2>/dev/null; then
+    git -C "$WORK/lsfg" submodule update -q --init --recursive thirdparty/pe-parse thirdparty/toml11 thirdparty/volk
+    # The copy's parent commit must pin the same dxbc commit, so the files are that commit's
+    # 사본의 부모 커밋이 같은 dxbc 커밋을 고정해야 함. 그래야 파일이 그 커밋의 것임
+    git -C "$WORK/lsfg" ls-tree HEAD thirdparty/dxbc | grep -q "$DXBC_COMMIT" || {
+        echo "lsfg: dxbc 하위 모듈 커밋이 $DXBC_COMMIT 이 아님" >&2
+        exit 1
+    }
+    git -c advice.detachedHead=false clone -q "$DXBC_COPY_REPO" "$WORK/dxbc-copy"
+    git -C "$WORK/dxbc-copy" checkout -q "$DXBC_COPY_COMMIT"
+    git -C "$WORK/dxbc-copy" ls-tree "$DXBC_COPY_COMMIT^" thirdparty/dxbc | grep -q "$DXBC_COMMIT" || {
+        echo "lsfg: 사본의 부모가 dxbc $DXBC_COMMIT 을 고정하지 않음" >&2
+        exit 1
+    }
+    rm -rf "$WORK/lsfg/thirdparty/dxbc"
+    cp -r "$WORK/dxbc-copy/thirdparty/dxbc" "$WORK/lsfg/thirdparty/dxbc"
+    DXBC_FROM="copy $DXBC_COPY_REPO $DXBC_COPY_COMMIT"
+    echo "lsfg: dxbc 원래 저장소에 닿지 못함, 사본 사용 ($DXBC_COPY_COMMIT)"
+fi
 # Project patches for the layer (MIT like the layer itself), applied in name order; the build stops
 # if one no longer applies / 레이어용 프로젝트 패치(레이어와 같은 MIT)를 이름 순서로 적용. 적용되지 않으면 빌드를 멈춤
 for p in tools/patches/lsfg-*.patch; do
@@ -131,7 +166,8 @@ cp "$WORK/lsfg/thirdparty/volk/LICENSE.md" "$OUT/licenses/volk.md"
 cp "$WORK/lsfg/thirdparty/dxbc/LICENSE.md" "$OUT/licenses/dxbc.md"
 {
     echo "lsfg-vk $REPO $COMMIT"
-    git -C "$WORK/lsfg" submodule status | sed 's/^/  /'
+    git -C "$WORK/lsfg" submodule status 2>/dev/null | sed 's/^/  /'
+    echo "  dxbc $DXBC_COMMIT from $DXBC_FROM"
     echo "Vulkan-Headers $VKH_TAG"
 } > "$OUT/source.txt"
 file "$OUT/liblsfg-vk.so"
