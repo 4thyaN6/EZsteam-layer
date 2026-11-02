@@ -306,11 +306,13 @@ public class MainActivity extends Activity {
         fileSwitch(f, s(R.string.test_tso), "fex-tso-off", R.string.v_off, R.string.v_default);
         fileSwitch(f, s(R.string.test_cpu), "cpu-big", R.string.v_big_cores, R.string.v_default);
         fileSwitch(f, s(R.string.test_hidraw), "hidraw-off", R.string.v_off, R.string.v_default);
-        // PRoot close only for netlink descriptors (proot-09, PROOT_CLOSE_NETLINK); compared with
-        // ezs-closetest.bat before it becomes a default. Read at the next Steam start
-        // PRoot close를 netlink 디스크립터만 추적(proot-09, PROOT_CLOSE_NETLINK). 기본값으로 정하기 전에
-        // ezs-closetest.bat로 비교함. 다음 Steam 시작 때 읽음
-        fileSwitch(f, s(R.string.test_close), SW_CLOSE_NETLINK, R.string.v_on, R.string.v_default);
+        // PRoot traces close only for netlink descriptors by default (proot-09, compared on the
+        // device 2026-11-01); this switch brings back tracing every close (PROOT_FULL_CLOSE) in case
+        // a program needs PRoot's pipe shadow. Read at the next Steam start
+        // PRoot는 기본으로 netlink 디스크립터의 close만 추적함(proot-09, 기기 비교 2026-11-01). 이 스위치는
+        // 프로그램이 PRoot의 pipe shadow를 필요로 할 때를 위해 close 전부 추적(PROOT_FULL_CLOSE)으로 되돌림.
+        // 다음 Steam 시작 때 읽음
+        fileSwitch(f, s(R.string.test_close), SW_CLOSE_FULL, R.string.v_on, R.string.v_default);
         // GPU display path, step by step (each off = the current path): Zink GL = OpenGL through
         // Zink on Vulkan (/opt/ezsteam/mesax) for the Steam client and games; GPU device = the
         // Android GPU also shown as /dev/dri/renderD128 with the libdrm shim. The screen server is
@@ -1048,8 +1050,9 @@ public class MainActivity extends Activity {
     /** The file compat/ezproton reads for the Native choice / compat/ezproton이 Native 선택으로 읽는 파일 */
     /** Switch files of the GPU display path (see the [시험] section) / GPU 화면 경로 스위치 파일([시험] 영역 참고) */
     static final String SW_ZINK = "zink-gl", SW_GPU_NODE = "gpu-node";
-    /** Test switch file: PRoot traces close only in the netlink range / 시험 스위치 파일: PRoot가 close를 netlink 구간만 추적 */
-    static final String SW_CLOSE_NETLINK = "close-netlink";
+    /** Test switch file: PRoot traces every close again (default: netlink range only)
+     *  시험 스위치 파일: PRoot가 close를 다시 전부 추적(기본: netlink 구간만) */
+    static final String SW_CLOSE_FULL = "close-full";
 
     /** True when a test switch file is present / 시험 스위치 파일이 있으면 참 */
     static boolean testSwitch(android.content.Context ctx, String name) {

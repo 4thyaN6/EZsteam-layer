@@ -1010,13 +1010,13 @@ public class DisplayActivity extends Activity {
                 // State of the switch in the log, so a report shows whether it was on
                 // 스위치 상태를 로그에 남겨 제보에서 켜졌는지 보이게 함
                 log("시험 스위치: Steam HID 찾기 " + (MainActivity.steamHidLow(this) ? "줄임" : "기본(끔)"));
-                // Test switch: PRoot stops for close only on netlink descriptors (proot-09); the
-                // state goes into the log so the comparison (ezs-closetest.bat) can check it
-                // 시험 스위치: PRoot가 netlink 디스크립터의 close에서만 멈춤(proot-09). 비교(ezs-closetest.bat)가
-                // 확인할 수 있게 상태를 로그에 남김
-                boolean closeNl = MainActivity.testSwitch(this, MainActivity.SW_CLOSE_NETLINK);
-                if (closeNl) c.env.put("PROOT_CLOSE_NETLINK", "1");
-                log("시험 스위치: PRoot close " + (closeNl ? "netlink만" : "기본(전부)"));
+                // PRoot stops for close only on netlink descriptors by default (proot-09); the test
+                // switch brings back every close. The state goes into the log (ezs-closetest.bat reads it)
+                // PRoot는 기본으로 netlink 디스크립터의 close에서만 멈춤(proot-09). 시험 스위치는 close 전부로 되돌림.
+                // 상태를 로그에 남김(ezs-closetest.bat가 읽음)
+                boolean closeAll = MainActivity.testSwitch(this, MainActivity.SW_CLOSE_FULL);
+                if (closeAll) c.env.put("PROOT_FULL_CLOSE", "1");
+                log("시험 스위치: PRoot close " + (closeAll ? "전부(시험)" : "netlink만(기본)"));
                 // Phone language for the Steam client language (steam-language.py)
                 // Steam 클라이언트 언어용 휴대폰 언어(steam-language.py)
                 c.env.put("EZS_LANG", Locale.getDefault().toLanguageTag());

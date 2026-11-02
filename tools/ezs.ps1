@@ -24,10 +24,10 @@ param(
     # menu pictures and CPU each; the switch is removed afterwards
     # xcmtest = ANGLE Vulkan Steam 화면을 X 합성 관리자 시험(ezs-xcm) 없이 한 번, 켜고 한 번. 각각 메뉴 캡처와 CPU.
     # 끝나면 스위치를 지움
-    # closetest = Steam UI with PRoot tracing every close, then only netlink closes (proot-09
-    # switch "close-netlink"): CPU, PRoot stops and "Broken pipe" lines each; switch put back
-    # closetest = PRoot가 close를 전부 추적할 때와 netlink만 추적할 때(proot-09 스위치 "close-netlink")의 Steam 화면:
-    # 각각 CPU, PRoot 정지, "Broken pipe" 줄. 끝나면 스위치를 되돌림
+    # closetest = Steam UI with PRoot tracing every close (switch "close-full"), then only netlink
+    # closes (the default, proot-09): CPU, PRoot stops and "Broken pipe" lines each; switch put back
+    # closetest = PRoot가 close를 전부 추적할 때(스위치 "close-full")와 netlink만 추적할 때(기본, proot-09)의 Steam
+    # 화면: 각각 CPU, PRoot 정지, "Broken pipe" 줄. 끝나면 스위치를 되돌림
     # release = tag the pushed commit with "v" + versionName of app/build.gradle (test release:
     # rootfs, driver and APK go to GitHub Releases, where the app downloads them)
     # release = 올린 커밋에 "v" + app/build.gradle의 versionName 태그를 붙임(테스트 릴리스:
@@ -548,26 +548,28 @@ if ($Cmd -eq 'xcmtest') {
 
 if ($Cmd -eq 'closetest') {
     # Same steps twice with the user's Steam UI GPU mode: PRoot traces every close (default), then
-    # only closes in the netlink range (switch file "close-netlink", proot-09). Each run: fresh
+    # only closes in the netlink range (the default since the first comparison; switch file
+    # "close-full" brings back every close, proot-09). Each run: fresh
     # start, 60 s idle span, 60 s arrow-key span, the PRoot stop lines of the last minute and the
     # "Broken pipe" lines that appeared (the pipe shadow PRoot gives up with the switch exists
     # against exactly that). PROOT_STAT lines need the app's I/O statistics option on
     # 사용자의 Steam 화면 GPU 방식으로 같은 단계를 두 번: PRoot가 close를 전부 추적(기본), 그다음 netlink 구간의
-    # close만 추적(스위치 파일 "close-netlink", proot-09). 실행마다: 새로 시작, 대기 60초 구간, 화살표 키 60초 구간,
+    # close만 추적(첫 비교 뒤 기본값. 스위치 파일 "close-full"이 있으면 close 전부, proot-09). 실행마다: 새로 시작,
+    # 대기 60초 구간, 화살표 키 60초 구간,
     # 마지막 1분의 PRoot 정지 줄, 새로 생긴 "Broken pipe" 줄(스위치를 켜면 포기하는 pipe shadow가 바로 이것을
     # 막는 장치임). PROOT_STAT 줄은 앱의 IO 통계 옵션이 켜져 있어야 나옴
-    $CloseFile = "$SwDir/close-netlink"
+    $CloseFile = "$SwDir/close-full"
     $SteamOut = 'files/ezs/home/steam/ezs-logs/steam.log'
     # First number in adb output, 0 when none (missing file) / adb 출력의 첫 숫자, 없으면 0(파일 없음)
     function Get-Num($o) { if (($o -join ' ') -match '(\d+)') { return [int]$Matches[1] } return 0 }
-    $hadSwitch = @(Invoke-Adb shell run-as $Pkg ls $SwDir) -contains 'close-netlink'
+    $hadSwitch = @(Invoke-Adb shell run-as $Pkg ls $SwDir) -contains 'close-full'
     $dir = Join-Path $Repo "reports\closetest_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss')"
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $results = @()
     try {
         foreach ($mode in @('all', 'netlink')) {
             Invoke-Adb shell run-as $Pkg rm -f $CloseFile | Out-Null
-            if ($mode -eq 'netlink') { Invoke-Adb shell run-as $Pkg touch $CloseFile | Out-Null }
+            if ($mode -eq 'all') { Invoke-Adb shell run-as $Pkg touch $CloseFile | Out-Null }
             Write-Host "== close-${mode}: Steam 새로 시작, 60초 안정"
             Invoke-Adb shell am force-stop $Pkg | Out-Null
             $o = Invoke-Adb shell am start -n "$Pkg/.MainActivity" --es ezs.run steam
@@ -669,25 +671,66 @@ if ($Cmd -eq 'push') {
     return
 }
 
-# install: only when the published APK was built from the current commit
-# install: 올라온 APK가 지금 커밋으로 빌드된 것일 때만 설치
+# install: only when the published APK was built from the current commit. It waits for it: right
+# after ezs-push.bat the build is still running, and a finished build was sometimes not seen at
+# once (the release download address answered with the previous file for a while, user report
+# 2026-11-02). So the version file is read with a cache-busting query every 20 s (up to 60 min),
+# and the APK itself comes through the GitHub API by asset id, which always names the newest file
+# install: 올라온 APK가 지금 커밋으로 빌드된 것일 때만 설치함. 그때까지 기다림: ezs-push.bat 직후에는 빌드가 아직
+# 돌고 있고, 끝난 빌드도 바로 보이지 않을 때가 있었음(릴리스 받기 주소가 한동안 이전 파일로 답함, 사용자 제보
+# 2026-11-02). 그래서 버전 파일을 캐시를 피하는 질의로 20초마다(최대 60분) 읽고, APK 자체는 GitHub API에서 자산
+# 번호로 받음(항상 최신 파일을 가리킴)
 $sha = (git rev-parse --short=7 HEAD).Trim()
 $tmp = Join-Path $env:TEMP 'ezsteam-apk'
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-try {
-    Invoke-WebRequest "$Url/apk.version" -OutFile "$tmp\apk.version" -UseBasicParsing
-} catch {
-    Write-Host 'apk-latest가 아직 없음: 첫 main 빌드가 끝날 때까지 기다린 뒤 다시 실행'
-    return
+$Api = 'https://api.github.com/repos/4thyaN6/EZsteam-layer/releases/tags/apk-latest'
+$NoCache = @{ 'Cache-Control' = 'no-cache'; 'Pragma' = 'no-cache' }
+# Version of the published APK, '' when none yet / 올라온 APK의 버전, 아직 없으면 ''
+function Get-PublishedVersion {
+    try {
+        $q = [DateTime]::UtcNow.Ticks
+        Invoke-WebRequest "$Url/apk.version?t=$q" -OutFile "$tmp\apk.version" -UseBasicParsing -Headers $NoCache
+        return (Get-Content "$tmp\apk.version" -Raw).Trim()
+    } catch {
+        return ''
+    }
 }
-$built = (Get-Content "$tmp\apk.version" -Raw).Trim()
-if ($built -ne $sha) {
-    Write-Host "아직 최신 APK가 아님: 저장소 $sha / 올라온 APK $built"
-    Write-Host 'Actions가 끝날 때까지 기다린 뒤 다시 실행'
-    return
+$start = Get-Date
+$built = Get-PublishedVersion
+$lastNote = [DateTime]::MinValue
+while ($built -ne $sha) {
+    $min = [int]((Get-Date) - $start).TotalMinutes
+    if ($min -ge 60) {
+        Write-Host "60분 동안 최신 APK가 올라오지 않음: 저장소 $sha / 올라온 APK $built (Actions 실패 여부 확인)"
+        return
+    }
+    # One line a minute, so the window shows it is still waiting / 1분에 한 줄: 아직 기다리는 중임을 보임
+    if (((Get-Date) - $lastNote).TotalSeconds -ge 60) {
+        Write-Host "최신 APK 기다리는 중 ($min분): 저장소 $sha / 올라온 APK $(if ($built) { $built } else { '없음' })"
+        $lastNote = Get-Date
+    }
+    Start-Sleep -Seconds 20
+    $built = Get-PublishedVersion
 }
 $apk = "$tmp\ezsteam-$built.apk"
-Invoke-WebRequest "$Url/app-debug.apk" -OutFile $apk -UseBasicParsing
+# The APK through the API (asset id of the current file); the download address as a fallback
+# (the API allows 60 unauthenticated requests an hour)
+# API로 APK를 받음(지금 파일의 자산 번호). 실패하면 받기 주소로(API는 인증 없이 시간당 60번)
+$got = $false
+try {
+    $rel = Invoke-RestMethod $Api -Headers $NoCache
+    $asset = $rel.assets | Where-Object { $_.name -eq 'app-debug.apk' } | Select-Object -First 1
+    if ($asset) {
+        Invoke-WebRequest $asset.url -OutFile $apk -UseBasicParsing -Headers @{ 'Accept' = 'application/octet-stream' }
+        $got = $true
+    }
+} catch {
+    Write-Host "API로 받기 실패, 받기 주소로 받음: $($_.Exception.Message)"
+}
+if (-not $got) {
+    $q = [DateTime]::UtcNow.Ticks
+    Invoke-WebRequest "$Url/app-debug.apk?t=$q" -OutFile $apk -UseBasicParsing -Headers $NoCache
+}
 Write-Host "설치: $apk"
 # adb writes failures to stderr; in Windows PowerShell 5.1 a redirected stderr line becomes an
 # error record, so keep going instead of stopping on it

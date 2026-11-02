@@ -894,6 +894,15 @@ def scan_one(path, names, apis):
                 if c:
                     k = "흔적 " + h.decode() + " @ " + os.path.basename(path)
                     names[k] = names.get(k, 0) + c
+            # libnm functions the file names (Steam's network page reads NetworkManager through
+            # libnm in steamclient.so, scan 2026-11-02): which device, connection and access point
+            # values it uses decides what the stand-in must give
+            # 파일이 이름으로 가진 libnm 함수(Steam 네트워크 화면은 steamclient.so의 libnm으로 NetworkManager를 읽음,
+            # 스캔 2026-11-02): 어떤 장치·연결·접속점 값을 쓰는지가 대역이 줄 값을 정함
+            if m.find(b"nm_client_") >= 0:
+                for fn in set(re.findall(rb"\bnm_[a-z0-9_]{3,60}\b", m)):
+                    k = "libnm " + fn.decode() + " @ " + os.path.basename(path)
+                    names[k] = names.get(k, 0) + 1
             if path.endswith(".js"):
                 for api in re.findall(rb"(?:Network|Wifi|WiFi|Wireless)[A-Za-z]*\.[A-Za-z]+\(?", m):
                     apis[api.decode()] = apis.get(api.decode(), 0) + 1
@@ -922,7 +931,7 @@ def nm_scan():
     time.sleep(30)
     try:
         files = scan_files()
-        key = "v2\n" + "\n".join("%s %d %d" % (f, os.path.getsize(f), int(os.path.getmtime(f))) for f in files)
+        key = "v3\n" + "\n".join("%s %d %d" % (f, os.path.getsize(f), int(os.path.getmtime(f))) for f in files)
         try:
             with open(SCAN_KEY) as k:
                 if k.read() == key and os.path.isfile(SCAN_OUT):

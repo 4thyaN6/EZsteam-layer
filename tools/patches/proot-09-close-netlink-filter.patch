@@ -1,36 +1,37 @@
 diff --git a/src/syscall/seccomp.c b/src/syscall/seccomp.c
-index 2d736c9..d3c7a1c 100644
+index 2d736c9..b9feecf 100644
 --- a/src/syscall/seccomp.c
 +++ b/src/syscall/seccomp.c
-@@ -249,6 +249,27 @@ static int add_trace_sendto(struct sock_fprog *program, word_t syscall, int flag
+@@ -249,6 +249,28 @@ static int add_trace_sendto(struct sock_fprog *program, word_t syscall, int flag
  	return add_statements(program, LENGTH_TRACE_SENDTO, statements);
  }
  
 +/**
-+ * close (test switch, PROOT_CLOSE_NETLINK set): sent to PRoot only for the netlink range, like
-+ * recv_by_fd(), using the same statements (add_trace_recv). What close is traced for in PRoot:
-+ * dropping a netlink socket from its tracking sets (those sockets live in the range, exit.c),
-+ * auxv_fd (tracked in full PTRACE_SYSCALL mode, not through this filter) and the pipe shadow
-+ * (pipe_shadow.c), which this gives up outside the range. Why: Xwayland closes GPU sync_file and
-+ * dma-buf descriptors about 2,650 times a second and each one stopped PRoot (PROOT_STAT
-+ * 2026-11-01: 159,017 of 397,962 stops a minute); none of them is a pipe or netlink socket.
-+ * Off by default until the comparison (ezs-closetest.bat) shows no pipe trouble.
-+ * close(시험 스위치, PROOT_CLOSE_NETLINK이 있을 때): recv_by_fd()처럼 netlink 구간만 PRoot로 보냄. 같은 문장을
-+ * 씀(add_trace_recv). PRoot가 close를 추적하는 이유: netlink 소켓을 추적 목록에서 지우기(그 소켓은 구간 안에
-+ * 있음, exit.c), auxv_fd(이 필터가 아니라 전체 PTRACE_SYSCALL 방식으로 추적), pipe shadow(pipe_shadow.c).
-+ * 구간 밖의 pipe shadow는 포기함. 이유: Xwayland가 GPU sync_file·dma-buf 디스크립터를 초당 약 2,650번 닫고
-+ * 그때마다 PRoot가 멈췄음(PROOT_STAT 2026-11-01: 1분 정지 397,962번 중 159,017번). 그중 pipe나 netlink
-+ * 소켓은 없음. 비교(ezs-closetest.bat)에서 pipe 문제가 없다고 나올 때까지 기본 끔
++ * close: sent to PRoot only for the netlink range, like recv_by_fd(), using the same statements
++ * (add_trace_recv). What close is traced for in PRoot: dropping a netlink socket from its tracking
++ * sets (those sockets live in the range, exit.c), auxv_fd (tracked in full PTRACE_SYSCALL mode, not
++ * through this filter) and the pipe shadow (pipe_shadow.c), which this gives up outside the range.
++ * Why: Xwayland closes GPU sync_file and dma-buf descriptors about 2,650 times a second and each one
++ * stopped PRoot (PROOT_STAT 2026-11-01: 159,017 of 397,962 stops a minute); none of them is a pipe or
++ * netlink socket. Compared on the device (2026-11-01): PRoot 23 % -> 8 % and stops -78 % while
++ * moving through Big Picture, no "Broken pipe" line, games ran. PROOT_FULL_CLOSE set: trace every
++ * close as before.
++ * close: recv_by_fd()처럼 netlink 구간만 PRoot로 보냄. 같은 문장을 씀(add_trace_recv). PRoot가 close를 추적하는
++ * 이유: netlink 소켓을 추적 목록에서 지우기(그 소켓은 구간 안에 있음, exit.c), auxv_fd(이 필터가 아니라 전체
++ * PTRACE_SYSCALL 방식으로 추적), pipe shadow(pipe_shadow.c). 구간 밖의 pipe shadow는 포기함. 이유: Xwayland가 GPU
++ * sync_file·dma-buf 디스크립터를 초당 약 2,650번 닫고 그때마다 PRoot가 멈췄음(PROOT_STAT 2026-11-01: 1분 정지
++ * 397,962번 중 159,017번). 그중 pipe나 netlink 소켓은 없음. 기기 비교(2026-11-01): 빅픽처 이동 중 PRoot 23% -> 8%,
++ * 정지 -78%, "Broken pipe" 줄 없음, 게임 실행됨. PROOT_FULL_CLOSE가 있으면 예전처럼 close를 전부 추적함
 + */
 +static bool close_by_fd(Sysnum sysnum, int flags)
 +{
-+	return sysnum == PR_close && flags == 0 && getenv("PROOT_CLOSE_NETLINK") != NULL;
++	return sysnum == PR_close && flags == 0 && getenv("PROOT_FULL_CLOSE") == NULL;
 +}
 +
  /* Statements one traced syscall takes / 추적하는 시스템 호출 하나가 차지하는 문장 수 */
  static size_t trace_length(Sysnum sysnum, int flags)
  {
-@@ -258,6 +279,8 @@ static size_t trace_length(Sysnum sysnum, int flags)
+@@ -258,6 +280,8 @@ static size_t trace_length(Sysnum sysnum, int flags)
  		return LENGTH_TRACE_RECV;
  	if (sendto_by_fd(sysnum, flags))
  		return LENGTH_TRACE_SENDTO;
@@ -39,7 +40,7 @@ index 2d736c9..d3c7a1c 100644
  	return 2;
  }
  
-@@ -462,6 +485,8 @@ static int set_seccomp_filters(const FilteredSysnum *sysnums)
+@@ -462,6 +486,8 @@ static int set_seccomp_filters(const FilteredSysnum *sysnums)
  					status = add_trace_recv(&program, syscall, sysnums[k].flags);
  				else if (sendto_by_fd(sysnums[k].value, sysnums[k].flags))
  					status = add_trace_sendto(&program, syscall, sysnums[k].flags);

@@ -160,7 +160,7 @@
     <string name="test_gpu_check">GPU path check</string>
     <string name="test_gpu_node">GPU device</string>
     <string name="test_hidraw">HIDRAW</string>
-    <string name="test_close">PRoot close</string>
+    <string name="test_close">PRoot close all</string>
     <string name="test_tso">FEX TSO</string>
     <string name="test_zink">Zink GL</string>
     <string name="v_auto_end">End it</string>
