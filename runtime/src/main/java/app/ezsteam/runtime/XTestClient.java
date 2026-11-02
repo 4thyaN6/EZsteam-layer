@@ -331,7 +331,7 @@ public final class XTestClient implements Closeable {
         // 됐음). 글자 자체는 남기지 않고 문자 종류만 기록함
         if (checksLeft > 0 && log != null) {
             checksLeft--;
-            final int want = keysym, code = kc;
+            final int want = keysym, code = kc, nth = ++typedCount;
             final String kind = codePoint >= 0xAC00 && codePoint <= 0xD7A3 ? "한글 음절"
                     : codePoint >= 0x3131 && codePoint <= 0x318E ? "한글 자모" : "기타 문자";
             ByteBuffer g = le(8);
@@ -341,7 +341,7 @@ public final class XTestClient implements Closeable {
                 int per = reply[1] & 0xff;
                 int got = reply.length >= 36 && per > 0 ? rb.getInt(32) : 0;
                 Log l = log;
-                if (l != null) l.line("XTEST 키 없는 글자(" + kind + ") 키코드 " + code + ": 배치 "
+                if (l != null) l.line("XTEST 키 없는 글자 #" + nth + "(" + kind + ") 키코드 " + code + ": 배치 "
                         + (got == want ? "유지됨" : String.format(java.util.Locale.ROOT, "다름 (기대 0x%x, 서버 0x%x, keysym %d개)", want, got, per)));
             });
         }
@@ -349,8 +349,104 @@ public final class XTestClient implements Closeable {
         fake(KEY_RELEASE, kc, 0, 0);
     }
 
-    /** Mapping checks left this session (typeChar) / 이번 세션에 남은 배치 확인 횟수(typeChar) */
-    private int checksLeft = 3;
+    /** Mapping checks left this session (typeChar): every character for now, to line the log up
+     *  with what appeared on screen (Korean missing in Steam chat, 2026-11-02 22:15)
+     *  이번 세션에 남은 배치 확인 횟수(typeChar): 지금은 글자마다 확인해 화면에 나온 것과 로그를 맞춰 봄(Steam 채팅에서
+     *  한글이 빠짐, 2026-11-02 22:15) */
+    private int checksLeft = 100;
+    /** Characters typed this session, numbered in the log / 이번 세션에 입력한 글자 수, 로그의 번호 */
+    private int typedCount;
+
+    /** Pause on the send thread between a keymap change and the keys that use it (ms)
+     *  키 배치 변경과 그 배치를 쓰는 키 사이에 전송 스레드에서 쉬는 시간(ms) */
+    private static final int MAP_SETTLE_MS = 30;
+    /** Word-sized batches logged this session / 이번 세션에 기록한 여러 글자 묶음 수 */
+    private int batchLogged;
+
+    /**
+     * Type several characters that have no key, in order. One character: typeChar as before
+     * (measured working). Several (a whole word the keyboard committed at once): up to 12 at a
+     * time get the spare keycodes in one ChangeKeyboardMapping, the send thread waits 30 ms, the
+     * keys are pressed in order, and it waits 30 ms again before the next group reuses the
+     * keycodes. Why: a committed word of 9-10 Hangul syllables never appeared in Steam chat while
+     * single syllables did (device log 2026-11-02 22:15: every single commit reached the server
+     * with its mapping kept; the long commits sent one mapping change per character back to back).
+     * That the client misses mapping changes that come in a burst is an inference; this sends
+     * one change per group and gives the client time to read it.
+     * 키 없는 글자 여러 개를 차례로 입력함. 한 글자: 전처럼 typeChar(실측으로 동작함). 여러 글자(키보드가 한
+     * 번에 확정한 단어): 최대 12개씩 예비 키코드에 ChangeKeyboardMapping 한 번으로 배정하고, 전송 스레드가 30ms
+     * 기다린 뒤 순서대로 키를 누르고, 다음 묶음이 키코드를 다시 쓰기 전에 다시 30ms 기다림. 이유: 한 음절씩 확정한
+     * 것은 Steam 채팅에 들어갔지만 9~10음절을 한 번에 확정한 단어는 나오지 않았음(기기 로그 2026-11-02 22:15:
+     * 한 글자 확정은 모두 배치가 유지된 채 서버에 도착함. 긴 확정은 글자마다 배치 변경을 연달아 보냈음).
+     * 클라이언트가 연달아 오는 배치 변경을 놓친다는 것은 추론임. 이 방식은 묶음마다 변경을 한 번만 보내고
+     * 클라이언트가 읽을 시간을 줌
+     */
+    public synchronized void typeChars(int[] cps) {
+        if (closed || cps == null || cps.length == 0) return;
+        if (cps.length == 1) {
+            typeChar(cps[0]);
+            return;
+        }
+        for (int at = 0; at < cps.length; at += SPARE_COUNT) {
+            int n = Math.min(SPARE_COUNT, cps.length - at);
+            // ChangeKeyboardMapping: n keycodes from SPARE_FIRST, 2 keysyms each (unshifted, shifted)
+            // ChangeKeyboardMapping: SPARE_FIRST부터 키코드 n개, 키코드마다 keysym 2개(기본, Shift)
+            ByteBuffer m = le(8 + n * 8);
+            m.put((byte) 100).put((byte) n).putShort((short) (2 + n * 2)).put((byte) SPARE_FIRST).put((byte) 2).putShort((short) 0);
+            for (int i = 0; i < n; i++) {
+                int cp = cps[at + i];
+                int keysym = cp < 0x100 ? cp : 0x01000000 | cp;
+                m.putInt(keysym).putInt(keysym);
+            }
+            send(m.array(), null);
+            // Read the group's mapping back: how many keycodes hold what was asked
+            // 묶음의 배치를 다시 읽음: 요청한 값을 가진 키코드 수
+            if (checksLeft > 0 && log != null) {
+                checksLeft--;
+                final int[] want = new int[n];
+                for (int i = 0; i < n; i++) want[i] = cps[at + i] < 0x100 ? cps[at + i] : 0x01000000 | cps[at + i];
+                final int first = typedCount + 1;
+                ByteBuffer g = le(8);
+                g.put((byte) 101).put((byte) 0).putShort((short) 2).put((byte) SPARE_FIRST).put((byte) n).putShort((short) 0);
+                send(g.array(), reply -> {
+                    ByteBuffer rb = ByteBuffer.wrap(reply).order(ByteOrder.LITTLE_ENDIAN);
+                    int per = reply[1] & 0xff, ok = 0;
+                    for (int i = 0; i < want.length && per > 0 && 32 + (i * per + 1) * 4 <= reply.length; i++) {
+                        if (rb.getInt(32 + i * per * 4) == want[i]) ok++;
+                    }
+                    Log l = log;
+                    if (l != null) l.line("XTEST 키 없는 글자 #" + first + "~#" + (first + want.length - 1) + " 묶음 키코드 "
+                            + SPARE_FIRST + "~" + (SPARE_FIRST + want.length - 1) + ": 배치 일치 " + ok + "/" + want.length);
+                });
+            }
+            typedCount += n;
+            pause(MAP_SETTLE_MS);
+            for (int i = 0; i < n; i++) {
+                fake(KEY_PRESS, SPARE_FIRST + i, 0, 0);
+                fake(KEY_RELEASE, SPARE_FIRST + i, 0, 0);
+            }
+            pause(MAP_SETTLE_MS);
+        }
+        // The single-character path continues after the keycodes used here
+        // 한 글자 경로는 여기서 쓴 키코드 다음부터 이어 씀
+        spareNext = Math.min(cps.length, SPARE_COUNT) % SPARE_COUNT;
+        if (batchLogged < 5 && log != null) {
+            batchLogged++;
+            log.line("XTEST 키 없는 글자 " + cps.length + "개를 묶어 입력 (배치 변경 " + ((cps.length + SPARE_COUNT - 1) / SPARE_COUNT) + "번)");
+        }
+    }
+
+    /** A wait queued on the send thread, between requests / 요청 사이에 전송 스레드에서 기다림 */
+    private void pause(int ms) {
+        if (closed) return;
+        tx.execute(() -> {
+            try {
+                Thread.sleep(ms);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+    }
 
     /**
      * Give the keyboard focus to the top-level window under the pointer, the way a window manager

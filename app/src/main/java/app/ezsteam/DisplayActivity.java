@@ -834,10 +834,10 @@ public class DisplayActivity extends Activity {
         view.setKeyListener(this::sendKey);
         // Characters with no key (Korean and others) go in through a spare X keycode
         // 키가 없는 글자(한글 등)는 X 예비 키코드로 들어감
-        view.setCharListener(cp -> {
+        view.setCharListener(cps -> {
             XTestClient x = xtest;
-            if (x != null) x.typeChar(cp);
-            lastKey = new String(Character.toChars(cp));
+            if (x != null) x.typeChars(cps);
+            lastKey = new String(Character.toChars(cps[cps.length - 1]));
         });
         // Soft keyboard calls in the log (kind and counts only, never the text), first 80 of a
         // session: Korean did not reach Steam chat (2026-11-02), this shows whether the keyboard
@@ -1600,6 +1600,11 @@ public class DisplayActivity extends Activity {
             if (e.getAction() == KeyEvent.ACTION_UP) runOnUiThread(this::openMenu);
             return true;
         }
+        // A key while the soft keyboard still composes a syllable: send the syllable first, the
+        // keyboard does not always commit before it (Space lost a syllable, 2026-11-02 22:15:38)
+        // 소프트 키보드가 아직 글자를 조합 중일 때 온 키: 글자를 먼저 보냄. 키보드가 키 전에 항상 확정하지는 않음
+        // (Space가 글자를 잃었음, 2026-11-02 22:15:38)
+        if (e.getAction() != KeyEvent.ACTION_UP && view != null) view.finishComposing();
         // Text delivered as one event (some keyboards): split into key events
         // 한 이벤트로 온 텍스트(일부 키보드): 키 이벤트로 나눔
         if (e.getAction() == KeyEvent.ACTION_MULTIPLE && e.getKeyCode() == KeyEvent.KEYCODE_UNKNOWN) {

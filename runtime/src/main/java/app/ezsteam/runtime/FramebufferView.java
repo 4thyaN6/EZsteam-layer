@@ -49,7 +49,8 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
     /** A character that has no key on the keyboard map (Hangul and other scripts), as a code point
      *  키 배치에 키가 없는 글자(한글 등 다른 문자), 코드 포인트로 */
     public interface CharListener {
-        void onChar(int codePoint);
+        /** Characters in order; a committed word arrives as one call / 순서대로의 글자. 확정된 단어는 한 번에 옴 */
+        void onChars(int[] codePoints);
     }
 
     /** What the soft keyboard did (kind, characters, of them Hangul); never the text itself
@@ -242,7 +243,24 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         outAttrs.inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
         outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN | EditorInfo.IME_FLAG_NO_EXTRACT_UI
                 | EditorInfo.IME_FLAG_NO_ENTER_ACTION | EditorInfo.IME_ACTION_NONE;
-        return new KeyInputConnection();
+        KeyInputConnection c = new KeyInputConnection();
+        input = c;
+        return c;
+    }
+
+    /** The soft keyboard's current connection / 소프트 키보드의 현재 연결 */
+    private volatile KeyInputConnection input;
+
+    /**
+     * Send what the keyboard is still composing. Called when a key comes in another way than the
+     * connection: the keyboard sent Space as a plain key event while a syllable was being composed
+     * and the syllable was lost (device log 2026-11-02 22:15:38, no commit before the Space).
+     * 키보드가 아직 조합 중인 글자를 보냄. 연결이 아닌 다른 길로 키가 올 때 부름: 글자를 조합하는 중에 키보드가 Space를
+     * 일반 키 이벤트로 보냈고 그 글자가 사라졌음(기기 로그 2026-11-02 22:15:38, Space 전에 확정 없음)
+     */
+    public void finishComposing() {
+        KeyInputConnection c = input;
+        if (c != null) c.flushComposing();
     }
 
     /**
@@ -274,6 +292,11 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
             composing = text == null ? "" : text.toString();
             ime("조합", text);
             return true;
+        }
+
+        /** Send the composing text if there is any / 조합 중인 글자가 있으면 보냄 */
+        void flushComposing() {
+            if (!composing.isEmpty()) finishComposingText();
         }
 
         @Override
@@ -322,17 +345,30 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         if (text == null || text.length() == 0) return;
         android.view.KeyCharacterMap map = android.view.KeyCharacterMap.load(android.view.KeyCharacterMap.VIRTUAL_KEYBOARD);
         String t = text.toString();
+        // Characters without a key are gathered and handed over together (a committed word), and
+        // always before the next key event, so the order stays the same
+        // 키 없는 글자는 모아서 함께 넘김(확정된 단어). 다음 키 이벤트 전에 항상 넘겨 순서가 그대로 유지됨
+        int[] run = new int[t.length()];
+        int k = 0;
         for (int i = 0; i < t.length(); ) {
             int cp = t.codePointAt(i);
             i += Character.charCount(cp);
             android.view.KeyEvent[] evs = cp < 0x10000 ? map.getEvents(new char[]{(char) cp}) : null;
             if (evs != null) {
+                k = flushChars(run, k);
                 for (android.view.KeyEvent e : evs) deliver(e);
             } else {
-                CharListener l = charListener;
-                if (l != null) l.onChar(cp);
+                run[k++] = cp;
             }
         }
+        flushChars(run, k);
+    }
+
+    /** Hand the gathered characters to the listener; returns 0 / 모은 글자를 리스너에 넘김. 0을 돌려줌 */
+    private int flushChars(int[] run, int k) {
+        CharListener l = charListener;
+        if (k > 0 && l != null) l.onChars(java.util.Arrays.copyOf(run, k));
+        return 0;
     }
 
     private void deliver(android.view.KeyEvent e) {
