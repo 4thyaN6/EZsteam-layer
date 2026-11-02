@@ -52,10 +52,17 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         void onChar(int codePoint);
     }
 
+    /** What the soft keyboard did (kind, characters, of them Hangul); never the text itself
+     *  소프트 키보드가 한 일(종류, 글자 수, 그중 한글 수). 글자 자체는 넘기지 않음 */
+    public interface ImeListener {
+        void onIme(String kind, int chars, int hangul);
+    }
+
     private volatile XvfbFramebuffer fb;
     private volatile int scaleMode = SCALE_SHARP;
     private volatile KeyListener keyListener;
     private volatile CharListener charListener;
+    private volatile ImeListener imeListener;
     private int uSrc, uMode, uSharp;
     private volatile StatsListener stats;
 
@@ -179,6 +186,27 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         charListener = l;
     }
 
+    public void setImeListener(ImeListener l) {
+        imeListener = l;
+    }
+
+    /** Report one soft keyboard call (kind, length, Hangul count) / 소프트 키보드 호출 하나를 알림(종류, 길이, 한글 수) */
+    private void ime(String kind, CharSequence text) {
+        ImeListener l = imeListener;
+        if (l == null) return;
+        int n = 0, h = 0;
+        if (text != null) {
+            String t = text.toString();
+            for (int i = 0; i < t.length(); ) {
+                int cp = t.codePointAt(i);
+                i += Character.charCount(cp);
+                n++;
+                if ((cp >= 0xAC00 && cp <= 0xD7A3) || (cp >= 0x3131 && cp <= 0x318E) || (cp >= 0x1100 && cp <= 0x11FF)) h++;
+            }
+        }
+        l.onIme(kind, n, h);
+    }
+
     /**
      * Convert a view position to X screen coordinates (clamped), or null before the first frame.
      * 뷰 좌표를 X 화면 좌표로 바꿈(범위 안으로 제한). 첫 프레임 전에는 null
@@ -236,6 +264,7 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         public boolean commitText(CharSequence text, int newCursorPosition) {
             // The committed text replaces the composing one / 확정된 글자가 조합 중인 글자를 대신함
             composing = "";
+            ime("확정", text);
             sendChars(text);
             return true;
         }
@@ -243,6 +272,7 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
         @Override
         public boolean setComposingText(CharSequence text, int newCursorPosition) {
             composing = text == null ? "" : text.toString();
+            ime("조합", text);
             return true;
         }
 
@@ -251,6 +281,7 @@ public class FramebufferView extends GLSurfaceView implements GLSurfaceView.Rend
             // Keyboard closed or composition ended: send what was composed / 키보드 닫힘·조합 끝: 조합한 것을 보냄
             String c = composing;
             composing = "";
+            ime("조합 끝", c);
             sendChars(c);
             return true;
         }

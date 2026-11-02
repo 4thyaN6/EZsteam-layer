@@ -323,9 +323,34 @@ public final class XTestClient implements Closeable {
         m.put((byte) 100).put((byte) 1).putShort((short) 4).put((byte) kc).put((byte) 2).putShort((short) 0);
         m.putInt(keysym).putInt(keysym);
         send(m.array(), null);
+        // First few characters of a session: read the mapping back (GetKeyboardMapping) and log
+        // whether the server kept it. Why: Korean from the soft keyboard did not appear in Steam
+        // chat on Xwayland (user 2026-11-02; it worked on Xvfb). Only the script class is logged,
+        // never the character / 세션의 처음 몇 글자: 배치를 다시 읽어(GetKeyboardMapping) 서버가 유지했는지
+        // 기록함. 이유: Xwayland에서 소프트 키보드 한글이 Steam 채팅에 나오지 않았음(사용자 2026-11-02, Xvfb에서는
+        // 됐음). 글자 자체는 남기지 않고 문자 종류만 기록함
+        if (checksLeft > 0 && log != null) {
+            checksLeft--;
+            final int want = keysym, code = kc;
+            final String kind = codePoint >= 0xAC00 && codePoint <= 0xD7A3 ? "한글 음절"
+                    : codePoint >= 0x3131 && codePoint <= 0x318E ? "한글 자모" : "기타 문자";
+            ByteBuffer g = le(8);
+            g.put((byte) 101).put((byte) 0).putShort((short) 2).put((byte) kc).put((byte) 1).putShort((short) 0);
+            send(g.array(), reply -> {
+                ByteBuffer rb = ByteBuffer.wrap(reply).order(ByteOrder.LITTLE_ENDIAN);
+                int per = reply[1] & 0xff;
+                int got = reply.length >= 36 && per > 0 ? rb.getInt(32) : 0;
+                Log l = log;
+                if (l != null) l.line("XTEST 키 없는 글자(" + kind + ") 키코드 " + code + ": 배치 "
+                        + (got == want ? "유지됨" : String.format(java.util.Locale.ROOT, "다름 (기대 0x%x, 서버 0x%x, keysym %d개)", want, got, per)));
+            });
+        }
         fake(KEY_PRESS, kc, 0, 0);
         fake(KEY_RELEASE, kc, 0, 0);
     }
+
+    /** Mapping checks left this session (typeChar) / 이번 세션에 남은 배치 확인 횟수(typeChar) */
+    private int checksLeft = 3;
 
     /**
      * Give the keyboard focus to the top-level window under the pointer, the way a window manager

@@ -131,6 +131,8 @@ public class DisplayActivity extends Activity {
      *  first records / 녹음 스트림(Pulse·ALSA)용 휴대폰 마이크. 프로그램이 처음 녹음할 때 RECORD_AUDIO를 물음 */
     private volatile app.ezsteam.runtime.MicCapture mic;
     private static final int REQ_MIC = 41;
+    /** Soft keyboard log lines written this session / 이번 세션에 쓴 소프트 키보드 로그 줄 수 */
+    private int imeLogged;
     /** Game frame path check, app side (answers ezs-present-probe) / 게임 프레임 경로 확인의 앱 쪽(ezs-present-probe에 답함) */
     private volatile app.ezsteam.runtime.PresentProbe present;
     /** Game pad input held back: windows cover the game (direct path) / Steam menu raised by HOME
@@ -836,6 +838,17 @@ public class DisplayActivity extends Activity {
             XTestClient x = xtest;
             if (x != null) x.typeChar(cp);
             lastKey = new String(Character.toChars(cp));
+        });
+        // Soft keyboard calls in the log (kind and counts only, never the text), first 80 of a
+        // session: Korean did not reach Steam chat (2026-11-02), this shows whether the keyboard
+        // composed and committed Hangul at all
+        // 소프트 키보드 호출을 로그에 남김(종류와 개수만, 글자는 남기지 않음), 세션의 처음 80개: Steam 채팅에 한글이
+        // 들어가지 않았음(2026-11-02). 키보드가 한글을 조합·확정했는지부터 보여 줌
+        view.setImeListener((kind, chars, hangul) -> {
+            if (imeLogged < 80) {
+                imeLogged++;
+                log("IME " + kind + " " + chars + "글자 (한글 " + hangul + ")");
+            }
         });
         view.setOnTouchListener((v, e) -> onTouch(e));
         // Physical mouse: hover moves, wheel and button changes (not only while a button is held),

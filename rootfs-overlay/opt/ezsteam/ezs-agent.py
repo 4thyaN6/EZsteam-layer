@@ -695,7 +695,12 @@ def start_bus():
 
 DT_IN = "/tmp/ezs-devtools.in"
 DT_OUT = "/tmp/ezs-devtools.out"
-MENU_PAGES = ("MainMenu", "QuickAccess")
+# notificationtoasts: the chat/notification toast popup (Big Picture "notificationtoasts_uidN", desktop
+# "notificationtoasts_N_desktop", web helper log). It showed a white frame around the toast on GL
+# (user 2026-11-02), the same uncleared transparent part as the menus (inference)
+# notificationtoasts: 채팅·알림 토스트 팝업(빅픽처 "notificationtoasts_uidN", 데스크톱 "notificationtoasts_N_desktop",
+# 웹 도우미 로그). GL에서 토스트 둘레에 흰 테두리가 보였음(사용자 2026-11-02). 메뉴와 같은, 지워지지 않은 투명 부분(추론)
+MENU_PAGES = ("MainMenu", "QuickAccess", "notificationtoasts")
 # Sound check on the same pipe: the page that loads the UI sounds (deck_ui_*.wav, web helper log)
 # is SharedJSContext; its Web Audio contexts and their state (running/suspended/closed) are logged.
 # Why: Big Picture played only the start sound; Chromium opened no further output for the move
