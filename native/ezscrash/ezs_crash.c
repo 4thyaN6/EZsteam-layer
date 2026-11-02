@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/syscall.h>
+#include <time.h>
 #include <ucontext.h>
 #include <unistd.h>
 
@@ -90,8 +91,16 @@ static void report(int fd, int sig, siginfo_t *si, void *ucv)
         if (nl) *nl = 0;
         close(cf);
     }
-    out(fd, "ezs-crash: %s pid %d tid %ld signal %d (%s) code %d addr %p\n", comm, getpid(),
-        (long)syscall(SYS_gettid), sig, strsignal(sig), si ? si->si_code : 0, si ? si->si_addr : NULL);
+    /* Time of the crash, UTC, worked out without library calls (safe in a signal handler), so a
+       crash can be matched with what the user did (Steam UI restarted on store pages, 2026-11-02)
+       크래시 시각(UTC), 라이브러리 호출 없이 계산함(시그널 처리기 안에서 안전). 사용자가 한 일과 맞춰 보기 위함(상점 페이지에서
+       Steam 화면이 다시 시작됨, 2026-11-02) */
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    long day = (long)(ts.tv_sec % 86400);
+    out(fd, "ezs-crash: %s pid %d tid %ld signal %d (%s) code %d addr %p at %02ld:%02ld:%02ld UTC (epoch %ld)\n", comm, getpid(),
+        (long)syscall(SYS_gettid), sig, strsignal(sig), si ? si->si_code : 0, si ? si->si_addr : NULL,
+        day / 3600, (day / 60) % 60, day % 60, (long)ts.tv_sec);
     void *pc = NULL;
 #if defined(__aarch64__)
     if (ucv) pc = (void *)((ucontext_t *)ucv)->uc_mcontext.pc;
