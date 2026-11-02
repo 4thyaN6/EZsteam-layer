@@ -973,6 +973,26 @@ def nm_scan():
         log("NM 스캔 실패: %s" % e)
 
 
+def nm_check():
+    """What libnm itself sees on this bus, with the calls the Steam client makes (ezs-nmcheck.py,
+    one short process); its lines and any libnm warnings go to the log
+    이 버스에서 libnm 자신이 보는 것을 Steam 클라이언트와 같은 호출로 읽음(ezs-nmcheck.py, 짧은 프로세스 하나).
+    그 줄과 libnm 경고를 로그에 남김"""
+    try:
+        r = subprocess.run([sys.executable, "/opt/ezsteam/ezs-nmcheck.py"], capture_output=True, timeout=30)
+        for line in r.stdout.decode(errors="replace").splitlines():
+            say(line)
+        for line in r.stderr.decode(errors="replace").splitlines()[:20]:
+            say("ezs-nmcheck: (stderr) " + line[:200])
+    except (OSError, subprocess.SubprocessError) as e:
+        log("NM 확인 실패: %s" % e)
+
+
+def nm_scan_and_check():
+    nm_scan()
+    nm_check()
+
+
 def steam_loop(loop):
     log_path = os.path.join(os.environ.get("HOME", "/home/steam"), "ezs-logs", "steam.log")
     n = 0
@@ -1055,7 +1075,7 @@ def main():
         log("메뉴 바탕: 끔 (no-menubg)")
     threading.Thread(target=steam_loop, args=(loop,), daemon=True).start()
     # Low-priority one-off scan after the start settled / 시작이 안정된 뒤 한 번 도는 낮은 우선순위 검사
-    threading.Thread(target=nm_scan, daemon=True).start()
+    threading.Thread(target=nm_scan_and_check, daemon=True).start()
     loop.run()
     server.stop()
 

@@ -182,11 +182,44 @@ jobs:
     # rootfs' Debian release. The layer only; shaders come from the user's own Lossless.dll.
     # LSFG 프레임 생성 Vulkan 레이어(lsfg-vk 1.0.0 계열, MIT), glibc aarch64, rootfs와 같은 데비안
     # 릴리스. 레이어만 빌드함. 셰이더는 사용자 자신의 Lossless.dll에서 옴
+    # Built once per version of the build script and patches, then kept as a pre-release
+    # "lsfg-<hash>" and only downloaded: the layer is a fixed lineage that is not updated, and a
+    # rebuild on every push depended on five outside repositories (one of them, dxbc, disappeared
+    # and broke the build, 2026-11-02)
+    # 빌드 스크립트와 패치의 판마다 한 번만 빌드하고 사전 출시 "lsfg-<해시>"로 보관한 뒤 받기만 함: 레이어는 갱신하지
+    # 않는 고정 계열이고, 푸시마다 다시 빌드하면 바깥 저장소 다섯 곳에 기대게 됨(그중 dxbc가 사라져 빌드가 깨졌음,
+    # 2026-11-02)
     runs-on: ubuntu-24.04-arm
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
-      - name: lsfg layer
-        run: docker run --rm -v "$PWD:/src" -w /src debian:trixie sh tools/build-lsfg.sh out-lsfg
+      - id: key
+        name: lsfg version key
+        # Hash of everything that decides the build / 빌드를 정하는 모든 것의 해시
+        run: echo "key=$(cat tools/build-lsfg.sh tools/patches/lsfg-*.patch | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+      - name: lsfg layer (kept build or new build)
+        run: |
+          TAG="lsfg-${{ steps.key.outputs.key }}"
+          mkdir -p out-lsfg dl-lsfg
+          if gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p lsfg.tar.gz -p lsfg.tar.gz.sha256 -D dl-lsfg 2>/dev/null; then
+            # Kept build: checked against its own checksum, then unpacked
+            # 보관한 빌드: 자체 체크섬으로 확인한 뒤 풂
+            (cd dl-lsfg && sha256sum -c lsfg.tar.gz.sha256)
+            tar -xzf dl-lsfg/lsfg.tar.gz -C out-lsfg
+            echo "lsfg: kept build $TAG"
+          else
+            docker run --rm -v "$PWD:/src" -w /src debian:trixie sh tools/build-lsfg.sh out-lsfg
+            tar -czf dl-lsfg/lsfg.tar.gz -C out-lsfg .
+            (cd dl-lsfg && sha256sum lsfg.tar.gz > lsfg.tar.gz.sha256)
+            # Another run may have kept it meanwhile: then this upload is skipped
+            # 그사이 다른 실행이 보관했으면 이 올리기는 건너뜀
+            gh release create "$TAG" dl-lsfg/lsfg.tar.gz dl-lsfg/lsfg.tar.gz.sha256 -R "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --prerelease --latest=false --title "$TAG (LSFG layer build)" \
+              --notes "LSFG layer (lsfg-vk 1.0.0 lineage, MIT; dxbc zlib), built by tools/build-lsfg.sh. Licenses and sources inside (licenses/, source.txt)." \
+              || echo "lsfg: $TAG already kept by another run"
+          fi
+          cat out-lsfg/source.txt
       - uses: actions/upload-artifact@v4
         with:
           name: lsfg
