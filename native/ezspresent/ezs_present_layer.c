@@ -54,6 +54,22 @@ typedef struct {
 } EzsXcbSurfaceCreateInfo;
 typedef VkResult (*PFN_ezsCreateSurface)(VkInstance, const void *, const VkAllocationCallbacks *, VkSurfaceKHR *);
 
+/* VK_KHR_present_wait2 (Vulkan headers 1.4.317 and later). Declared here when the build headers
+ * are older, same layout as the Vulkan registry. DXVK 2.7 calls it instead of vkWaitForPresentKHR
+ * when the device has it.
+ * VK_KHR_present_wait2(Vulkan 헤더 1.4.317 이후). 빌드 헤더가 더 오래되면 여기서 선언함(Vulkan 레지스트리와
+ * 같은 배치). 장치에 있으면 DXVK 2.7은 vkWaitForPresentKHR 대신 이것을 부름 */
+#ifndef VK_KHR_present_wait2
+typedef struct VkPresentWait2InfoKHR {
+    VkStructureType sType;
+    const void *pNext;
+    uint64_t presentId;
+    uint64_t timeout;
+} VkPresentWait2InfoKHR;
+typedef VkResult (VKAPI_PTR *PFN_vkWaitForPresent2KHR)(VkDevice device, VkSwapchainKHR swapchain,
+                                                     const VkPresentWait2InfoKHR *pPresentWait2Info);
+#endif
+
 /* Dispatch key of a dispatchable handle (loader's table pointer) / 디스패치 키(로더 표 포인터) */
 static void *key_of(const void *h)
 {
@@ -168,6 +184,7 @@ struct dev {
     DF(DestroyDevice); DF(GetDeviceQueue); DF(GetDeviceQueue2);
     DF(CreateSwapchainKHR); DF(DestroySwapchainKHR); DF(GetSwapchainImagesKHR); DF(AcquireNextImageKHR);
     DF(AcquireNextImage2KHR); DF(QueuePresentKHR); DF(GetSwapchainStatusKHR); DF(WaitForPresentKHR);
+    DF(WaitForPresent2KHR);
     DF(ReleaseSwapchainImagesEXT);
     DF(CreateImage); DF(DestroyImage); DF(GetImageMemoryRequirements); DF(AllocateMemory); DF(FreeMemory);
     DF(BindImageMemory); DF(GetMemoryFdPropertiesKHR); DF(ImportSemaphoreFdKHR); DF(ImportFenceFdKHR);
@@ -579,6 +596,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL ezs_CreateDevice(VkPhysicalDevice p, const
     DL(DestroyDevice); DL(GetDeviceQueue); DL(GetDeviceQueue2);
     DL(CreateSwapchainKHR); DL(DestroySwapchainKHR); DL(GetSwapchainImagesKHR); DL(AcquireNextImageKHR);
     DL(AcquireNextImage2KHR); DL(QueuePresentKHR); DL(GetSwapchainStatusKHR); DL(WaitForPresentKHR);
+    DL(WaitForPresent2KHR);
     DL(ReleaseSwapchainImagesEXT);
     DL(CreateImage); DL(DestroyImage); DL(GetImageMemoryRequirements); DL(AllocateMemory); DL(FreeMemory);
     DL(BindImageMemory); DL(GetMemoryFdPropertiesKHR); DL(ImportSemaphoreFdKHR); DL(ImportFenceFdKHR);
@@ -1146,6 +1164,21 @@ static VKAPI_ATTR VkResult VKAPI_CALL ezs_WaitForPresentKHR(VkDevice h, VkSwapch
     return sc->dead ? VK_ERROR_OUT_OF_DATE_KHR : VK_SUCCESS;
 }
 
+/* Same for VK_KHR_present_wait2. Without this hook the swapchain handle made by the layer reached
+ * the driver and faulted in FIFO mode (device test 2026-11-09: "vkWaitForPresent2KHR Exception
+ * 0xc0000005" right after the first frame; no fault with IMMEDIATE, where DXVK does not wait).
+ * VK_KHR_present_wait2도 같음. 이 가로채기가 없으면 레이어가 만든 swapchain 핸들이 드라이버까지 내려가
+ * FIFO 방식에서 오류가 났음(기기 시험 2026-11-09: 첫 프레임 직후 "vkWaitForPresent2KHR Exception
+ * 0xc0000005". DXVK가 기다리지 않는 IMMEDIATE에서는 오류 없음) */
+static VKAPI_ATTR VkResult VKAPI_CALL ezs_WaitForPresent2KHR(VkDevice h, VkSwapchainKHR s,
+                                                            const VkPresentWait2InfoKHR *wi)
+{
+    struct dev *d = dev_of(h);
+    struct swc *sc = swc_of(s);
+    if (!sc) return d->WaitForPresent2KHR ? d->WaitForPresent2KHR(h, s, wi) : VK_SUCCESS;
+    return sc->dead ? VK_ERROR_OUT_OF_DATE_KHR : VK_SUCCESS;
+}
+
 /* Acquired but never presented images go back to the free list / 받았지만 present하지 않은 이미지는 다시 비움 */
 static VKAPI_ATTR VkResult VKAPI_CALL ezs_ReleaseSwapchainImagesEXT(VkDevice h, const VkReleaseSwapchainImagesInfoEXT *ri)
 {
@@ -1168,7 +1201,7 @@ static PFN_vkVoidFunction device_hook(const char *n)
     H(GetDeviceQueue); H(GetDeviceQueue2); H(DestroyDevice);
     H(CreateSwapchainKHR); H(DestroySwapchainKHR); H(GetSwapchainImagesKHR); H(AcquireNextImageKHR);
     H(AcquireNextImage2KHR); H(QueuePresentKHR); H(GetSwapchainStatusKHR); H(WaitForPresentKHR);
-    H(ReleaseSwapchainImagesEXT);
+    H(WaitForPresent2KHR); H(ReleaseSwapchainImagesEXT);
 #undef H
     if (!strcmp(n, "vkReleaseSwapchainImagesKHR")) return (PFN_vkVoidFunction)ezs_ReleaseSwapchainImagesEXT;
     return NULL;
