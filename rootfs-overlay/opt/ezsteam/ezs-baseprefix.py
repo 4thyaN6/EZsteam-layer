@@ -260,6 +260,115 @@ def unix_exe(installdir, exe):
     return path
 
 
+# One step at a time with room for it (2026-11-11): the first session of a new install ran the
+# four Visual C++ steps while the Steam client was starting, and on the last step Android killed
+# the Steam session's PRoot for going over its 32 child-process limit (all apps together). Each
+# step is one Wine session of about 15-20 processes, so in the app's own steps (prepare, directx)
+# a step only starts while this app has at most GATE_MAX processes; otherwise it waits, and after
+# GATE_WAIT seconds the rest is left for a later run (not marked failed). A game start (ensure) is
+# not held up. Only this app's own processes are visible in /proc (Android shows each app its own
+# uid only), so other apps' share of the 32 is not seen.
+# 여유가 있을 때 한 단계씩(2026-11-11): 새로 설치한 앱의 첫 세션에서 Steam 클라이언트가 켜지는 동안
+# Visual C++ 4단계가 돌았고, 마지막 단계에서 안드로이드가 자식 프로세스 한도 32개(모든 앱 합계)를 넘었다며
+# Steam 세션의 PRoot를 종료했음. 단계 하나가 Wine 세션 하나(15~20개)라서, 앱 자체 단계(prepare, directx)에서는
+# 이 앱의 프로세스가 GATE_MAX개 이하일 때만 단계를 시작함. 아니면 기다리고, GATE_WAIT초가 지나면 나머지를
+# 다음 실행으로 미룸(실패로 기록하지 않음). 게임 시작(ensure)은 막지 않음. /proc에는 이 앱 자신의 프로세스만
+# 보이므로(안드로이드는 앱마다 자기 uid만 보여 줌) 32개 중 다른 앱 몫은 보이지 않음
+GATE = False
+# Set when a step was left for later in this run / 이번 실행에서 단계를 다음으로 미뤘으면 정함
+deferred = False
+GATE_MAX = int(os.environ.get("EZS_PROC_GATE", "14"))
+GATE_WAIT = int(os.environ.get("EZS_PROC_GATE_WAIT", "600"))
+
+
+def own_procs():
+    """Processes of this app's uid, minus the app itself. The owner is compared with /proc/self's
+    (both seen through PRoot the same way), because a process with the readproc group sees every
+    process (run-as saw 862, 2026-11-11)
+    이 앱 uid의 프로세스 수, 앱 자신은 뺌. 소유자를 /proc/self와 비교함(둘 다 PRoot를 같은 방식으로 거쳐
+    보임). readproc 그룹이 있는 프로세스는 모든 프로세스를 봄(run-as에서 862개, 2026-11-11)"""
+    try:
+        uid = os.stat("/proc/self").st_uid
+        n = 0
+        for name in os.listdir("/proc"):
+            if not name.isdigit():
+                continue
+            try:
+                if os.stat("/proc/" + name).st_uid == uid:
+                    n += 1
+            except OSError:
+                pass  # ended meanwhile / 그사이 끝남
+        return max(0, n - 1)
+    except OSError:
+        return 0
+
+
+# Inside the base lock nothing waits: a step without room ends the pass (busy), the lock is let
+# go and the wait happens outside it, so a game start (ensure, same lock) is not held up (Codex
+# P2 on #26). The wait time counts from the first wait of the run.
+# 기본 prefix 잠금 안에서는 기다리지 않음: 여유가 없는 단계는 그 회차를 끝내고(busy) 잠금을 놓은 뒤
+# 잠금 밖에서 기다림. 그래서 게임 시작(ensure, 같은 잠금)이 막히지 않음(#26 Codex P2). 기다린 시간은
+# 이번 실행의 첫 대기부터 셈
+HOLDING = False
+busy = False
+wait_t0 = None
+
+
+def room(what):
+    """True = the step may start now. Without room: inside the lock False with busy set; outside
+    it, wait (False = no room in time, deferred)
+    True = 지금 단계를 시작해도 됨. 여유가 없으면: 잠금 안에서는 busy를 정하고 False. 잠금 밖에서는
+    기다림(False = 제때 여유가 없어 미룸)"""
+    global busy
+    if not GATE:
+        return True
+    if deferred:
+        return False
+    n = own_procs()
+    if n <= GATE_MAX:
+        return True
+    if HOLDING:
+        busy = True
+        say("waiting: process room, %d > %d before %s" % (n, GATE_MAX, what))
+        return False
+    return wait_room(what)
+
+
+def wait_room(what):
+    """Wait outside the lock until there is room / 잠금 밖에서 여유가 생길 때까지 기다림"""
+    global deferred, wait_t0
+    if wait_t0 is None:
+        wait_t0 = time.time()
+    while True:
+        n = own_procs()
+        if n <= GATE_MAX:
+            say("room: %d process(es), %s after %.0f s" % (n, what, time.time() - wait_t0))
+            return True
+        if time.time() - wait_t0 > GATE_WAIT:
+            deferred = True
+            say("deferred: no process room for %s (%d process(es))" % (what, n))
+            return False
+        time.sleep(3)
+
+
+def stepwise_up_to_date(proton_dir):
+    """bring_up_to_date in passes under the lock, waiting for room between them outside it; the
+    mark, or None / 잠금 안에서 회차별로 bring_up_to_date, 회차 사이의 여유 대기는 잠금 밖에서. 표식 또는 None"""
+    global HOLDING, busy
+    while True:
+        busy = False
+        with locked():
+            HOLDING = True
+            try:
+                mark = bring_up_to_date(proton_dir)
+            finally:
+                HOLDING = False
+        if not busy:
+            return mark
+        if not wait_room("next step"):
+            return None
+
+
 def proton_run(proton_dir, compat, args, env_extra=None):
     """Run "proton run <args...>" on the prefix in <compat>; exit code / exit 코드"""
     env = dict(os.environ)
@@ -337,6 +446,8 @@ def write_mark(mark):
 
 def build(proton_dir, version):
     """New base prefix with Proton itself / Proton으로 새 기본 prefix를 만듦"""
+    if not room("build"):
+        return False
     say("build start (한 번만): Proton " + version)
     tmp = BASE + ".tmp"
     shutil.rmtree(tmp, ignore_errors=True)
@@ -369,6 +480,8 @@ def add_redists(proton_dir, mark, late, target=BASE):
     if not steps and not late:
         say("redist: Steamworks Shared 없음 (재배포 없이 사용)")
     for s in todo:
+        if not room(s["id"]):
+            break
         t0 = time.time()
         say("redist start: " + s["id"])
         ok = True
@@ -525,13 +638,22 @@ def bring_up_to_date(proton_dir):
     표식을 돌려줌. 기본 prefix를 못 만들면 None"""
     version = proton_version(proton_dir)
     mark = read_mark()
-    if mark is None or mark.get("proton") != version or not os.path.isfile(os.path.join(BASE, "version")):
+    rebuild = mark is None or mark.get("proton") != version or not os.path.isfile(os.path.join(BASE, "version"))
+    # Step count for the app's progress card / 앱 진행 카드용 단계 수
+    done = set() if rebuild else set(mark["steps"]) | set(mark.get("failed", []))
+    n = sum(1 for s in redist_steps() if not is_late(s) and s["id"] not in done)
+    say("plan: %d step(s)" % (n + (1 if rebuild else 0)))
+    if rebuild:
         if mark is not None:
             say("rebuild: Proton %s -> %s" % (mark.get("proton"), version))
         if not build(proton_dir, version):
             return None
         mark = read_mark()
     add_redists(proton_dir, mark, False)
+    # A step had no room: no more Wine in this pass, the DirectX record included (Codex P1 on #26)
+    # 여유가 없던 단계가 있음: 이번 회차에는 Wine을 더 돌리지 않음, DirectX 기록 포함(#26 Codex P1)
+    if busy or deferred:
+        return mark
     mark_late(proton_dir, mark)
     # A base that got DirectX in the background before it became optional: mark it as installed
     # 선택 사항이 되기 전에 백그라운드로 DirectX를 받은 기본 prefix: 설치됨으로 표시
@@ -549,6 +671,9 @@ def mark_late(proton_dir, mark):
     """
     todo = [s for s in late_todo(mark) if s["id"] not in mark.get("marked", [])]
     if not todo:
+        return
+    # The record is a Wine run too / 기록도 Wine 실행임
+    if not room("directx record"):
         return
     if write_hasrun(proton_dir, BASE, [(s["hasrun"], s["name"]) for s in todo if s["hasrun"]]):
         mark.setdefault("marked", []).extend(s["id"] for s in todo)
@@ -597,6 +722,11 @@ def late(proton_dir):
         say("late start (백그라운드, 게임 바로 실행 가능): " + ", ".join(s["id"] for s in todo))
         t0 = time.time()
         add_redists(proton_dir, mark, True, STAGE)
+        if deferred:
+            # Not all of DirectX went in: drop the copy, a later run starts it again
+            # DirectX가 다 들어가지 않음: 복사본을 버리고 다음 실행에서 다시 시작함
+            shutil.rmtree(STAGE, ignore_errors=True)
+            return
         with locked():
             now = read_mark()
             # The base changed meanwhile (rebuilt, or new steps): drop the copy, next run retries
@@ -638,6 +768,8 @@ def backfill(proton_dir):
     games = [g for g in games if os.path.isfile(os.path.join(g, "version"))
              and not os.path.isfile(os.path.join(g, DX_DONE))]
     for i, compat in enumerate(games, 1):
+        if not room("backfill " + compat):
+            return
         if prefix_busy(compat):
             say("backfill later (게임 실행 중): " + compat)
             continue
@@ -664,13 +796,19 @@ def prepare(proton_dir):
     if not proton_dir or not os.path.isfile(os.path.join(proton_dir, "proton")):
         say("prepare: Proton not installed yet")
         return 0
-    with locked():
-        say("prepare start: Proton " + proton_version(proton_dir))
-        mark = bring_up_to_date(proton_dir)
-        if mark is None:
-            return 0
-        say("prepare done: %d redist step(s) %s" % (len(mark["steps"]), ", ".join(mark["steps"]) or "-"))
-    if dx_wanted():
+    say("prepare start: Proton " + proton_version(proton_dir))
+    mark = stepwise_up_to_date(proton_dir)
+    if mark is None:
+        return 0
+    say("prepare done: %d redist step(s) %s" % (len(mark["steps"]), ", ".join(mark["steps"]) or "-"))
+    # Before Steam starts the app asks for the base only; DirectX (about 3.5 minutes) follows in
+    # the session, step by step / Steam 시작 전에는 앱이 기본 prefix만 요청함. DirectX(약 3분 30초)는
+    # 세션 안에서 단계별로 이어서 함
+    if os.environ.get("EZS_BASE_NO_LATE") == "1":
+        if dx_wanted():
+            say("late later: DirectX after Steam has started")
+        return 0
+    if dx_wanted() and not deferred:
         late(proton_dir)
     return 0
 
@@ -683,8 +821,7 @@ def directx(proton_dir):
         return 0
     os.makedirs(os.path.dirname(WANTED), exist_ok=True)
     open(WANTED, "w").close()
-    with locked():
-        mark = bring_up_to_date(proton_dir)
+    mark = stepwise_up_to_date(proton_dir)
     if mark is None:
         return 0
     if not [s for s in redist_steps() if is_late(s)]:
@@ -732,6 +869,10 @@ def main():
         print("usage: ezs-baseprefix.py prepare|directx [<Proton dir>] | ensure <compat data dir> <Proton dir>",
               file=sys.stderr)
         return 2
+    global GATE
+    # The app's own runs wait for room; a game start is not held up
+    # 앱 자체 실행만 여유를 기다림. 게임 시작은 막지 않음
+    GATE = mode in ("prepare", "directx")
     try:
         if mode == "prepare":
             return prepare(sys.argv[2] if len(sys.argv) == 3 else find_proton())

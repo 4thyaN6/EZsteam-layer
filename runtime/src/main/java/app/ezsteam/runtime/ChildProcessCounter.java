@@ -74,6 +74,40 @@ public final class ChildProcessCounter {
     }
 
     /**
+     * Every process of this app's uid except the app itself: the measure closest to how Android
+     * counts this app's share of the 32 child-process limit. descendants() follows parent ids and
+     * misses processes that left their parent (wineserver and Wine services move to init): the
+     * first-run log said "최대 16개" while Android killed the session for going over 32
+     * (2026-11-11). Other apps' processes, which count towards the same 32, are not visible.
+     * 앱 자신을 뺀 이 앱 uid의 모든 프로세스: 안드로이드가 32개 자식 프로세스 한도에서 이 앱 몫을 세는 방식에
+     * 가장 가까운 값. descendants()는 부모 id를 따라가서 부모를 떠난 프로세스(wineserver와 Wine 서비스는 init
+     * 아래로 감)를 놓침: 첫 실행 로그는 "최대 16개"였지만 안드로이드는 32개를 넘었다며 세션을 종료했음
+     * (2026-11-11). 같은 32개에 들어가는 다른 앱의 프로세스는 보이지 않음
+     */
+    public static int ownUidCount() {
+        int uid = android.os.Process.myUid();
+        int self = android.os.Process.myPid();
+        int n = 0;
+        File[] dirs = new File("/proc").listFiles();
+        if (dirs == null) return 0;
+        for (File d : dirs) {
+            int pid;
+            try {
+                pid = Integer.parseInt(d.getName());
+            } catch (NumberFormatException e) {
+                continue;
+            }
+            if (pid == self) continue;
+            try {
+                if (android.system.Os.stat(d.getPath()).st_uid == uid) n++;
+            } catch (android.system.ErrnoException e) {
+                // Ended meanwhile / 그사이 끝남
+            }
+        }
+        return n;
+    }
+
+    /**
      * All descendants of rootPid (normally the app's own pid), parents before children.
      * rootPid(보통 앱 자신의 pid)의 모든 자손, 부모가 먼저 오도록 정렬함
      */
