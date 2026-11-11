@@ -346,9 +346,68 @@ def wait_room(what):
             return True
         if time.time() - wait_t0 > GATE_WAIT:
             deferred = True
+            mark_pending()
             say("deferred: no process room for %s (%d process(es))" % (what, n))
             return False
         time.sleep(3)
+
+
+# Work left for later, kept on disk: the app's own count of new redistributables goes by install
+# script, so a script with one step done and one deferred (x86 done, x64 not) looked finished and
+# the next start before Steam skipped it (Codex P2 on EZsteam-layer #2). The file is set on a
+# deferral and removed once a pass brings the base up to date; the app reads it.
+# 다음으로 미룬 일을 디스크에 남김: 앱은 새 재배포를 설치 스크립트 단위로 세므로, 단계 하나는 끝나고 하나는
+# 미뤄진 스크립트(x86 끝, x64 미룸)가 끝난 것으로 보여 다음 Steam 전 준비가 건너뛰었음(EZsteam-layer #2
+# Codex P2). 미룰 때 만들고, 기본 prefix를 최신으로 맞춘 회차가 지움. 앱이 읽음
+PENDING = os.path.join(os.path.dirname(BASE), "base-pending")
+
+
+def mark_pending():
+    try:
+        os.makedirs(os.path.dirname(PENDING), exist_ok=True)
+        open(PENDING, "w").close()
+    except OSError:
+        pass
+
+
+def clear_pending():
+    try:
+        os.unlink(PENDING)
+    except OSError:
+        pass
+
+
+def redist_readable():
+    """The redistributable list can be read now: the first library with Steamworks Shared has
+    usable files (no update running or paused); no Steamworks Shared anywhere = nothing to install
+    재배포 목록을 지금 읽을 수 있음: Steamworks Shared가 있는 첫 라이브러리의 파일을 쓸 수 있음(진행 중이거나
+    일시 정지한 업데이트 없음). 어디에도 Steamworks Shared가 없으면 설치할 것이 없음"""
+    for lib in LIBRARIES:
+        if os.path.isdir(os.path.join(lib, "common", "Steamworks Shared", "_CommonRedist")):
+            return shared_ready(lib)
+    return True
+
+
+def clear_pending_if_done(mark):
+    """
+    Remove base-pending only when the list could be read and every non-DirectX step is in the
+    mark (done or failed). While Steamworks Shared is updating, redist_steps() is empty and the
+    pass looked complete with the deferred x64 step still missing (Codex P2 on #27).
+    목록을 읽을 수 있고 DirectX가 아닌 모든 단계가 표식에 있을 때만(끝남 또는 실패) base-pending을 지움.
+    Steamworks Shared를 업데이트하는 동안 redist_steps()가 비어, 미룬 x64 단계가 남았는데도 회차가 끝난
+    것으로 보였음(#27 Codex P2)
+    """
+    if not os.path.isfile(PENDING):
+        return
+    if not redist_readable():
+        say("pending kept: Steamworks Shared not usable now (update running or paused)")
+        return
+    done = set(mark["steps"]) | set(mark.get("failed", []))
+    left = [s["id"] for s in redist_steps() if not is_late(s) and s["id"] not in done]
+    if left:
+        say("pending kept: %d step(s) left %s" % (len(left), ", ".join(left)))
+        return
+    clear_pending()
 
 
 def stepwise_up_to_date(proton_dir):
@@ -800,6 +859,7 @@ def prepare(proton_dir):
     mark = stepwise_up_to_date(proton_dir)
     if mark is None:
         return 0
+    clear_pending_if_done(mark)
     say("prepare done: %d redist step(s) %s" % (len(mark["steps"]), ", ".join(mark["steps"]) or "-"))
     # Before Steam starts the app asks for the base only; DirectX (about 3.5 minutes) follows in
     # the session, step by step / Steam 시작 전에는 앱이 기본 prefix만 요청함. DirectX(약 3분 30초)는
@@ -824,6 +884,7 @@ def directx(proton_dir):
     mark = stepwise_up_to_date(proton_dir)
     if mark is None:
         return 0
+    clear_pending_if_done(mark)
     if not [s for s in redist_steps() if is_late(s)]:
         say("dx: no DirectX installer yet (Steamworks Shared comes with the first game download)")
         return 0
