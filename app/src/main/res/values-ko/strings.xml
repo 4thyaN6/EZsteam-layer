@@ -11,6 +11,15 @@
     <string name="base_prepare_start">기본 환경 준비 시작</string>
     <string name="base_redist">기본 환경: 재배포 설치(한 번만)</string>
     <string name="base_vcredist">기본 환경: Visual C++ 설치(한 번만)</string>
+    <string name="base_card_title">Steam 시작 전 게임 실행 환경 준비</string>
+    <string name="base_card_build">기본 환경 만들기</string>
+    <string name="base_card_vcredist">Visual C++ %1$s 설치</string>
+    <string name="base_card_redist">재배포 %1$s 설치</string>
+    <string name="base_card_next">다음 단계로</string>
+    <string name="base_card_steps">단계 %1$d / %2$d · 하나씩 끝낸 뒤 Steam 시작</string>
+    <string name="base_card_room">프로세스 여유 기다리는 중 (%1$d개, 기준 %2$d개 이하)</string>
+    <string name="base_card_room_plain">프로세스 여유 기다리는 중</string>
+    <string name="base_card_deferred">여유 없음: 나머지는 나중에 함</string>
     <string name="btn_build_now">지금 만들기</string>
     <string name="btn_cancel">취소</string>
     <string name="btn_cef">CEF 절감</string>

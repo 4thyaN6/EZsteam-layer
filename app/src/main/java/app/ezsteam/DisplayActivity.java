@@ -77,6 +77,8 @@ public class DisplayActivity extends Activity {
     private LinearLayout setupPanel;
     private TextView setupTitle, setupDetail;
     private android.widget.ProgressBar setupBar;
+    /** Progress card for the base prefix steps before Steam starts / Steam 시작 전 기본 prefix 단계 진행 카드 */
+    private PrepCard prepCard;
     /** A Steam window has appeared since the last (re)start / 마지막 (재)시작 뒤 Steam 창이 나타났음 */
     private volatile boolean steamWindowSeen;
     /** Buttons, log and status strip / 버튼·로그·상태 띠 */
@@ -98,6 +100,8 @@ public class DisplayActivity extends Activity {
     private volatile String shaderLogged;
     /** Child processes now / most seen, free memory (monitor thread) / 현재·최대 자식 프로세스 수, 여유 메모리(감시 스레드) */
     private volatile int procNow, procMax;
+    /** Most processes of this app's uid seen (ChildProcessCounter.ownUidCount) / 본 앱 uid 프로세스 최대 수 */
+    private volatile int procUidMax;
 
     // ---- Performance HUD (detail mode) / 성능 HUD(자세히 모드) ----
     /** Performance display: 0 off, 1 strip, 2 HUD card / 성능 표시: 0 끔, 1 띠, 2 HUD 카드 */
@@ -794,6 +798,9 @@ public class DisplayActivity extends Activity {
         setupPanel.addView(setupDetail);
         root.addView(setupPanel, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
         buildLaunchCover(root);
+        // Base prefix steps before Steam starts / Steam 시작 전 기본 prefix 단계
+        prepCard = new PrepCard(this);
+        root.addView(prepCard, new FrameLayout.LayoutParams(-1, -1));
 
         // Corner button that opens the HOME menu by touch (no bar any more); small and faint so it
         // covers little of the Steam window / 터치로 HOME 메뉴를 여는 모서리 버튼(이제 막대 없음). Steam 창을
@@ -1243,6 +1250,11 @@ public class DisplayActivity extends Activity {
                 }
             }
             sessionConfig = c;
+            // Base prefix steps first, one at a time, then Steam (2026-11-11)
+            // 기본 prefix 단계를 먼저 하나씩, 그다음 Steam(2026-11-11)
+            if ("steam".equals(mode)) prepareBaseBeforeSteam(c);
+            if (finishing) return;
+            steamLaunched = true;
             watchNetwork(c.rootfs);
             Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/display.sh",
                     Arrays.asList(Integer.toString(w), Integer.toString(h), mode), null, null);
@@ -1261,8 +1273,8 @@ public class DisplayActivity extends Activity {
                     onSessionLine(line);
                 }
             }
-            log("exit=" + p.waitFor() + " (자식 프로세스 최대 " + procMax + "개, 여유 메모리 "
-                    + memFreeMb + " MB)");
+            log("exit=" + p.waitFor() + " (자식 프로세스 최대 " + procMax + "개, 앱 uid 기준 최대 " + procUidMax
+                    + "개, 여유 메모리 " + memFreeMb + " MB)");
         } catch (Throwable e) {
             log("ERROR " + e);
         }
@@ -2572,6 +2584,9 @@ public class DisplayActivity extends Activity {
                     procListAtMax = new java.text.SimpleDateFormat("HH:mm:ss", Locale.ROOT).format(new java.util.Date())
                             + " 기준\n" + procListNow;
                 }
+                // Uid count next to it (Q26: the two measures are kept apart) / 옆에 uid 기준 수(Q26: 두 지표를 구분함)
+                int uidNow = app.ezsteam.runtime.ChildProcessCounter.ownUidCount();
+                if (uidNow > procUidMax) procUidMax = uidNow;
                 am.getMemoryInfo(mi);
                 memFreeMb = mi.availMem >> 20;
                 // HUD card only while it is shown (PSS and grouping cost nothing when hidden)
@@ -3652,10 +3667,54 @@ public class DisplayActivity extends Activity {
         if (now - baseCheckMs < 15_000) return;
         baseCheckMs = now;
         GlibcLauncher.Config session = sessionConfig;
-        if (basePrepRunning || session == null || gameOf(ps) != null || prepKind != null) return;
+        // Not before Steam has been started: until then start() prepares it itself, before Steam
+        // 아직 Steam을 시작하기 전이면 하지 않음: 그때까지는 start()가 Steam보다 먼저 직접 준비함
+        if (!steamLaunched || basePrepRunning || session == null || gameOf(ps) != null || prepKind != null) return;
+        // Step by step (2026-11-11): only with room for the helper and one installer step; a busy
+        // Steam leaves it to the next start, before Steam. A rebuild the user asked for is not held
+        // here (ezs-baseprefix.py still waits for room before each step)
+        // 단계별(2026-11-11): 보조 실행과 설치 단계 하나가 들어갈 여유가 있을 때만. Steam이 바쁘면 다음 시작
+        // 때 Steam보다 먼저 함. 사용자가 요청한 다시 만들기는 여기서 막지 않음(ezs-baseprefix.py가 단계마다
+        // 여유를 기다림)
+        // What there is to do first, so "no room" is only logged when there is work (device run
+        // 2026-11-11 logged it with nothing to do) / 할 일을 먼저 봄. 할 일이 있을 때만 "여유 없음"을 남김(기기
+        // 실행 2026-11-11에서는 할 일 없이 남았음)
+        String why = baseLateLater ? "DirectX 이어서 (Steam 시작 뒤)" : baseWork(session, true);
+        if (why == null) return;
+        int own = app.ezsteam.runtime.ChildProcessCounter.ownUidCount();
+        if (own > BASE_START_MAX) {
+            if (!baseRoomLogged) {
+                baseRoomLogged = true;
+                log("기본 환경: " + why + ", 프로세스 여유 없음 (앱 uid " + own + "개 > " + BASE_START_MAX
+                        + "), 여유가 생기거나 다음 시작 때 Steam보다 먼저 준비");
+            }
+            return;
+        }
+        baseLateLater = false;
+        startBasePrepare(why);
+    }
+
+    /** Most processes of this app's uid for the base prefix helper to start in a session: it adds
+     *  about 4, and ezs-baseprefix.py starts a step at 14 or fewer / 세션 안에서 기본 prefix 보조 실행을
+     *  시작할 수 있는 앱 uid 프로세스 최대 수: 보조 실행이 4개쯤 더하고, ezs-baseprefix.py는 14개 이하에서 단계를 시작함 */
+    private static final int BASE_START_MAX = 10;
+    /** Steam has been started in this session / 이번 세션에서 Steam을 시작했음 */
+    private volatile boolean steamLaunched;
+    private volatile boolean baseRoomLogged;
+    /** DirectX was left for after Steam's start / DirectX를 Steam 시작 뒤로 미뤘음 */
+    private volatile boolean baseLateLater;
+
+    /**
+     * Why the base prefix needs work now, or null. inSession: the Steam session runs (asks before
+     * a rebuild for a new Proton; DirectX for waiting games); otherwise the check before Steam,
+     * which only builds it or adds new redistributables.
+     * 지금 기본 prefix에 할 일이 있는 이유, 없으면 null. inSession: Steam 세션이 도는 중(새 Proton이면 다시
+     * 만들기 전에 물어봄. 기다리는 게임의 DirectX). 아니면 Steam 전 확인으로, 만들기나 새 재배포 추가만 함
+     */
+    private String baseWork(GlibcLauncher.Config session, boolean inSession) {
         File steam = new File(session.rootfs, "home/steam/.local/share/Steam");
         File proton = findProton(steam);
-        if (proton == null) return;
+        if (proton == null) return null;
         String version = readText(new File(proton, "version")).trim();
         File base = new File(session.rootfs, "home/steam/.local/share/ezsteam/base-prefix");
         org.json.JSONObject mark = null;
@@ -3666,26 +3725,90 @@ public class DisplayActivity extends Activity {
             // Unreadable mark: treated as missing / 읽을 수 없는 표식: 없는 것으로 봄
         }
         if (mark == null || !new File(base, "version").isFile()) {
-            startBasePrepare("처음 준비 (Proton " + version + ")");
-            return;
+            return "처음 준비 (Proton " + version + ")";
         }
         String built = mark.optString("proton", "");
         if (!built.equals(version)) {
-            if (!version.equals(baseAskedFor)) {
+            if (inSession && !version.equals(baseAskedFor)) {
                 baseAskedFor = version;
                 askBaseRebuild(built, version);
             }
-            return;
+            return null;
         }
         int fresh = newRedists(session, mark);
-        if (fresh > 0) {
-            startBasePrepare("새 재배포 " + fresh + "개");
-            return;
-        }
+        if (fresh > 0) return "새 재배포 " + fresh + "개";
+        if (!inSession) return null;
         // Game prefixes still waiting for DirectX (copied while it was being installed)
         // 아직 DirectX를 기다리는 게임 prefix(설치 중에 복사된 것)
         String pending = readText(new File(session.rootfs, "home/steam/.local/share/ezsteam/dx-pending.txt")).trim();
-        if (!pending.isEmpty()) startBasePrepare("DirectX 추가 대기 게임 " + pending.split("\n").length + "개");
+        if (!pending.isEmpty()) return "DirectX 추가 대기 게임 " + pending.split("\n").length + "개";
+        // DirectX asked for ([DirectX 설치]) but not in the base yet, with its installer here and
+        // no failed DirectX step: a run left for later is taken up again (Codex P2 on #26)
+        // DirectX를 요청했지만([DirectX 설치]) 기본 prefix에 아직 없고, 설치 프로그램이 있으며 실패한 DirectX
+        // 단계가 없음: 미뤄진 실행을 다시 이어 감(#26 Codex P2)
+        if (new File(base.getParentFile(), "directx-wanted").isFile() && !new File(base, "ezs-directx").isFile()
+                && directxInstallerPresent(session) && !failedDirectx(mark)) {
+            return "DirectX 이어서";
+        }
+        return null;
+    }
+
+    /** A DirectX install script in the Steamworks Shared that ezs-baseprefix.py uses
+     *  ezs-baseprefix.py가 쓰는 Steamworks Shared에 DirectX 설치 스크립트가 있음 */
+    private boolean directxInstallerPresent(GlibcLauncher.Config session) {
+        java.util.List<File> libs = new java.util.ArrayList<>();
+        libs.add(new File(session.rootfs, "home/steam/.local/share/Steam/steamapps"));
+        File shared = MainActivity.sharedLibrary(this) ? app.ezsteam.runtime.SharedStorage.steamLibrary(this) : null;
+        if (shared != null) libs.add(new File(shared, "steamapps"));
+        for (File lib : libs) {
+            File redist = new File(lib, "common/Steamworks Shared/_CommonRedist");
+            if (!redist.isDirectory()) continue;
+            File[] tops = redist.listFiles(f -> f.isDirectory() && f.getName().equalsIgnoreCase("directx"));
+            for (File top : tops == null ? new File[0] : tops) {
+                File[] vers = top.listFiles(File::isDirectory);
+                for (File v : vers == null ? new File[0] : vers) {
+                    File[] fs = v.listFiles(f -> f.getName().equalsIgnoreCase("installscript.vdf"));
+                    if (fs != null && fs.length > 0) return true;
+                }
+            }
+            // The first library holding Steamworks Shared is the one used / Steamworks Shared가 있는 첫 라이브러리를 씀
+            return false;
+        }
+        return false;
+    }
+
+    private static boolean failedDirectx(org.json.JSONObject mark) {
+        org.json.JSONArray a = mark.optJSONArray("failed");
+        for (int i = 0; a != null && i < a.length(); i++) {
+            if (a.optString(i).toLowerCase(Locale.ROOT).startsWith("directx")) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Before Steam starts (2026-11-11): the base prefix steps run first and one at a time, with
+     * the progress card, so they do not meet Steam's own start. On the first session of a new
+     * install they ran while the Steam client was starting, and Android killed the session's PRoot
+     * for going over 32 child processes. DirectX (optional, minutes) follows in the session.
+     * Steam 시작 전(2026-11-11): 기본 prefix 단계를 먼저, 하나씩, 진행 카드와 함께 돌려 Steam 자체 시작과
+     * 겹치지 않게 함. 새로 설치한 앱의 첫 세션에서 Steam 클라이언트가 켜지는 동안 돌았고, 안드로이드가 자식
+     * 프로세스 32개를 넘었다며 세션의 PRoot를 종료했음. DirectX(선택, 몇 분)는 세션 안에서 이어서 함
+     */
+    private void prepareBaseBeforeSteam(GlibcLauncher.Config session) {
+        if (basePrepRunning) return;
+        String why = baseWork(session, false);
+        if (why == null) return;
+        basePrepRunning = true;
+        prepCard.show(s(R.string.base_card_title));
+        try {
+            java.util.Map<String, String> env = new java.util.HashMap<>();
+            env.put("EZS_BASE_NO_LATE", "1");
+            runBasePrepare(session, "Steam 시작 전, " + why, env, true);
+        } finally {
+            prepCard.hide();
+            baseStage = null;
+            basePrepRunning = false;
+        }
     }
 
     /** Valve ARM64 Proton folder (same rule as compat/ezproton), or null / Valve ARM64 Proton 폴더(compat/ezproton과 같은 규칙) */
@@ -3782,37 +3905,144 @@ public class DisplayActivity extends Activity {
         basePrepRunning = true;
         new Thread(() -> {
             try {
-                GlibcLauncher.Config c = new GlibcLauncher.Config();
-                c.rootfs = session.rootfs;
-                c.nativeLibDir = session.nativeLibDir;
-                c.dataDir = session.dataDir;
-                c.guestHome = session.guestHome;
-                c.display = session.display;
-                c.binds.addAll(session.binds);
-                c.link2symlink = session.link2symlink;
-                c.sysvipc = session.sysvipc;
-                c.changeId = session.changeId;
-                c.env.putAll(session.env);
-                log("기본 환경 준비 시작: " + why);
-                Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/ezs-baseprefix.sh",
-                        java.util.Collections.emptyList(), null, null);
-                try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
-                    String l;
-                    while ((l = r.readLine()) != null) {
-                        if (l.contains("ezproton: base ")) {
-                            log("BASE " + l);
-                            baseStep(l);
-                        }
-                    }
-                }
-                log("기본 환경 준비 끝 exit=" + p.waitFor());
-            } catch (IOException | InterruptedException | RuntimeException e) {
-                log("기본 환경 준비 실패: " + e);
+                runBasePrepare(session, why, null, false);
             } finally {
                 baseStage = null;
                 basePrepRunning = false;
             }
         }, "ezs-base").start();
+    }
+
+    /** One run of ezs-baseprefix.sh until it ends; card: progress on the progress card
+     *  ezs-baseprefix.sh 한 번 실행, 끝날 때까지. card: 진행 카드에 진행을 보임 */
+    private void runBasePrepare(GlibcLauncher.Config session, String why, java.util.Map<String, String> extraEnv,
+            boolean card) {
+        try {
+            GlibcLauncher.Config c = new GlibcLauncher.Config();
+            c.rootfs = session.rootfs;
+            c.nativeLibDir = session.nativeLibDir;
+            c.dataDir = session.dataDir;
+            c.guestHome = session.guestHome;
+            c.display = session.display;
+            c.binds.addAll(session.binds);
+            c.link2symlink = session.link2symlink;
+            c.sysvipc = session.sysvipc;
+            c.changeId = session.changeId;
+            c.env.putAll(session.env);
+            if (extraEnv != null) c.env.putAll(extraEnv);
+            log("기본 환경 준비 시작: " + why);
+            BaseProgress prog = card ? new BaseProgress() : null;
+            Process p = GlibcLauncher.startScript(c, "/opt/ezsteam/ezs-baseprefix.sh",
+                    java.util.Collections.emptyList(), null, null);
+            // Kept so leaving the screen ends it too (Codex P2 on #26: before Steam, proc is still
+            // null and stopProcess() did nothing) / 화면을 떠날 때 함께 끝내려고 둠(#26 Codex P2: Steam 전에는
+            // proc가 아직 null이라 stopProcess()가 아무것도 하지 않았음)
+            basePrepProc = p;
+            if (finishing) stopProcess();
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+                String l;
+                while ((l = r.readLine()) != null) {
+                    if (l.contains("ezproton: base ")) {
+                        log("BASE " + l);
+                        baseStep(l);
+                        // DirectX left for after Steam, or a step without room in time: try again in
+                        // the session once there is room (Codex P2 on #26) / Steam 뒤로 미룬 DirectX, 또는 제때
+                        // 여유가 없던 단계: 세션 안에서 여유가 생기면 다시 함(#26 Codex P2)
+                        if (l.contains("ezproton: base late later") || l.contains("ezproton: base deferred")) {
+                            baseLateLater = true;
+                        }
+                        if (prog != null) prog.line(l);
+                    }
+                }
+            }
+            log("기본 환경 준비 끝 exit=" + p.waitFor());
+        } catch (IOException | InterruptedException | RuntimeException e) {
+            log("기본 환경 준비 실패: " + e);
+        } finally {
+            basePrepProc = null;
+        }
+    }
+
+    /** The running ezs-baseprefix.sh, or null / 돌고 있는 ezs-baseprefix.sh, 없으면 null */
+    private volatile Process basePrepProc;
+
+    /**
+     * Progress card state from ezs-baseprefix.py lines: "plan: N step(s)", a step's start ("build
+     * start", "redist start: <id>") and end ("prefix ready", "redist done/failed/skip", "build
+     * failed"), waiting for process room. The percentage is finished steps of the plan; an
+     * installer reports no progress of its own, so a step shows its elapsed time instead.
+     * ezs-baseprefix.py 줄로 본 진행 카드 상태: "plan: N step(s)", 단계 시작("build start", "redist start:
+     * <id>")과 끝("prefix ready", "redist done/failed/skip", "build failed"), 프로세스 여유 기다림. 퍼센트는
+     * 계획 중 끝난 단계. 설치 프로그램은 자체 진행을 알리지 않으므로 단계에는 경과 시간을 보임
+     */
+    private final class BaseProgress {
+        private int total = -1, done, current;
+        private String step = "";
+        private String waiting;
+        private long stepStartMs;
+        private final Runnable tick = this::show;
+
+        synchronized void line(String l) {
+            String b = l.substring(l.indexOf("ezproton: base ") + "ezproton: base ".length());
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("^plan: (\\d+)").matcher(b);
+            if (m.find()) {
+                // Steps left in this pass; a pass after a wait for room counts what is left
+                // 이번 회차에 남은 단계. 여유를 기다린 뒤의 회차는 남은 것만 셈
+                total = done + Integer.parseInt(m.group(1));
+            } else if (b.startsWith("build start")) {
+                begin(s(R.string.base_card_build));
+            } else if (b.startsWith("redist start: ")) {
+                String id = b.substring("redist start: ".length()).toLowerCase(Locale.ROOT);
+                begin(id.contains("vcredist") ? s(R.string.base_card_vcredist, redistLabel(id))
+                        : s(R.string.base_card_redist, redistLabel(id)));
+            } else if (b.startsWith("prefix ready") || b.startsWith("redist done") || b.startsWith("redist failed")
+                    || b.startsWith("redist skip") || b.startsWith("build failed")) {
+                done++;
+                step = "";
+                waiting = null;
+            } else if (b.startsWith("waiting: process room")) {
+                java.util.regex.Matcher w = java.util.regex.Pattern.compile("(\\d+) > (\\d+)").matcher(b);
+                waiting = w.find() ? s(R.string.base_card_room, Integer.parseInt(w.group(1)), Integer.parseInt(w.group(2)))
+                        : s(R.string.base_card_room_plain);
+            } else if (b.startsWith("room:")) {
+                waiting = null;
+            } else if (b.startsWith("deferred")) {
+                waiting = s(R.string.base_card_deferred);
+            }
+            show();
+        }
+
+        private void begin(String what) {
+            current = done + 1;
+            step = what;
+            waiting = null;
+            stepStartMs = SystemClock.elapsedRealtime();
+        }
+
+        /** "2017 x64" from "vcredist/2017/installscript.vdf#x64 14.10..." / 줄에서 "2017 x64"만 뽑음 */
+        private String redistLabel(String id) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("/(\\d{4})/[^#]*#(\\w+)").matcher(id);
+            return m.find() ? m.group(1) + " " + m.group(2) : "";
+        }
+
+        private synchronized void show() {
+            if (!prepCard.active()) return;
+            int all = Math.max(total, current);
+            int pct = all > 0 ? Math.min(100, done * 100 / all) : -1;
+            String detail;
+            if (waiting != null) {
+                detail = waiting;
+            } else if (!step.isEmpty()) {
+                detail = step + " · " + mmss(SystemClock.elapsedRealtime() - stepStartMs);
+            } else {
+                detail = s(R.string.base_card_next);
+            }
+            String count = all > 0 ? s(R.string.base_card_steps, Math.min(Math.max(current, done), all), all) : "";
+            prepCard.update(pct, detail, count, all > 0 ? done : -1, all);
+            // Elapsed time once a second while a step runs / 단계가 도는 동안 1초마다 경과 시간
+            prepCard.removeCallbacks(tick);
+            if (!step.isEmpty() || waiting != null) prepCard.postDelayed(tick, 1000);
+        }
     }
 
     /**
@@ -4886,6 +5116,15 @@ public class DisplayActivity extends Activity {
                     .descendants(android.os.Process.myPid()).isEmpty(); i++) SystemClock.sleep(100);
             signalChildren(9);
             if (p.isAlive()) p.destroy();
+        } else if (basePrepProc != null) {
+            // Base prefix steps before Steam: the same SIGTERM, then SIGKILL to every child process
+            // Steam 전 기본 prefix 단계: 같은 방식으로 모든 자식 프로세스에 SIGTERM, 그다음 SIGKILL
+            signalChildren(15);
+            for (int i = 0; i < 30 && !app.ezsteam.runtime.ChildProcessCounter
+                    .descendants(android.os.Process.myPid()).isEmpty(); i++) SystemClock.sleep(100);
+            signalChildren(9);
+            Process b = basePrepProc;
+            if (b != null && b.isAlive()) b.destroy();
         }
         XvfbFramebuffer f = fb;
         if (f != null) {

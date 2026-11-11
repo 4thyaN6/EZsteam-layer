@@ -12,6 +12,15 @@
     <string name="base_prepare_start">Base environment: starting</string>
     <string name="base_redist">Base environment: redistributables (once)</string>
     <string name="base_vcredist">Base environment: Visual C++ (once)</string>
+    <string name="base_card_title">Preparing the game environment before Steam</string>
+    <string name="base_card_build">Building the base environment</string>
+    <string name="base_card_vcredist">Installing Visual C++ %1$s</string>
+    <string name="base_card_redist">Installing redistributable %1$s</string>
+    <string name="base_card_next">Next step</string>
+    <string name="base_card_steps">Step %1$d / %2$d · one at a time, then Steam starts</string>
+    <string name="base_card_room">Waiting for process room (%1$d of %2$d)</string>
+    <string name="base_card_room_plain">Waiting for process room</string>
+    <string name="base_card_deferred">No room: the rest is done later</string>
     <string name="btn_build_now">Build now</string>
     <string name="btn_cancel">Cancel</string>
     <string name="btn_cef">CEF saving</string>
