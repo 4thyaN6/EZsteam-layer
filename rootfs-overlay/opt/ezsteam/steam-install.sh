@@ -146,7 +146,12 @@ fi
 unzip -oq "$TMP/bins.zip" -d "$STEAM_DIR" || { echo "FAIL unzip"; exit 1; }
 rm -rf "$TMP"
 cd "$STEAM_DIR" || exit 1
-[ -e steamrt64 ] || ln -s steamrtarm64 steamrt64
+# steamrt64 is a real folder: the client also installs x86_64 files there, and as a link to
+# steamrtarm64 they were unpacked over the arm64 files (see ezs-steamrt.py). An old link is turned
+# into a folder (reinstall over an old install)
+# steamrt64는 실제 폴더임: 클라이언트가 거기에 x86_64 파일도 설치하는데, steamrtarm64로의 링크였을 때는 그 파일이
+# arm64 파일 위에 풀렸음(ezs-steamrt.py 참고). 예전 링크는 폴더로 바꿈(예전 설치 위에 다시 설치)
+python3 /opt/ezsteam/ezs-steamrt.py fix "$STEAM_DIR"
 touch .steam-enable-steamrt64-client
 mkdir -p package
 if [ "$CHANNEL" = publicbeta ]; then echo publicbeta > package/beta; else rm -f package/beta; fi
@@ -157,7 +162,9 @@ find . -maxdepth 3 -type f \( -name steam -o -name steamwebhelper -o -name steam
     -exec chmod 755 {} +
 mkdir -p "$STEAM_HOME/.steam"
 for n in root steam; do ln -sfn "$STEAM_DIR" "$STEAM_HOME/.steam/$n"; done
-ln -sfn "$STEAM_DIR/steamrt64" "$STEAM_HOME/.steam/bin64"
+# bin64 stays on the arm64 folder (it reached it through the old steamrt64 link)
+# bin64는 계속 arm64 폴더를 가리킴(예전에는 steamrt64 링크를 거쳐 그리로 갔음)
+ln -sfn "$STEAM_DIR/steamrtarm64" "$STEAM_HOME/.steam/bin64"
 ln -sfn "$STEAM_DIR/steamrtarm64" "$STEAM_HOME/.steam/steamrtarm64"
 
 }

@@ -322,6 +322,44 @@ while :; do
     # libavcodec.so.62"로 바로 멈췄음(테스터 기기): 부트스트랩에 없는 부분을 클라이언트 자체 검사가 받아옴.
     # 그 경우에는 검사를 함
     VERIFY=-noverifyfiles
+    # steamrt64 as a real folder (an old install has a link to steamrtarm64; its x86_64-only files
+    # move there), and ~/.steam/bin64 on the arm64 folder as before. Then every ELF file the manifest
+    # lists under steamrtarm64 must be aarch64: x86_64 ones came from the old link (client 1794424036,
+    # 2026-11-12: x86_64 libGLESv2.so, Steam screen never came up). The client's own file check
+    # fetches the arm64 files again, once per manifest version and list (ezs-steamrt.py)
+    # steamrt64를 실제 폴더로 둠(예전 설치는 steamrtarm64로의 링크이고, x86_64 전용 파일을 그리로 옮김).
+    # ~/.steam/bin64는 예전처럼 arm64 폴더를 가리킴. 그다음 매니페스트의 steamrtarm64 ELF 파일은 모두 aarch64여야
+    # 함: x86_64인 것은 예전 링크 탓임(클라이언트 1794424036, 2026-11-12: x86_64 libGLESv2.so로 Steam 화면이 뜨지
+    # 않았음). 클라이언트 자체 파일 검사가 arm64 파일을 다시 받음. 매니페스트 버전·목록당 한 번(ezs-steamrt.py)
+    python3 /opt/ezsteam/ezs-steamrt.py fix "$STEAM_DIR"
+    [ "$(readlink "$HOME/.steam/bin64" 2>/dev/null)" = "$STEAM_DIR/steamrtarm64" ] \
+        || ln -sfn "$STEAM_DIR/steamrtarm64" "$HOME/.steam/bin64"
+    # Up to 3 starts with the check per list: a check cut short (app closed before or during the
+    # download) is tried again at the next start, while a list the check cannot repair (offline, or
+    # a file Valve ships that way) does not add the check to every start
+    # 목록당 최대 3번의 시작에서 검사함: 중간에 끊긴 검사(받기 전이나 받는 중 앱 종료)는 다음 시작에서 다시 하고,
+    # 검사로 고쳐지지 않는 목록(오프라인, Valve가 그렇게 배포한 파일)은 매 시작에 검사를 붙이지 않음
+    arch_bad=$(python3 /opt/ezsteam/ezs-steamrt.py check "$STEAM_DIR" 2>/dev/null)
+    ARCH_TRY=$HOME/.steam/.ezs-arch-verify
+    if [ -n "$arch_bad" ]; then
+        echo "WARN steam : steamrtarm64에 aarch64가 아닌 파일 (개수 버전 이름) $arch_bad"
+        tries=0
+        if [ "$(sed -n 1p "$ARCH_TRY" 2>/dev/null)" = "$arch_bad" ]; then
+            tries=$(sed -n 2p "$ARCH_TRY" 2>/dev/null)
+            case "$tries" in ''|*[!0-9]*) tries=0 ;; esac
+        fi
+        if [ "$tries" -lt 3 ] && [ -z "${VERIFIED:-}" ]; then
+            VERIFY=
+            VERIFIED=1
+            tries=$((tries + 1))
+            mkdir -p "$HOME/.steam" && printf '%s\n%s\n' "$arch_bad" "$tries" > "$ARCH_TRY"
+            echo "INFO steam : → 파일 검사·받기를 켜고 시작 (arm64 파일을 다시 받음, 이 목록으로 $tries/3번째)"
+        elif [ "$tries" -ge 3 ]; then
+            echo "WARN steam : 같은 목록으로 3번 검사해도 남음, 검사 없이 시작"
+        fi
+    else
+        rm -f "$ARCH_TRY"
+    fi
     UI=$STEAM_DIR/steamrtarm64/steamui.so
     # The check is skipped while steamui.so is the same file (size and time) that passed last
     # time: it took about 12 s of every start under PRoot (app log, 2026-10-18)

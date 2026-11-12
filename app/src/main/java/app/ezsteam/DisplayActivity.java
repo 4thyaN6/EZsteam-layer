@@ -990,6 +990,7 @@ public class DisplayActivity extends Activity {
         // (re)시작 뒤 첫 Steam 창: 가운데 진행 카드가 더는 필요 없음
         if (!steamWindowSeen && s.startsWith("X 포커스") && s.contains("(새 창)")) {
             steamWindowSeen = true;
+            steamWindowMs = SystemClock.elapsedRealtime();
             hideSetup();
         }
         launchWatch(s);
@@ -2542,6 +2543,33 @@ public class DisplayActivity extends Activity {
         t.start();
     }
 
+    /** Cuts per web helper log file in this session / 이 세션에서 웹 도우미 로그 파일별 자른 횟수 */
+    private final java.util.Map<String, Integer> steamLogCuts = new java.util.HashMap<>();
+
+    /**
+     * Every monitor pass (2 s): keep the Steam web helper logs (cef_log*.txt, steamwebhelper*.log)
+     * under SteamLogGuard.LIMIT on disk by cutting them back to their head. Logged at the first cut
+     * of a file and then every 30th, so a repeating error does not flood the app log either. Why:
+     * after the Steam update of 2026-11-12 these logs grew about 1.5 GB a minute and filled the
+     * device to 99 %.
+     * 감시 회차(2초)마다: Steam 웹 도우미 로그(cef_log*.txt, steamwebhelper*.log)를 앞부분만 남기고 잘라 디스크에서
+     * SteamLogGuard.LIMIT 아래로 유지함. 파일별 첫 자르기와 그 뒤 30번째마다 기록해 반복 오류가 앱 로그도 채우지 않게 함.
+     * 이유: 2026-11-12 Steam 갱신 뒤 이 로그가 분당 약 1.5 GB씩 늘어 기기가 99%까지 찼음
+     */
+    private void guardSteamLogs() {
+        File dir = new File(RootfsInstaller.rootfsDir(this), "home/steam/.local/share/Steam/logs");
+        for (app.ezsteam.runtime.SteamLogGuard.Cut c : app.ezsteam.runtime.SteamLogGuard.trim(dir,
+                app.ezsteam.runtime.SteamLogGuard.LIMIT, app.ezsteam.runtime.SteamLogGuard.KEEP_HEAD,
+                app.ezsteam.runtime.SteamLogGuard::diskBytes)) {
+            int n = steamLogCuts.merge(c.name, 1, Integer::sum);
+            if (n == 1 || n % 30 == 0) {
+                log(String.format(Locale.ROOT, "LOG Steam %s 디스크 %d MB → 앞 %d MB만 남기고 자름 (이 세션 %d회%s)",
+                        c.name, c.diskBefore >> 20, app.ezsteam.runtime.SteamLogGuard.KEEP_HEAD >> 20, n,
+                        n == 1 ? ", 웹 도우미가 같은 오류를 반복하는지 볼 것" : ""));
+            }
+        }
+    }
+
     /**
      * Every 2 s: count this app's child processes (PRoot and everything under it) and free memory.
      * Exit 137 of the whole session points at Android ending our processes (process limit or low
@@ -2570,6 +2598,7 @@ public class DisplayActivity extends Activity {
                 logCefHelpers(ps);
                 updatePrep(ps);
                 checkBasePrefix(ps);
+                guardSteamLogs();
                 lastNs = System.nanoTime();
                 java.util.Map<Integer, Float> pct = cpuPct;
                 StringBuilder list = new StringBuilder();
@@ -3670,6 +3699,13 @@ public class DisplayActivity extends Activity {
         // Not before Steam has been started: until then start() prepares it itself, before Steam
         // 아직 Steam을 시작하기 전이면 하지 않음: 그때까지는 start()가 Steam보다 먼저 직접 준비함
         if (!steamLaunched || basePrepRunning || session == null || gameOf(ps) != null || prepKind != null) return;
+        // Not while Steam starts or updates itself: only once its window has been up for a minute.
+        // The device run of 2026-11-12 took up deferred steps 11 s after Steam's start (the count
+        // had dropped to 10 for a moment) and again over its self-update restart: peaks 28, 31, 33
+        // Steam이 시작하거나 스스로 업데이트하는 동안은 하지 않음: 창이 뜨고 1분이 지난 뒤에만. 2026-11-12 기기
+        // 실행은 Steam 시작 11초 뒤(수가 잠깐 10으로 떨어짐)와 자체 업데이트 재시작 중에 미룬 단계를 이어 했고,
+        // 최대 28, 31, 33개였음
+        if (!steamWindowSeen || now - steamWindowMs < STEAM_SETTLE_MS) return;
         // Step by step (2026-11-11): only with room for the helper and one installer step; a busy
         // Steam leaves it to the next start, before Steam. A rebuild the user asked for is not held
         // here (ezs-baseprefix.py still waits for room before each step)
@@ -3679,7 +3715,7 @@ public class DisplayActivity extends Activity {
         // What there is to do first, so "no room" is only logged when there is work (device run
         // 2026-11-11 logged it with nothing to do) / 할 일을 먼저 봄. 할 일이 있을 때만 "여유 없음"을 남김(기기
         // 실행 2026-11-11에서는 할 일 없이 남았음)
-        String why = baseLateLater ? "DirectX 이어서 (Steam 시작 뒤)" : baseWork(session, true);
+        String why = baseLateLater ? "미룬 단계 이어서 (Steam 시작 뒤)" : baseWork(session, true);
         if (why == null) return;
         int own = app.ezsteam.runtime.ChildProcessCounter.ownUidCount();
         if (own > BASE_START_MAX) {
@@ -3695,9 +3731,16 @@ public class DisplayActivity extends Activity {
     }
 
     /** Most processes of this app's uid for the base prefix helper to start in a session: it adds
-     *  about 4, and ezs-baseprefix.py starts a step at 14 or fewer / 세션 안에서 기본 prefix 보조 실행을
-     *  시작할 수 있는 앱 uid 프로세스 최대 수: 보조 실행이 4개쯤 더하고, ezs-baseprefix.py는 14개 이하에서 단계를 시작함 */
-    private static final int BASE_START_MAX = 10;
+     *  about 4, and ezs-baseprefix.py starts a step at 10 or fewer. With Steam up (11 or more) the
+     *  work is in effect left for the next start, before Steam / 세션 안에서 기본 prefix 보조 실행을
+     *  시작할 수 있는 앱 uid 프로세스 최대 수: 보조 실행이 4개쯤 더하고, ezs-baseprefix.py는 10개 이하에서 단계를
+     *  시작함. Steam이 떠 있으면(11개 이상) 사실상 다음 시작 때 Steam보다 먼저 함 */
+    private static final int BASE_START_MAX = 6;
+    /** How long Steam's window must have been up before base prefix work in the session
+     *  세션 안에서 기본 prefix 작업 전에 Steam 창이 떠 있어야 하는 시간 */
+    private static final long STEAM_SETTLE_MS = 60_000;
+    /** When the Steam window was last seen after a (re)start / (재)시작 뒤 Steam 창을 본 시각 */
+    private volatile long steamWindowMs;
     /** Steam has been started in this session / 이번 세션에서 Steam을 시작했음 */
     private volatile boolean steamLaunched;
     private volatile boolean baseRoomLogged;
@@ -4803,25 +4846,33 @@ public class DisplayActivity extends Activity {
                 boolean image = f.getName().endsWith(".png");
                 boolean maskIp = f.getName().equals("connection_log.txt") || f.equals(whLog) || f.equals(whTxt)
                         || f.getName().equals("cef_log.txt") || f.getName().equals("steamwebhelper-prev.log");
+                // Web helper logs kept short by SteamLogGuard: their head holds the start-up lines
+                // (where the cause of the 2026-11-12 error loop was), so a long one keeps its head
+                // too. steamwebhelper.log may have a hole (zeros) after a cut; NUL-only lines are left out
+                // SteamLogGuard가 짧게 유지하는 웹 도우미 로그: 앞부분에 시작 줄이 있으므로(2026-11-12 오류 반복의 원인이
+                // 거기 있었음) 긴 파일도 앞부분을 남김. 자른 뒤 steamwebhelper.log에는 구멍(0)이 있을 수 있어 NUL만인 줄은 뺌
+                boolean guarded = !image && app.ezsteam.runtime.SteamLogGuard.watched(f.getName());
                 try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(f, "r")) {
                     long len = in.length();
-                    if (len > LOG_SAVE_MAX) {
+                    long head = guarded ? app.ezsteam.runtime.SteamLogGuard.KEEP_HEAD : 0;
+                    // A kept head and the end part must not overlap: a guarded file up to
+                    // LOG_SAVE_MAX + head goes in whole (PR #30 review: a 32.5 MB file would get 0.5 MB
+                    // twice and "-524288바이트 생략")
+                    // 남긴 앞부분과 끝부분이 겹치면 안 됨: 맡은 파일이 LOG_SAVE_MAX + head 이하면 통째로 넣음
+                    // (PR #30 리뷰: 32.5 MB 파일이면 0.5 MB가 두 번 들어가고 "-524288바이트 생략"이 찍힘)
+                    if (len > LOG_SAVE_MAX + head) {
+                        if (head > 0) {
+                            zipLines(zip, new java.io.ByteArrayInputStream(readHead(in, head)), maskIp, scrub, true);
+                        }
                         in.seek(len - LOG_SAVE_MAX);
-                        zip.write(("[앞부분 " + (len - LOG_SAVE_MAX) + "바이트 생략]\n").getBytes(StandardCharsets.UTF_8));
+                        zip.write(("[" + (head > 0 ? "가운데 " : "앞부분 ") + (len - LOG_SAVE_MAX - head)
+                                + "바이트 생략]\n").getBytes(StandardCharsets.UTF_8));
                     }
                     if (image) {
                         int r;
                         while ((r = in.read(buf)) > 0) zip.write(buf, 0, r);
                     } else {
-                        // Line by line through the scrubber / 줄 단위로 가리개를 거침
-                        java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(
-                                java.nio.channels.Channels.newInputStream(in.getChannel()), StandardCharsets.UTF_8));
-                        String line;
-                        while ((line = br.readLine()) != null) {
-                            if (maskIp) line = maskAddresses(line);
-                            zip.write(scrub.scrub(line).getBytes(StandardCharsets.UTF_8));
-                            zip.write('\n');
-                        }
+                        zipLines(zip, java.nio.channels.Channels.newInputStream(in.getChannel()), maskIp, scrub, guarded);
                     }
                 } catch (IOException e) {
                     zip.write(("[읽기 실패: " + e + "]\n").getBytes(StandardCharsets.UTF_8));
@@ -4842,6 +4893,35 @@ public class DisplayActivity extends Activity {
         // a failure was logged inside and the caller still reported the file as saved
         // 실패는 호출한 쪽으로 넘김(호출한 쪽이 알리고 파일을 지우거나 다른 방법으로 저장함). 전에는 안에서
         // 실패를 기록만 하고 호출한 쪽은 저장됐다고 알렸음
+    }
+
+    /** First max bytes of a file (fewer if it is shorter) / 파일의 앞 max 바이트(더 짧으면 그만큼) */
+    private static byte[] readHead(java.io.RandomAccessFile in, long max) throws IOException {
+        byte[] h = new byte[(int) Math.min(max, in.length())];
+        in.seek(0);
+        in.readFully(h);
+        return h;
+    }
+
+    /**
+     * Text into the report line by line through the scrubber (and the address mask). With dropNul,
+     * NUL characters are removed and lines left empty by that are skipped.
+     * 텍스트를 줄 단위로 가리개(와 주소 가림)를 거쳐 제보에 씀. dropNul이면 NUL 문자를 지우고 그래서 빈 줄은 건너뜀
+     */
+    private void zipLines(java.util.zip.ZipOutputStream zip, java.io.InputStream src, boolean maskIp,
+            app.ezsteam.runtime.LogScrubber scrub, boolean dropNul) throws IOException {
+        java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(src, StandardCharsets.UTF_8));
+        String line;
+        while ((line = br.readLine()) != null) {
+            if (dropNul && line.indexOf('\0') >= 0) {
+                String kept = line.replace("\0", "");
+                if (kept.isEmpty()) continue;
+                line = kept;
+            }
+            if (maskIp) line = maskAddresses(line);
+            zip.write(scrub.scrub(line).getBytes(StandardCharsets.UTF_8));
+            zip.write('\n');
+        }
     }
 
     /**
