@@ -57,9 +57,14 @@ if [ -d "$STEAM_DIR/linuxarm64" ]; then
         [ -e "$f" ] && ln -sfn "$f" "$SDK/$(basename "$f")"
     done
 fi
+# Only an aarch64 one: steamrt64 (a real folder now) holds an x86_64 steam-launch-wrapper
+# aarch64인 것만: 이제 실제 폴더인 steamrt64에는 x86_64 steam-launch-wrapper가 있음
 if [ ! -e "$SDK/steam-launch-wrapper" ]; then
-    w=$(find "$STEAM_DIR" -maxdepth 3 -name steam-launch-wrapper -type f 2>/dev/null | head -n 1)
-    [ -n "$w" ] && ln -sfn "$w" "$SDK/steam-launch-wrapper"
+    find "$STEAM_DIR" -maxdepth 3 -name steam-launch-wrapper -type f 2>/dev/null > "$HOME/.steam/.ezs-scan"
+    while IFS= read -r w; do
+        if is_aarch64_elf "$w"; then ln -sfn "$w" "$SDK/steam-launch-wrapper"; break; fi
+    done < "$HOME/.steam/.ezs-scan"
+    rm -f "$HOME/.steam/.ezs-scan"
 fi
 if [ -e "$SDK/steam-launch-wrapper" ]; then
     echo "$LOG_TAG launch wrapper -> $(readlink -f "$SDK/steam-launch-wrapper")"

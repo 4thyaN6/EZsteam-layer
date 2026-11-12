@@ -277,7 +277,10 @@ def unix_exe(installdir, exe):
 GATE = False
 # Set when a step was left for later in this run / 이번 실행에서 단계를 다음으로 미뤘으면 정함
 deferred = False
-GATE_MAX = int(os.environ.get("EZS_PROC_GATE", "14"))
+# 10, not 14 (device run 2026-11-12): a step added 15-21 processes on top of the count at its
+# start (12-13 with Steam up gave peaks 28, 31, 33) / 14가 아닌 10(2026-11-12 기기 실행): 단계가 시작 때
+# 수에 15~21개를 더했음(Steam이 떠 있을 때 12~13개에서 최대 28, 31, 33개)
+GATE_MAX = int(os.environ.get("EZS_PROC_GATE", "10"))
 GATE_WAIT = int(os.environ.get("EZS_PROC_GATE_WAIT", "600"))
 
 
@@ -314,24 +317,90 @@ busy = False
 wait_t0 = None
 
 
+# Test switch (development, 2026-11-12): file ~/.local/share/ezsteam/base-test with lines
+# "defer_after=N" (after N steps every later step finds no room) and "wait=S" (seconds to wait
+# instead of GATE_WAIT). Lets a device run defer a step inside one install script (x86 done, x64
+# deferred) without keeping the device busy for 10 minutes. No file = no effect.
+# 시험 스위치(개발용, 2026-11-12): ~/.local/share/ezsteam/base-test 파일의 "defer_after=N"(N단계 뒤의
+# 모든 단계는 여유가 없는 것으로 봄)과 "wait=S"(GATE_WAIT 대신 기다릴 초). 기기를 10분 동안 바쁘게 두지
+# 않고도 한 설치 스크립트 안에서 단계를 미루게 함(x86 끝, x64 미룸). 파일이 없으면 영향 없음
+TEST_FILE = os.path.join(os.path.dirname(BASE), "base-test")
+TEST_DEFER_AFTER = None
+started = 0
+
+
+def read_test_switch():
+    global TEST_DEFER_AFTER, GATE_WAIT
+    try:
+        with open(TEST_FILE, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return
+    for line in text.splitlines():
+        key, _, value = line.strip().partition("=")
+        try:
+            if key == "defer_after":
+                TEST_DEFER_AFTER = int(value)
+            elif key == "wait":
+                GATE_WAIT = int(value)
+        except ValueError:
+            pass
+    say("test switch: defer after %s step(s), wait %d s" % (TEST_DEFER_AFTER, GATE_WAIT))
+
+
+def gate_count():
+    """Processes counted against GATE_MAX; the test switch makes it full after N steps
+    GATE_MAX와 견주는 프로세스 수. 시험 스위치가 있으면 N단계 뒤에는 꽉 찬 것으로 봄"""
+    n = own_procs()
+    if TEST_DEFER_AFTER is not None and started >= TEST_DEFER_AFTER:
+        n = max(n, GATE_MAX + 1)
+    return n
+
+
+# Peak processes of this app's uid, sampled every second while the app's own run goes (the
+# session's exit line was lost when the app was closed, 2026-11-11): one line per step and one
+# for the run / 앱 자체 실행 동안 1초마다 본 이 앱 uid 프로세스 최대 수(앱을 닫으면 세션 종료 줄이
+# 남지 않았음, 2026-11-11): 단계마다 한 줄, 실행 전체 한 줄
+peak_step = 0
+peak_run = 0
+
+
+def sample_peaks():
+    global peak_step, peak_run
+    while True:
+        n = own_procs()
+        peak_step = max(peak_step, n)
+        peak_run = max(peak_run, n)
+        time.sleep(1)
+
+
+def say_peak(what):
+    global peak_step
+    if GATE:
+        say("procs: peak %d during %s" % (max(peak_step, own_procs()), what))
+        peak_step = 0
+
+
 def room(what):
     """True = the step may start now. Without room: inside the lock False with busy set; outside
     it, wait (False = no room in time, deferred)
     True = 지금 단계를 시작해도 됨. 여유가 없으면: 잠금 안에서는 busy를 정하고 False. 잠금 밖에서는
     기다림(False = 제때 여유가 없어 미룸)"""
-    global busy
+    global busy, started, peak_step
     if not GATE:
         return True
     if deferred:
         return False
-    n = own_procs()
-    if n <= GATE_MAX:
+    n = gate_count()
+    if n <= GATE_MAX or (not HOLDING and wait_room(what)):
+        started += 1
+        peak_step = 0
+        say("procs: %d before %s" % (own_procs(), what))
         return True
     if HOLDING:
         busy = True
         say("waiting: process room, %d > %d before %s" % (n, GATE_MAX, what))
-        return False
-    return wait_room(what)
+    return False
 
 
 def wait_room(what):
@@ -340,7 +409,7 @@ def wait_room(what):
     if wait_t0 is None:
         wait_t0 = time.time()
     while True:
-        n = own_procs()
+        n = gate_count()
         if n <= GATE_MAX:
             say("room: %d process(es), %s after %.0f s" % (n, what, time.time() - wait_t0))
             return True
@@ -523,6 +592,7 @@ def build(proton_dir, version):
     fix_paths(BASE, tmp, False)
     write_mark({"proton": version, "steps": [], "failed": [], "built": time.strftime("%Y-%m-%d %H:%M:%S")})
     say("prefix ready")
+    say_peak("build")
     return True
 
 
@@ -564,6 +634,7 @@ def add_redists(proton_dir, mark, late, target=BASE):
             # 실패한 단계는 지금처럼 게임마다 Steam이 설치하게 둠
             mark.setdefault("failed", []).append(s["id"])
         wait_server(proton_dir, target)
+        say_peak(s["id"])
         # The staging copy's mark is written when it is swapped in / 준비용 복사본의 표식은 바꿔 넣을 때 씀
         if target == BASE:
             write_mark(mark)
@@ -934,6 +1005,10 @@ def main():
     # The app's own runs wait for room; a game start is not held up
     # 앱 자체 실행만 여유를 기다림. 게임 시작은 막지 않음
     GATE = mode in ("prepare", "directx")
+    if GATE:
+        read_test_switch()
+        import threading
+        threading.Thread(target=sample_peaks, daemon=True).start()
     try:
         if mode == "prepare":
             return prepare(sys.argv[2] if len(sys.argv) == 3 else find_proton())
@@ -943,6 +1018,9 @@ def main():
     except Exception as e:  # never block the game: Proton makes the prefix itself then
         say("error, Proton makes the prefix itself: %r" % (e,))
         return 0
+    finally:
+        if GATE:
+            say("procs: run peak %d" % max(peak_run, own_procs()))
 
 
 if __name__ == "__main__":
