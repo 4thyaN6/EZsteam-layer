@@ -4854,8 +4854,13 @@ public class DisplayActivity extends Activity {
                 boolean guarded = !image && app.ezsteam.runtime.SteamLogGuard.watched(f.getName());
                 try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(f, "r")) {
                     long len = in.length();
-                    if (len > LOG_SAVE_MAX) {
-                        long head = guarded ? app.ezsteam.runtime.SteamLogGuard.KEEP_HEAD : 0;
+                    long head = guarded ? app.ezsteam.runtime.SteamLogGuard.KEEP_HEAD : 0;
+                    // A kept head and the end part must not overlap: a guarded file up to
+                    // LOG_SAVE_MAX + head goes in whole (PR #30 review: a 32.5 MB file would get 0.5 MB
+                    // twice and "-524288바이트 생략")
+                    // 남긴 앞부분과 끝부분이 겹치면 안 됨: 맡은 파일이 LOG_SAVE_MAX + head 이하면 통째로 넣음
+                    // (PR #30 리뷰: 32.5 MB 파일이면 0.5 MB가 두 번 들어가고 "-524288바이트 생략"이 찍힘)
+                    if (len > LOG_SAVE_MAX + head) {
                         if (head > 0) {
                             zipLines(zip, new java.io.ByteArrayInputStream(readHead(in, head)), maskIp, scrub, true);
                         }
