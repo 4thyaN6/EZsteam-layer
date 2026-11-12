@@ -3703,6 +3703,8 @@ public class DisplayActivity extends Activity {
     private volatile boolean baseRoomLogged;
     /** DirectX was left for after Steam's start / DirectX를 Steam 시작 뒤로 미뤘음 */
     private volatile boolean baseLateLater;
+    /** A run kept base-pending in this session ("pending kept") / 이번 세션의 실행이 base-pending을 남겼음 */
+    private volatile boolean basePendingHeld;
 
     /**
      * Why the base prefix needs work now, or null. inSession: the Steam session runs (asks before
@@ -3735,6 +3737,14 @@ public class DisplayActivity extends Activity {
             }
             return null;
         }
+        // Steps left for later by ezs-baseprefix.py (base-pending): newRedists() counts install
+        // scripts, so a script with one step deferred looked finished (Codex P2 on EZsteam-layer #2)
+        // ezs-baseprefix.py가 다음으로 미룬 단계(base-pending): newRedists()는 설치 스크립트 단위로 세므로
+        // 단계 하나가 미뤄진 스크립트가 끝난 것으로 보였음(EZsteam-layer #2 Codex P2)
+        // Not again in this session after a run kept it (Steamworks Shared updating, or steps
+        // still left): the next start tries again / 이번 세션에 실행이 표식을 남겼으면(Steamworks Shared
+        // 업데이트 중이거나 단계가 남음) 다시 하지 않음: 다음 시작 때 다시 함
+        if (!basePendingHeld && new File(base.getParentFile(), "base-pending").isFile()) return "미룬 단계 이어서";
         int fresh = newRedists(session, mark);
         if (fresh > 0) return "새 재배포 " + fresh + "개";
         if (!inSession) return null;
@@ -3951,6 +3961,7 @@ public class DisplayActivity extends Activity {
                         if (l.contains("ezproton: base late later") || l.contains("ezproton: base deferred")) {
                             baseLateLater = true;
                         }
+                        if (l.contains("ezproton: base pending kept")) basePendingHeld = true;
                         if (prog != null) prog.line(l);
                     }
                 }
